@@ -85,7 +85,7 @@ npm run deploy
 
 ### Features & Polish
 - [x] **Audio Chunking**: Large file transcription (>25MB) with MP3 frame-aware splitting
-- [ ] **Prompt 12**: PDF generation
+- [x] **Prompt 12**: PDF generation
 - [ ] **Prompt 13**: Error handling hardening
 - [ ] **Prompt 14**: Security + rate limiting
 - [ ] **Prompt 15**: Integration tests + polish
@@ -100,7 +100,7 @@ npm run deploy
 - [x] First episode processed end-to-end (with Whisper)
 - [x] Large audio files chunked and transcribed
 - [x] Episode displays on public list
-- [ ] PDF download works
+- [x] PDF download works
 - [x] Full flow works in production
 
 ---

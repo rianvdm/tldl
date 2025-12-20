@@ -24,6 +24,7 @@ import { getTemplate, TEMPLATES, isValidTemplateId } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
+import { generateEpisodePdf } from "../services/pdf";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -525,6 +526,7 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
 
 publicRoutes.get("/episode/:episodeId/pdf", async (c) => {
     const episodeId = c.req.param("episodeId");
+    const selectedTemplate = c.req.query("template");
 
     // Verify episode exists
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
@@ -532,16 +534,42 @@ publicRoutes.get("/episode/:episodeId/pdf", async (c) => {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // For now, return a placeholder response
-    // PDF generation will be implemented in Prompt 12
-    return c.json(
-        {
-            message: "PDF generation not yet implemented",
-            episodeId,
-            episodeTitle: episode.episodeTitle,
+    // Fetch transcript and summaries
+    const [transcript, summaries] = await Promise.all([
+        getTranscript(c.env.TLDL_DATA, episodeId),
+        listSummariesForEpisode(c.env.TLDL_DATA, episodeId),
+    ]);
+
+    // Determine which summary to use
+    const templateId = selectedTemplate || (summaries.length > 0 ? summaries[0].templateId : "key-takeaways");
+    const summary = summaries.find((s) => s.templateId === templateId);
+    const template = getTemplate(templateId);
+
+    // Generate PDF
+    const pdfBuffer = generateEpisodePdf({
+        podcastName: episode.podcastName,
+        episodeTitle: episode.episodeTitle,
+        episodeDate: episode.episodeDate,
+        episodeDuration: episode.episodeDuration,
+        summary: summary?.text || "",
+        summaryTemplate: template?.name || templateId,
+        transcript: transcript?.text || "",
+        expiresAt: episode.expiresAt,
+    });
+
+    // Sanitize filename - remove special characters
+    const safeFilename = episode.episodeTitle
+        .replace(/[^a-zA-Z0-9\s-]/g, "")
+        .replace(/\s+/g, "_")
+        .substring(0, 100);
+
+    // Return as downloadable PDF
+    return new Response(pdfBuffer, {
+        headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `attachment; filename="${safeFilename}.pdf"`,
         },
-        501
-    );
+    });
 });
 
 // ============================================================================
