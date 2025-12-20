@@ -101,13 +101,12 @@ function getUserEmailFromJwt(jwt: string): string | null {
 }
 
 /**
- * Middleware to validate authentication.
- * In production, Cloudflare Access adds CF-Access-Jwt-Assertion header.
+ * Auth check helper - validates JWT and extracts user email.
  * FAIL-CLOSED: In production, requests without valid JWT are rejected.
  * For local dev, we skip auth checks.
+ * Returns null if auth passes, or a Response if auth fails.
  */
-authenticated.use("*", async (c, next) => {
-    // Check for Cloudflare Access JWT header
+async function requireAuth(c: import("hono").Context<HonoEnv>): Promise<Response | null> {
     const cfAccessJwt = c.req.header("Cf-Access-Jwt-Assertion");
     const isDevelopment = c.env.ENVIRONMENT === "development";
 
@@ -124,8 +123,8 @@ authenticated.use("*", async (c, next) => {
         }
     }
 
-    await next();
-});
+    return null;
+}
 
 // ============================================================================
 // Helper Functions
@@ -195,6 +194,10 @@ authenticated.post("/submit", async (c, next) => {
     if (!contentType.includes("application/json")) {
         return next();
     }
+
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
 
     // Rate limiting check (only if user email is available)
     const userEmail = c.get("userEmail");
@@ -329,6 +332,10 @@ authenticated.get("/job/:jobId", async (c, next) => {
         return next();
     }
 
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
     const jobId = c.req.param("jobId");
 
     // Use DO with fallback to KV for job status
@@ -354,6 +361,10 @@ authenticated.get("/job/:jobId", async (c, next) => {
 // ============================================================================
 
 authenticated.post("/episode/:episodeId/regenerate", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
     // Rate limiting check (only if user email is available)
     const userEmail = c.get("userEmail");
     if (userEmail) {
@@ -458,6 +469,10 @@ authenticated.post("/episode/:episodeId/regenerate", async (c) => {
 // ============================================================================
 
 authenticated.delete("/episode/:episodeId", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
     const episodeId = c.req.param("episodeId");
 
     // Verify episode exists
@@ -490,6 +505,10 @@ authenticated.post("/job/:jobId/retry", async (c, next) => {
     if (!accept.includes("application/json") && !contentType.includes("application/json")) {
         return next();
     }
+
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
 
     const jobId = c.req.param("jobId");
 
