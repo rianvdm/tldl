@@ -80,7 +80,7 @@ npm run deploy
 
 ### UI
 - [x] **Prompt 10**: Public HTML pages (list, detail)
-- [ ] **Prompt 11**: Authenticated HTML pages (submit, status)
+- [x] **Prompt 11**: Authenticated HTML pages (submit, status)
 
 ### Features & Polish
 - [ ] **Prompt 12**: PDF generation

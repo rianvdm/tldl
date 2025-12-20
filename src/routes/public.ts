@@ -5,14 +5,20 @@
 
 import { Hono } from "hono";
 import { html, raw } from "hono/html";
-import type { HonoEnv, Episode } from "../types";
+import type { HonoEnv, Episode, Job, JobStatus } from "../types";
 import {
     listEpisodes,
     getEpisode,
     getTranscript,
     listSummariesForEpisode,
+    createJob,
+    getJob,
+    updateJobStatus,
 } from "../lib/kv";
-import { getTemplate } from "../lib/constants";
+import { getTemplate, TEMPLATES, isValidTemplateId } from "../lib/constants";
+import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
+import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
+import { lookupEpisodeInfo } from "../services/apple-podcasts";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -228,9 +234,17 @@ publicRoutes.get("/", async (c) => {
     const content =
         episodes.length > 0
             ? `
-        <div class="page-header">
-            <h1>Recent Episodes</h1>
-            <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
+        <div class="page-header-with-action">
+            <div class="page-header">
+                <h1>Recent Episodes</h1>
+                <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
+            </div>
+            <a href="/submit" class="button button-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
+                </svg>
+                Submit Episode
+            </a>
         </div>
         <div class="episode-list">
             ${episodeCards.join("")}
@@ -249,6 +263,12 @@ publicRoutes.get("/", async (c) => {
             </div>
             <p>No episodes yet.</p>
             <p class="text-muted">Submit your first podcast episode to get started!</p>
+            <a href="/submit" class="button button-primary mt-4">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
+                </svg>
+                Submit Your First Episode
+            </a>
         </div>
     `;
 
@@ -455,5 +475,463 @@ publicRoutes.get("/episode/:episodeId/pdf", async (c) => {
         501
     );
 });
+
+// ============================================================================
+// GET /submit — Episode Submission Form
+// ============================================================================
+
+publicRoutes.get("/submit", async (c) => {
+    const content = SubmitFormPage({ error: null, url: "", templateId: "key-takeaways" });
+    return c.html(Layout({ title: "Submit Episode", children: content }));
+});
+
+// ============================================================================
+// POST /submit — Handle Form Submission
+// ============================================================================
+
+publicRoutes.post("/submit", async (c) => {
+    const formData = await c.req.formData();
+    const appleUrl = formData.get("appleUrl") as string || "";
+    const templateId = formData.get("templateId") as string || "key-takeaways";
+
+    // Validate URL
+    if (!appleUrl.trim()) {
+        const content = SubmitFormPage({
+            error: "Please enter a podcast episode URL",
+            url: appleUrl,
+            templateId
+        });
+        return c.html(Layout({ title: "Submit Episode", children: content }), 400);
+    }
+
+    const parsed = parseApplePodcastsUrl(appleUrl);
+    if (!parsed) {
+        const content = SubmitFormPage({
+            error: "Please enter a valid Apple Podcasts episode URL. It should look like: podcasts.apple.com/...?i=...",
+            url: appleUrl,
+            templateId
+        });
+        return c.html(Layout({ title: "Submit Episode", children: content }), 400);
+    }
+
+    // Validate template
+    if (!isValidTemplateId(templateId)) {
+        const content = SubmitFormPage({
+            error: `Invalid summary template: ${templateId}`,
+            url: appleUrl,
+            templateId
+        });
+        return c.html(Layout({ title: "Submit Episode", children: content }), 400);
+    }
+
+    // Derive episode ID
+    const episodeId = deriveEpisodeId(parsed.podcastId, parsed.episodeId);
+
+    // Check if already cached
+    const existingEpisode = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (existingEpisode) {
+        const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
+        const hasSummary = summaries.some(s => s.templateId === templateId);
+        if (hasSummary) {
+            // Already processed - redirect directly to episode page
+            return c.redirect(`/episode/${episodeId}?template=${templateId}`);
+        }
+    }
+
+    // Pre-fetch iTunes episode info
+    let episodeInfo = null;
+    try {
+        episodeInfo = await lookupEpisodeInfo(parsed.podcastId, parsed.episodeId);
+    } catch (e) {
+        // Log but continue - queue consumer will handle this
+        console.error("Failed to prefetch iTunes info:", e);
+    }
+
+    // Create new job
+    const jobId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    const job: Job = {
+        id: jobId,
+        episodeId,
+        appleUrl,
+        status: "queued",
+        templateId,
+        createdAt: now,
+        updatedAt: now,
+    };
+
+    await createJob(c.env.TLDL_DATA, job);
+
+    // Queue the job for processing
+    const message = createProcessEpisodeMessage({
+        jobId,
+        episodeId,
+        appleUrl,
+        templateId,
+        episodeGuid: episodeInfo?.episodeGuid,
+        expectedTitle: episodeInfo?.trackName,
+        expectedDate: episodeInfo?.releaseDate,
+    });
+    await enqueueJob(c.env.TLDL_QUEUE, message);
+
+    // Redirect to job status page
+    return c.redirect(`/job/${jobId}`);
+});
+
+// ============================================================================
+// Submit Form Component
+// ============================================================================
+
+interface SubmitFormProps {
+    error: string | null;
+    url: string;
+    templateId: string;
+}
+
+function SubmitFormPage(props: SubmitFormProps): string {
+    const templateOptions = Object.entries(TEMPLATES).map(([id, template]) => {
+        const checked = props.templateId === id ? "checked" : "";
+        return `
+            <label class="radio-option">
+                <input type="radio" name="templateId" value="${escapeHtml(id)}" ${checked}>
+                <div class="radio-content">
+                    <div class="radio-label">${escapeHtml(template.name)}</div>
+                    <div class="radio-description">${escapeHtml(template.description)}</div>
+                </div>
+            </label>
+        `;
+    }).join("");
+
+    const errorHtml = props.error ? `
+        <div class="alert alert-error">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>${escapeHtml(props.error)}</span>
+        </div>
+    ` : "";
+
+    return `
+        <div class="page-header">
+            <h1>Submit Episode</h1>
+            <p class="page-subtitle">Generate an AI summary from any Apple Podcasts episode</p>
+        </div>
+
+        <div class="card">
+            <form method="POST" action="/submit" class="form">
+                <div class="form-group">
+                    <label for="appleUrl" class="form-label">Apple Podcasts Episode URL</label>
+                    <input 
+                        type="url" 
+                        id="appleUrl"
+                        name="appleUrl" 
+                        value="${escapeHtml(props.url)}"
+                        placeholder="https://podcasts.apple.com/us/podcast/..."
+                        class="form-input"
+                        required
+                    >
+                    <p class="form-hint">Paste the URL from an Apple Podcasts episode page</p>
+                </div>
+
+                <div class="form-group">
+                    <fieldset class="form-fieldset">
+                        <legend class="form-label">Summary Template</legend>
+                        <div class="radio-group">
+                            ${templateOptions}
+                        </div>
+                    </fieldset>
+                </div>
+
+                ${errorHtml}
+
+                <div class="alert alert-info">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
+                    </svg>
+                    <span>Episodes are limited to 80 minutes. Transcripts and summaries are cached for 365 days.</span>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="button button-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
+                        </svg>
+                        Generate Summary
+                    </button>
+                    <a href="/" class="button">Cancel</a>
+                </div>
+            </form>
+        </div>
+
+        <div class="text-center mt-4">
+            <button type="button" onclick="document.getElementById('appleUrl').value='https://podcasts.apple.com/us/podcast/the-knowledge-project/id990149481?i=1000638000000'" class="link-button">
+                Try an example URL
+            </button>
+        </div>
+    `;
+}
+
+// ============================================================================
+// GET /job/:jobId — Job Status Page (HTML)
+// ============================================================================
+
+publicRoutes.get("/job/:jobId", async (c) => {
+    const jobId = c.req.param("jobId");
+
+    const job = await getJob(c.env.TLDL_DATA, jobId);
+    if (!job) {
+        const content = `
+            <div class="error-page">
+                <h1>Job Not Found</h1>
+                <p>This job doesn't exist or has expired.</p>
+                <a href="/" class="button">Back to Home</a>
+            </div>
+        `;
+        return c.html(Layout({ title: "Not Found", children: content }), 404);
+    }
+
+    // If completed, redirect to episode page
+    if (job.status === "completed") {
+        return c.redirect(`/episode/${job.episodeId}?template=${job.templateId}`);
+    }
+
+    const content = JobStatusPage(job);
+
+    // Add auto-refresh for in-progress jobs
+    const refreshMeta = job.status !== "failed"
+        ? '<meta http-equiv="refresh" content="5">'
+        : '';
+
+    return c.html(LayoutWithHead({
+        title: "Processing Episode",
+        children: content,
+        headExtra: refreshMeta
+    }));
+});
+
+// ============================================================================
+// POST /job/:jobId/retry — Retry Failed Job (HTML)
+// ============================================================================
+
+publicRoutes.post("/job/:jobId/retry", async (c) => {
+    const jobId = c.req.param("jobId");
+
+    const job = await getJob(c.env.TLDL_DATA, jobId);
+    if (!job) {
+        return c.redirect("/");
+    }
+
+    if (job.status !== "failed") {
+        return c.redirect(`/job/${jobId}`);
+    }
+
+    // Reset job status
+    await updateJobStatus(c.env.TLDL_DATA, jobId, "queued");
+
+    // Re-queue the job
+    const message = createProcessEpisodeMessage({
+        jobId,
+        episodeId: job.episodeId,
+        appleUrl: job.appleUrl,
+        templateId: job.templateId,
+    });
+    await enqueueJob(c.env.TLDL_QUEUE, message);
+
+    return c.redirect(`/job/${jobId}`);
+});
+
+// ============================================================================
+// Job Status Component
+// ============================================================================
+
+const STATUS_LABELS: Record<JobStatus, string> = {
+    queued: "Queued",
+    fetching_metadata: "Fetching episode metadata",
+    checking_transcript: "Checking for existing transcript",
+    transcribing: "Transcribing audio",
+    summarizing: "Generating summary",
+    completed: "Completed",
+    failed: "Failed",
+};
+
+const STATUS_PROGRESS: Record<JobStatus, number> = {
+    queued: 5,
+    fetching_metadata: 20,
+    checking_transcript: 35,
+    transcribing: 60,
+    summarizing: 85,
+    completed: 100,
+    failed: 0,
+};
+
+const STATUS_ORDER: JobStatus[] = [
+    "queued",
+    "fetching_metadata",
+    "checking_transcript",
+    "transcribing",
+    "summarizing",
+    "completed",
+];
+
+function JobStatusPage(job: Job): string {
+    const currentProgress = STATUS_PROGRESS[job.status];
+    const isFailed = job.status === "failed";
+
+    // Build progress steps
+    const stepsHtml = STATUS_ORDER.filter(status => status !== "completed").map(status => {
+        const label = STATUS_LABELS[status];
+        const statusProgress = STATUS_PROGRESS[status];
+        const isCurrentStep = job.status === status;
+        const isPastStep = !isFailed && currentProgress > statusProgress;
+
+        let stepClass = "step";
+        let iconHtml = "";
+
+        if (isPastStep) {
+            stepClass += " step-complete";
+            iconHtml = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="step-icon step-icon-check">
+                    <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
+                </svg>
+            `;
+        } else if (isCurrentStep && !isFailed) {
+            stepClass += " step-current";
+            iconHtml = `
+                <div class="step-icon step-icon-spinner"></div>
+            `;
+        } else {
+            stepClass += " step-pending";
+            iconHtml = `
+                <div class="step-icon step-icon-empty"></div>
+            `;
+        }
+
+        return `
+            <div class="${stepClass}">
+                ${iconHtml}
+                <span class="step-label">${escapeHtml(label)}</span>
+            </div>
+        `;
+    }).join("");
+
+    // Estimated time
+    const estimatedTimeHtml = job.estimatedSeconds && job.estimatedSeconds > 0 && !isFailed ? `
+        <div class="estimated-time">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+            ~${Math.ceil(job.estimatedSeconds / 60)} minute${job.estimatedSeconds > 60 ? 's' : ''} remaining
+        </div>
+    ` : "";
+
+    // Error display
+    const errorHtml = isFailed ? `
+        <div class="alert alert-error">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>${escapeHtml(job.error || "An unknown error occurred")}</span>
+        </div>
+    ` : "";
+
+    // Progress bar (only show when not failed)
+    const progressBarHtml = !isFailed ? `
+        <div class="progress-container">
+            <div class="progress-bar">
+                <div class="progress-fill" style="width: ${currentProgress}%"></div>
+            </div>
+            <div class="progress-info">
+                <span class="progress-percent">${currentProgress}% complete</span>
+                ${estimatedTimeHtml}
+            </div>
+        </div>
+    ` : "";
+
+    // Actions
+    const actionsHtml = isFailed ? `
+        <div class="form-actions">
+            <form method="POST" action="/job/${escapeHtml(job.id)}/retry" style="display: contents;">
+                <button type="submit" class="button button-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                        <path d="M3 3v5h5"/>
+                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+                        <path d="M16 21h5v-5"/>
+                    </svg>
+                    Retry
+                </button>
+            </form>
+            <a href="/" class="button">Back to Episodes</a>
+        </div>
+    ` : `
+        <div class="form-actions">
+            <a href="/" class="button">Back to Episodes</a>
+        </div>
+    `;
+
+    return `
+        <div class="page-header">
+            <h1>Processing Episode</h1>
+            <p class="page-subtitle">Job ID: <code class="job-id">${escapeHtml(job.id)}</code></p>
+        </div>
+
+        <div class="card">
+            ${progressBarHtml}
+
+            <div class="steps">
+                ${stepsHtml}
+            </div>
+
+            ${errorHtml}
+
+            ${actionsHtml}
+        </div>
+
+        ${!isFailed ? `
+        <div class="text-center mt-4">
+            <p class="text-muted text-sm">This page will automatically update. You can safely navigate away and return later.</p>
+        </div>
+        ` : ""}
+    `;
+}
+
+// ============================================================================
+// Layout with Extra Head Content
+// ============================================================================
+
+function LayoutWithHead(props: { title: string; children: string; headExtra?: string }) {
+    return html`<!DOCTYPE html>
+        <html lang="en" class="dark">
+            <head>
+                <meta charset="UTF-8" />
+                <meta
+                    name="viewport"
+                    content="width=device-width, initial-scale=1.0"
+                />
+                <title>${props.title} - TLDL</title>
+                <meta
+                    name="description"
+                    content="AI-powered podcast summaries from Apple Podcasts URLs"
+                />
+                <link rel="stylesheet" href="/styles.css" />
+                ${raw(props.headExtra || "")}
+            </head>
+            <body>
+                <div class="container">
+                    <nav class="nav">
+                        <a href="/" class="nav-brand">TLDL</a>
+                        <span class="nav-tagline"
+                            >Too Long Didn't Listen</span
+                        >
+                    </nav>
+                    <main class="main">${raw(props.children)}</main>
+                    <footer class="footer">
+                        <p>AI-powered podcast summaries</p>
+                    </footer>
+                </div>
+            </body>
+        </html>`;
+}
 
 export default publicRoutes;

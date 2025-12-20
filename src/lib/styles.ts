@@ -150,6 +150,18 @@ h4 {
     margin-bottom: 2rem;
 }
 
+.page-header-with-action {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.page-header-with-action .page-header {
+    margin-bottom: 0;
+}
+
 .page-subtitle {
     color: var(--muted-foreground);
     margin-top: 0.5rem;
@@ -612,6 +624,14 @@ h4 {
         gap: 0.25rem;
     }
 
+    .page-header-with-action {
+        flex-direction: column;
+    }
+
+    .page-header-with-action .button {
+        width: 100%;
+    }
+
     .episode-meta {
         flex-direction: column;
         align-items: flex-start;
@@ -637,6 +657,342 @@ h4 {
 
     .button {
         width: 100%;
+    }
+}
+
+/* ============================================================================
+   Forms
+   ============================================================================ */
+
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.form-label {
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.form-input {
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    background-color: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-input::placeholder {
+    color: var(--muted-foreground);
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--muted-foreground);
+    box-shadow: 0 0 0 3px rgba(250, 250, 250, 0.1);
+}
+
+.form-hint {
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
+}
+
+.form-fieldset {
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
+.form-fieldset legend {
+    padding: 0;
+    margin-bottom: 0.75rem;
+}
+
+.form-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 0.5rem;
+}
+
+/* ============================================================================
+   Radio Group
+   ============================================================================ */
+
+.radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.radio-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem;
+    background-color: var(--background);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.radio-option:hover {
+    background-color: var(--muted);
+    border-color: var(--muted-foreground);
+}
+
+.radio-option input[type="radio"] {
+    margin-top: 0.25rem;
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--primary);
+}
+
+.radio-content {
+    flex: 1;
+}
+
+.radio-label {
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+}
+
+.radio-description {
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
+}
+
+/* ============================================================================
+   Alerts
+   ============================================================================ */
+
+.alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem;
+    font-size: 0.875rem;
+    background-color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.alert svg {
+    flex-shrink: 0;
+    margin-top: 0.125rem;
+}
+
+.alert-info {
+    background-color: rgba(59, 130, 246, 0.1);
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+}
+
+.alert-info svg {
+    color: #3b82f6;
+}
+
+.alert-error {
+    background-color: rgba(220, 38, 38, 0.1);
+    border-color: rgba(220, 38, 38, 0.3);
+    color: #fca5a5;
+}
+
+.alert-error svg {
+    color: #dc2626;
+}
+
+.alert-success {
+    background-color: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #86efac;
+}
+
+.alert-success svg {
+    color: #22c55e;
+}
+
+/* ============================================================================
+   Progress Bar
+   ============================================================================ */
+
+.progress-container {
+    margin-bottom: 1.5rem;
+}
+
+.progress-bar {
+    height: 0.5rem;
+    background-color: var(--muted);
+    border-radius: 9999px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: var(--primary);
+    border-radius: 9999px;
+    transition: width 0.5s ease;
+}
+
+.progress-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
+}
+
+.progress-percent {
+    font-weight: 500;
+}
+
+.estimated-time {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+}
+
+/* ============================================================================
+   Steps (Job Status)
+   ============================================================================ */
+
+.steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.step {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    border-radius: var(--radius);
+    transition: background-color 0.2s ease;
+}
+
+.step-complete {
+    background-color: transparent;
+    color: var(--muted-foreground);
+}
+
+.step-current {
+    background-color: rgba(59, 130, 246, 0.1);
+    color: var(--foreground);
+}
+
+.step-pending {
+    background-color: transparent;
+    color: var(--muted-foreground);
+    opacity: 0.5;
+}
+
+.step-icon {
+    flex-shrink: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.step-icon-check {
+    color: #22c55e;
+}
+
+.step-icon-spinner {
+    width: 1.25rem;
+    height: 1.25rem;
+    border: 2px solid var(--muted);
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.step-icon-empty {
+    width: 1.25rem;
+    height: 1.25rem;
+    border: 2px solid var(--border);
+    border-radius: 50%;
+}
+
+.step-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.step-current .step-label {
+    font-weight: 600;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ============================================================================
+   Utility Classes
+   ============================================================================ */
+
+.text-center {
+    text-align: center;
+}
+
+.text-sm {
+    font-size: 0.875rem;
+}
+
+.mt-4 {
+    margin-top: 1rem;
+}
+
+.link-button {
+    background: none;
+    border: none;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    text-decoration: underline;
+    cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.link-button:hover {
+    color: var(--foreground);
+}
+
+.job-id {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    background-color: var(--muted);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+}
+
+/* ============================================================================
+   Responsive - Forms
+   ============================================================================ */
+
+@media (max-width: 640px) {
+    .form-actions {
+        flex-direction: column;
+    }
+
+    .radio-option {
+        padding: 0.875rem;
     }
 }
 `;
