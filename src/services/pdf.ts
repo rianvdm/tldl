@@ -1,6 +1,6 @@
 /**
  * PDF Generation Service
- * Generates downloadable PDFs containing episode summary and transcript
+ * Generates downloadable PDFs containing episode summary
  */
 
 import { jsPDF } from "jspdf";
@@ -12,54 +12,120 @@ export interface PdfContent {
     episodeDuration: number;
     summary: string;
     summaryTemplate: string;
-    transcript: string;
     expiresAt: string;
 }
 
+interface TextBlock {
+    type: "paragraph" | "heading" | "bullet" | "numbered" | "quote";
+    text: string;
+    level?: number; // For headings (1-4) or numbered lists
+}
+
 /**
- * Strip markdown formatting to plain text
+ * Parse markdown into structured blocks for better PDF rendering
  */
-function stripMarkdown(md: string): string {
-    if (!md) return "";
+function parseMarkdownToBlocks(md: string): TextBlock[] {
+    if (!md) return [];
 
-    let text = md;
+    const blocks: TextBlock[] = [];
+    const lines = md.split("\n");
+    let currentParagraph: string[] = [];
 
-    // Remove headers
-    text = text.replace(/^#{1,6}\s+/gm, "");
+    const flushParagraph = () => {
+        if (currentParagraph.length > 0) {
+            const text = currentParagraph.join(" ").trim();
+            if (text) {
+                blocks.push({ type: "paragraph", text: cleanInlineMarkdown(text) });
+            }
+            currentParagraph = [];
+        }
+    };
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+
+        // Empty line - flush paragraph
+        if (!trimmed) {
+            flushParagraph();
+            continue;
+        }
+
+        // Headings
+        const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+        if (headingMatch) {
+            flushParagraph();
+            blocks.push({
+                type: "heading",
+                text: cleanInlineMarkdown(headingMatch[2]),
+                level: headingMatch[1].length,
+            });
+            continue;
+        }
+
+        // Bullet points
+        if (trimmed.match(/^[-*+]\s+/)) {
+            flushParagraph();
+            blocks.push({
+                type: "bullet",
+                text: cleanInlineMarkdown(trimmed.replace(/^[-*+]\s+/, "")),
+            });
+            continue;
+        }
+
+        // Numbered lists
+        const numberedMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+        if (numberedMatch) {
+            flushParagraph();
+            blocks.push({
+                type: "numbered",
+                text: cleanInlineMarkdown(numberedMatch[2]),
+                level: parseInt(numberedMatch[1]),
+            });
+            continue;
+        }
+
+        // Blockquotes
+        if (trimmed.startsWith(">")) {
+            flushParagraph();
+            blocks.push({
+                type: "quote",
+                text: cleanInlineMarkdown(trimmed.replace(/^>\s*/, "")),
+            });
+            continue;
+        }
+
+        // Regular text - add to current paragraph
+        currentParagraph.push(trimmed);
+    }
+
+    flushParagraph();
+    return blocks;
+}
+
+/**
+ * Clean inline markdown formatting (bold, italic, code, links)
+ */
+function cleanInlineMarkdown(text: string): string {
+    let result = text;
 
     // Remove bold/italic
-    text = text.replace(/\*\*\*(.+?)\*\*\*/g, "$1");
-    text = text.replace(/\*\*(.+?)\*\*/g, "$1");
-    text = text.replace(/\*(.+?)\*/g, "$1");
-    text = text.replace(/___(.+?)___/g, "$1");
-    text = text.replace(/__(.+?)__/g, "$1");
-    text = text.replace(/_(.+?)_/g, "$1");
-
-    // Remove code blocks
-    text = text.replace(/```[\s\S]*?```/g, (match) => {
-        return match.slice(3, -3).trim();
-    });
+    result = result.replace(/\*\*\*(.+?)\*\*\*/g, "$1");
+    result = result.replace(/\*\*(.+?)\*\*/g, "$1");
+    result = result.replace(/\*(.+?)\*/g, "$1");
+    result = result.replace(/___(.+?)___/g, "$1");
+    result = result.replace(/__(.+?)__/g, "$1");
+    result = result.replace(/_(.+?)_/g, "$1");
 
     // Remove inline code
-    text = text.replace(/`(.+?)`/g, "$1");
-
-    // Remove blockquotes
-    text = text.replace(/^>\s+/gm, "");
+    result = result.replace(/`(.+?)`/g, "$1");
 
     // Remove links but keep text
-    text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 
     // Remove images
-    text = text.replace(/!\[([^\]]*)\]\([^)]+\)/g, "");
+    result = result.replace(/!\[([^\]]*)\]\([^)]+\)/g, "");
 
-    // Clean up list markers
-    text = text.replace(/^[-*+]\s+/gm, "• ");
-    text = text.replace(/^\d+\.\s+/gm, "");
-
-    // Clean up extra whitespace
-    text = text.replace(/\n{3,}/g, "\n\n");
-
-    return text.trim();
+    return result.trim();
 }
 
 /**
@@ -88,7 +154,7 @@ function formatDate(dateString: string): string {
 }
 
 /**
- * Generate a PDF document for an episode
+ * Generate a PDF document for an episode (summary only, no transcript)
  */
 export function generateEpisodePdf(content: PdfContent): ArrayBuffer {
     const doc = new jsPDF({
@@ -99,15 +165,15 @@ export function generateEpisodePdf(content: PdfContent): ArrayBuffer {
 
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const margin = 20;
+    const margin = 25;
     const contentWidth = pageWidth - margin * 2;
     let yPosition = margin;
 
     // Helper to add footer to each page
     const addFooter = () => {
-        const footerY = pageHeight - 10;
+        const footerY = pageHeight - 12;
         doc.setFontSize(8);
-        doc.setTextColor(128, 128, 128);
+        doc.setTextColor(150, 150, 150);
         doc.text("Generated by TLDL", margin, footerY);
         doc.text(
             `Expires: ${formatDate(content.expiresAt)}`,
@@ -115,17 +181,11 @@ export function generateEpisodePdf(content: PdfContent): ArrayBuffer {
             footerY,
             { align: "right" }
         );
-        doc.text(
-            `Page ${doc.getNumberOfPages()}`,
-            pageWidth / 2,
-            footerY,
-            { align: "center" }
-        );
     };
 
     // Helper to check if we need a new page
     const checkNewPage = (neededHeight: number) => {
-        if (yPosition + neededHeight > pageHeight - 20) {
+        if (yPosition + neededHeight > pageHeight - 25) {
             addFooter();
             doc.addPage();
             yPosition = margin;
@@ -134,19 +194,20 @@ export function generateEpisodePdf(content: PdfContent): ArrayBuffer {
         return false;
     };
 
-    // Helper to add wrapped text and return new Y position
+    // Helper to add wrapped text with proper line spacing
     const addWrappedText = (
         text: string,
         fontSize: number,
-        lineHeight: number = 1.4
+        maxWidth: number = contentWidth,
+        xOffset: number = 0
     ): void => {
         doc.setFontSize(fontSize);
-        const lines = doc.splitTextToSize(text, contentWidth);
-        const lineHeightMm = (fontSize * lineHeight * 0.352778); // Convert pt to mm
+        const lines = doc.splitTextToSize(text, maxWidth);
+        const lineHeightMm = fontSize * 0.5; // Comfortable line height
 
         for (const line of lines) {
             checkNewPage(lineHeightMm);
-            doc.text(line, margin, yPosition);
+            doc.text(line, margin + xOffset, yPosition);
             yPosition += lineHeightMm;
         }
     };
@@ -156,100 +217,122 @@ export function generateEpisodePdf(content: PdfContent): ArrayBuffer {
     // =========================================================================
 
     // TLDL branding
-    doc.setFontSize(10);
-    doc.setTextColor(100, 100, 100);
-    doc.text("TLDL - Too Long Didn't Listen", margin, yPosition);
-    yPosition += 8;
+    doc.setFontSize(9);
+    doc.setTextColor(120, 120, 120);
+    doc.text("TLDL — Too Long Didn't Listen", margin, yPosition);
+    yPosition += 12;
 
     // Podcast name
-    doc.setFontSize(12);
-    doc.setTextColor(80, 80, 80);
+    doc.setFontSize(11);
+    doc.setTextColor(100, 100, 100);
+    doc.setFont("helvetica", "normal");
     const podcastLines = doc.splitTextToSize(content.podcastName, contentWidth);
     doc.text(podcastLines, margin, yPosition);
-    yPosition += podcastLines.length * 5 + 2;
+    yPosition += podcastLines.length * 5 + 4;
 
     // Episode title
-    doc.setFontSize(18);
-    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(20);
+    doc.setTextColor(30, 30, 30);
     doc.setFont("helvetica", "bold");
     const titleLines = doc.splitTextToSize(content.episodeTitle, contentWidth);
-    doc.text(titleLines, margin, yPosition);
-    yPosition += titleLines.length * 7 + 2;
+    for (const line of titleLines) {
+        doc.text(line, margin, yPosition);
+        yPosition += 8;
+    }
+    yPosition += 2;
 
     // Episode metadata
     doc.setFontSize(10);
-    doc.setTextColor(100, 100, 100);
+    doc.setTextColor(120, 120, 120);
     doc.setFont("helvetica", "normal");
-    const metaText = `${formatDate(content.episodeDate)} • ${formatDuration(content.episodeDuration)}`;
+    const metaText = `${formatDate(content.episodeDate)}  •  ${formatDuration(content.episodeDuration)}  •  ${content.summaryTemplate}`;
     doc.text(metaText, margin, yPosition);
-    yPosition += 10;
+    yPosition += 12;
 
     // Divider line
-    doc.setDrawColor(200, 200, 200);
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.3);
     doc.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 10;
+    yPosition += 12;
 
     // =========================================================================
-    // Summary Section
+    // Summary Section - Render structured blocks
     // =========================================================================
 
-    // Section header
-    doc.setFontSize(14);
-    doc.setTextColor(0, 0, 0);
-    doc.setFont("helvetica", "bold");
-    doc.text("Summary", margin, yPosition);
-    yPosition += 3;
+    const blocks = parseMarkdownToBlocks(content.summary);
 
-    // Template badge
-    doc.setFontSize(9);
-    doc.setTextColor(100, 100, 100);
-    doc.setFont("helvetica", "italic");
-    doc.text(`Template: ${content.summaryTemplate}`, margin, yPosition);
-    yPosition += 8;
-
-    // Summary content
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(40, 40, 40);
-    const summaryText = stripMarkdown(content.summary);
-    if (summaryText) {
-        addWrappedText(summaryText, 11);
-    } else {
+    if (blocks.length === 0) {
         doc.setFontSize(11);
-        doc.setTextColor(128, 128, 128);
+        doc.setTextColor(150, 150, 150);
         doc.text("No summary available.", margin, yPosition);
-        yPosition += 6;
-    }
-
-    yPosition += 10;
-
-    // Divider line
-    checkNewPage(15);
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 10;
-
-    // =========================================================================
-    // Transcript Section
-    // =========================================================================
-
-    // Section header
-    checkNewPage(20);
-    doc.setFontSize(14);
-    doc.setTextColor(0, 0, 0);
-    doc.setFont("helvetica", "bold");
-    doc.text("Full Transcript", margin, yPosition);
-    yPosition += 8;
-
-    // Transcript content
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(60, 60, 60);
-    if (content.transcript) {
-        addWrappedText(content.transcript, 10, 1.5);
+        yPosition += 8;
     } else {
-        doc.setFontSize(10);
-        doc.setTextColor(128, 128, 128);
-        doc.text("No transcript available.", margin, yPosition);
-        yPosition += 5;
+        for (const block of blocks) {
+            switch (block.type) {
+                case "heading":
+                    // Add space before headings (except first)
+                    if (yPosition > margin + 50) {
+                        yPosition += 6;
+                    }
+                    checkNewPage(12);
+                    const headingSize = block.level === 1 ? 14 : block.level === 2 ? 12 : 11;
+                    doc.setFontSize(headingSize);
+                    doc.setTextColor(30, 30, 30);
+                    doc.setFont("helvetica", "bold");
+                    addWrappedText(block.text, headingSize);
+                    yPosition += 3;
+                    break;
+
+                case "bullet":
+                    checkNewPage(8);
+                    doc.setFontSize(11);
+                    doc.setTextColor(50, 50, 50);
+                    doc.setFont("helvetica", "normal");
+                    // Draw bullet
+                    doc.text("•", margin, yPosition);
+                    // Draw text with indent
+                    addWrappedText(block.text, 11, contentWidth - 8, 8);
+                    yPosition += 2;
+                    break;
+
+                case "numbered":
+                    checkNewPage(8);
+                    doc.setFontSize(11);
+                    doc.setTextColor(50, 50, 50);
+                    doc.setFont("helvetica", "normal");
+                    // Draw number
+                    doc.text(`${block.level}.`, margin, yPosition);
+                    // Draw text with indent
+                    addWrappedText(block.text, 11, contentWidth - 10, 10);
+                    yPosition += 2;
+                    break;
+
+                case "quote":
+                    checkNewPage(10);
+                    yPosition += 2;
+                    doc.setFontSize(11);
+                    doc.setTextColor(80, 80, 80);
+                    doc.setFont("helvetica", "italic");
+                    // Draw quote bar
+                    doc.setDrawColor(180, 180, 180);
+                    doc.setLineWidth(0.8);
+                    const quoteStartY = yPosition - 3;
+                    addWrappedText(`"${block.text}"`, 11, contentWidth - 12, 8);
+                    doc.line(margin + 2, quoteStartY, margin + 2, yPosition - 2);
+                    yPosition += 4;
+                    break;
+
+                case "paragraph":
+                default:
+                    checkNewPage(8);
+                    doc.setFontSize(11);
+                    doc.setTextColor(50, 50, 50);
+                    doc.setFont("helvetica", "normal");
+                    addWrappedText(block.text, 11);
+                    yPosition += 4;
+                    break;
+            }
+        }
     }
 
     // Add footer to the last page

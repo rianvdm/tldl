@@ -51,10 +51,10 @@ Break down complex concepts using:
 - Concrete examples
 
 Structure your explanation as:
-1. What's the big idea? (1-2 sentences)
-2. Why does it matter? (1 paragraph)
-3. Key concepts explained simply (2-3 paragraphs)
-4. The bottom line (2-3 sentences)
+1. What's the big idea? 
+2. Why does it matter? 
+3. Key concepts explained simply 
+4. The bottom line 
 
 Be accurate while being accessible. Total length: 400-600 words.`,
     },

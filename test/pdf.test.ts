@@ -25,7 +25,6 @@ This is a **test summary** with some markdown formatting.
 
 > A notable quote from the episode.`,
         summaryTemplate: "Key Takeaways & Practical Steps",
-        transcript: "This is the full transcript of the episode. It contains all the spoken words from the podcast episode, which can be quite long for a 45 minute episode.",
         expiresAt: "2025-01-15T00:00:00Z",
     };
 
@@ -56,25 +55,14 @@ This is a **test summary** with some markdown formatting.
         expect(result.byteLength).toBeGreaterThan(0);
     });
 
-    it("handles empty transcript gracefully", () => {
-        const contentWithEmptyTranscript: PdfContent = {
+    it("handles long summary that spans multiple pages", () => {
+        const longSummary = "This is a test sentence with important information. ".repeat(200);
+        const contentWithLongSummary: PdfContent = {
             ...sampleContent,
-            transcript: "",
+            summary: longSummary,
         };
 
-        const result = generateEpisodePdf(contentWithEmptyTranscript);
-        expect(result).toBeInstanceOf(ArrayBuffer);
-        expect(result.byteLength).toBeGreaterThan(0);
-    });
-
-    it("handles long content that spans multiple pages", () => {
-        const longTranscript = "This is a test sentence. ".repeat(500);
-        const contentWithLongTranscript: PdfContent = {
-            ...sampleContent,
-            transcript: longTranscript,
-        };
-
-        const result = generateEpisodePdf(contentWithLongTranscript);
+        const result = generateEpisodePdf(contentWithLongSummary);
         expect(result).toBeInstanceOf(ArrayBuffer);
         // Long content should produce a larger PDF
         expect(result.byteLength).toBeGreaterThan(5000);

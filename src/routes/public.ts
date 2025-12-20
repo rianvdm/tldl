@@ -534,18 +534,15 @@ publicRoutes.get("/episode/:episodeId/pdf", async (c) => {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Fetch transcript and summaries
-    const [transcript, summaries] = await Promise.all([
-        getTranscript(c.env.TLDL_DATA, episodeId),
-        listSummariesForEpisode(c.env.TLDL_DATA, episodeId),
-    ]);
+    // Fetch summaries (PDF only includes summary, not transcript)
+    const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
 
     // Determine which summary to use
     const templateId = selectedTemplate || (summaries.length > 0 ? summaries[0].templateId : "key-takeaways");
     const summary = summaries.find((s) => s.templateId === templateId);
     const template = getTemplate(templateId);
 
-    // Generate PDF
+    // Generate PDF (summary only, no transcript)
     const pdfBuffer = generateEpisodePdf({
         podcastName: episode.podcastName,
         episodeTitle: episode.episodeTitle,
@@ -553,7 +550,6 @@ publicRoutes.get("/episode/:episodeId/pdf", async (c) => {
         episodeDuration: episode.episodeDuration,
         summary: summary?.text || "",
         summaryTemplate: template?.name || templateId,
-        transcript: transcript?.text || "",
         expiresAt: episode.expiresAt,
     });
 
