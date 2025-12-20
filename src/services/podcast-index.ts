@@ -201,12 +201,48 @@ export async function getEpisodesByItunesId(
 // ============================================================================
 
 /**
+ * Normalize a title for fuzzy matching
+ * - Lowercase
+ * - Replace hyphens with spaces
+ * - Remove special characters except spaces
+ * - Collapse multiple spaces
+ */
+function normalizeForMatching(text: string): string {
+    return text
+        .toLowerCase()
+        .replace(/-/g, ' ')           // Replace hyphens with spaces
+        .replace(/[^a-z0-9\s]/g, '')  // Remove special chars
+        .replace(/\s+/g, ' ')         // Collapse spaces
+        .trim();
+}
+
+/**
+ * Check if two titles match (fuzzy)
+ * Returns true if one title starts with or contains the other
+ */
+function titlesMatch(title1: string, title2: string): boolean {
+    const norm1 = normalizeForMatching(title1);
+    const norm2 = normalizeForMatching(title2);
+    
+    // Exact match
+    if (norm1 === norm2) return true;
+    
+    // One contains the other
+    if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
+    
+    // One starts with the other (for truncated URL slugs)
+    if (norm1.startsWith(norm2) || norm2.startsWith(norm1)) return true;
+    
+    return false;
+}
+
+/**
  * Find episode matching Apple episode ID
  * 
  * Apple episode IDs don't have a direct mapping, so we match by:
  * 1. GUID (if it contains the episode ID)
- * 2. Title + approximate date
- * 3. Enclosure URL patterns
+ * 2. Title (fuzzy matching with normalization)
+ * 3. Approximate date
  */
 export function findEpisodeByAppleId(
     episodes: PodcastIndexEpisode[],
@@ -235,21 +271,17 @@ export function findEpisodeByAppleId(
         return byGuid;
     }
     
-    // Strategy 2: Match by title (fuzzy)
+    // Strategy 2: Match by title (fuzzy with normalization)
     if (expectedTitle) {
-        const normalizedExpected = expectedTitle.toLowerCase().trim();
-        const byTitle = episodes.find(ep => {
-            const normalizedTitle = ep.title.toLowerCase().trim();
-            return normalizedTitle === normalizedExpected ||
-                   normalizedTitle.includes(normalizedExpected) ||
-                   normalizedExpected.includes(normalizedTitle);
-        });
+        const byTitle = episodes.find(ep => titlesMatch(ep.title, expectedTitle));
         if (byTitle) {
             console.log(JSON.stringify({
                 event: "podcast_index_match_by_title",
                 appleEpisodeId,
                 expectedTitle,
                 matchedTitle: byTitle.title,
+                normalizedExpected: normalizeForMatching(expectedTitle),
+                normalizedMatched: normalizeForMatching(byTitle.title),
             }));
             return byTitle;
         }
@@ -278,6 +310,7 @@ export function findEpisodeByAppleId(
         appleEpisodeId,
         expectedTitle,
         expectedDate,
+        normalizedExpected: expectedTitle ? normalizeForMatching(expectedTitle) : undefined,
     }));
     
     return null;
