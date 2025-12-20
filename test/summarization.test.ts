@@ -19,7 +19,7 @@ function createMockResponse(text: string, model = "gpt-5.2"): object {
                 type: "message",
                 content: [
                     {
-                        type: "text",
+                        type: "output_text",
                         text,
                     },
                 ],

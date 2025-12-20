@@ -187,6 +187,18 @@ async function callResponsesApi(
 /**
  * Extract the text content from a Responses API response.
  *
+ * Response structure:
+ * {
+ *   output: [{
+ *     type: "message",
+ *     role: "assistant",
+ *     content: [{
+ *       type: "output_text",  // Note: "output_text" not "text"
+ *       text: "..."
+ *     }]
+ *   }]
+ * }
+ *
  * @internal
  */
 function extractTextFromResponse(data: ResponsesApiResponse): string | null {
@@ -198,7 +210,8 @@ function extractTextFromResponse(data: ResponsesApiResponse): string | null {
         }
 
         const content = output.content?.[0];
-        if (!content || content.type !== "text") {
+        // The Responses API uses "output_text" as the content type
+        if (!content || content.type !== "output_text") {
             return null;
         }
 
