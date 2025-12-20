@@ -8,6 +8,7 @@ import { html, raw } from "hono/html";
 import type { HonoEnv, Episode, Job, JobStatus } from "../types";
 import {
     listEpisodes,
+    listActiveJobs,
     getEpisode,
     getTranscript,
     listSummariesForEpisode,
@@ -213,11 +214,60 @@ function EpisodeCard(
 }
 
 // ============================================================================
+// In Progress Card Component
+// ============================================================================
+
+const STATUS_LABELS_SHORT: Record<JobStatus, string> = {
+    queued: "Waiting to start...",
+    fetching_metadata: "Fetching metadata...",
+    checking_transcript: "Checking transcript...",
+    transcribing: "Transcribing audio...",
+    summarizing: "Generating summary...",
+    completed: "Completed",
+    failed: "Failed",
+};
+
+function InProgressCard(job: Job): string {
+    const statusLabel = STATUS_LABELS_SHORT[job.status] || job.status;
+    const template = getTemplate(job.templateId);
+    const templateName = template?.name || job.templateId;
+
+    return `
+        <a href="/job/${escapeHtml(job.id)}" class="episode-card episode-card-progress">
+            <div class="episode-card-content">
+                <div class="episode-podcast">
+                    <span class="status-indicator status-indicator-active"></span>
+                    Processing
+                </div>
+                <h3 class="episode-title">${escapeHtml(statusLabel)}</h3>
+                <div class="episode-meta">
+                    <span>Started ${formatDate(job.createdAt)}</span>
+                    <span class="meta-dot">•</span>
+                    <span>${escapeHtml(templateName)}</span>
+                </div>
+            </div>
+            <div class="episode-card-arrow">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spinner">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+            </div>
+        </a>
+    `;
+}
+
+// ============================================================================
 // GET / — Episode List (Home Page)
 // ============================================================================
 
 publicRoutes.get("/", async (c) => {
-    const episodes = await listEpisodes(c.env.TLDL_DATA);
+    // Fetch both active jobs and completed episodes
+    const [activeJobs, episodes] = await Promise.all([
+        listActiveJobs(c.env.TLDL_DATA),
+        listEpisodes(c.env.TLDL_DATA),
+    ]);
+
+    // Build in-progress cards
+    const inProgressCards = activeJobs.map((job) => InProgressCard(job)).join("");
 
     // Get summary templates for each episode
     const episodeCards = await Promise.all(
@@ -231,8 +281,19 @@ publicRoutes.get("/", async (c) => {
         })
     );
 
+    // Build in-progress section if there are active jobs
+    const inProgressSection = activeJobs.length > 0 ? `
+        <div class="section-header">
+            <h2>In Progress</h2>
+        </div>
+        <div class="episode-list">
+            ${inProgressCards}
+        </div>
+        <div class="divider"></div>
+    ` : "";
+
     const content =
-        episodes.length > 0
+        episodes.length > 0 || activeJobs.length > 0
             ? `
         <div class="page-header-with-action">
             <div class="page-header">
@@ -246,9 +307,12 @@ publicRoutes.get("/", async (c) => {
                 Submit Episode
             </a>
         </div>
+        ${inProgressSection}
+        ${episodes.length > 0 ? `
         <div class="episode-list">
             ${episodeCards.join("")}
         </div>
+        ` : ""}
     `
             : `
         <div class="page-header">
@@ -691,20 +755,31 @@ publicRoutes.get("/job/:jobId", async (c) => {
         return c.html(Layout({ title: "Not Found", children: content }), 404);
     }
 
-    // If completed, redirect to episode page
-    if (job.status === "completed") {
-        return c.redirect(`/episode/${job.episodeId}?template=${job.templateId}`);
-    }
+    // Debug: log what status we're seeing
+    console.log(
+        JSON.stringify({
+            event: "job_status_read",
+            jobId,
+            status: job.status,
+            updatedAt: job.updatedAt,
+        })
+    );
 
     const content = JobStatusPage(job);
 
-    // Add auto-refresh for in-progress jobs
-    const refreshMeta = job.status !== "failed"
+    // Add auto-refresh only for in-progress jobs (not completed or failed)
+    const isInProgress = job.status !== "failed" && job.status !== "completed";
+    const refreshMeta = isInProgress
         ? '<meta http-equiv="refresh" content="5">'
         : '';
 
+    // Prevent caching to ensure fresh status on every request
+    c.header("Cache-Control", "no-cache, no-store, must-revalidate");
+    c.header("Pragma", "no-cache");
+    c.header("Expires", "0");
+
     return c.html(LayoutWithHead({
-        title: "Processing Episode",
+        title: job.status === "completed" ? "Episode Ready" : "Processing Episode",
         children: content,
         headExtra: refreshMeta
     }));
@@ -835,8 +910,9 @@ function JobStatusPage(job: Job): string {
         </div>
     ` : "";
 
-    // Progress bar (only show when not failed)
-    const progressBarHtml = !isFailed ? `
+    // Progress bar (only show when not failed and not completed)
+    const isCompleted = job.status === "completed";
+    const progressBarHtml = !isFailed && !isCompleted ? `
         <div class="progress-container">
             <div class="progress-bar">
                 <div class="progress-fill" style="width: ${currentProgress}%"></div>
@@ -848,47 +924,81 @@ function JobStatusPage(job: Job): string {
         </div>
     ` : "";
 
-    // Actions
-    const actionsHtml = isFailed ? `
-        <div class="form-actions">
-            <form method="POST" action="/job/${escapeHtml(job.id)}/retry" style="display: contents;">
-                <button type="submit" class="button button-primary">
+    // Success message for completed jobs
+    const successHtml = isCompleted ? `
+        <div class="alert alert-success">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
+            </svg>
+            <span>Your episode summary is ready!</span>
+        </div>
+    ` : "";
+
+    // Actions based on status
+    let actionsHtml = "";
+    if (isCompleted) {
+        actionsHtml = `
+            <div class="form-actions">
+                <a href="/episode/${escapeHtml(job.episodeId)}?template=${escapeHtml(job.templateId)}" class="button button-primary">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                        <path d="M3 3v5h5"/>
-                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
-                        <path d="M16 21h5v-5"/>
+                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+                        <circle cx="12" cy="12" r="3"/>
                     </svg>
-                    Retry
-                </button>
-            </form>
-            <a href="/" class="button">Back to Episodes</a>
-        </div>
-    ` : `
-        <div class="form-actions">
-            <a href="/" class="button">Back to Episodes</a>
-        </div>
-    `;
+                    View Episode Summary
+                </a>
+                <a href="/" class="button">Back to Episodes</a>
+            </div>
+        `;
+    } else if (isFailed) {
+        actionsHtml = `
+            <div class="form-actions">
+                <form method="POST" action="/job/${escapeHtml(job.id)}/retry" style="display: contents;">
+                    <button type="submit" class="button button-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                            <path d="M3 3v5h5"/>
+                            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+                            <path d="M16 21h5v-5"/>
+                        </svg>
+                        Retry
+                    </button>
+                </form>
+                <a href="/" class="button">Back to Episodes</a>
+            </div>
+        `;
+    } else {
+        actionsHtml = `
+            <div class="form-actions">
+                <a href="/" class="button">Back to Episodes</a>
+            </div>
+        `;
+    }
+
+    // Page title based on status
+    const pageTitle = isCompleted ? "Episode Ready" : isFailed ? "Processing Failed" : "Processing Episode";
 
     return `
         <div class="page-header">
-            <h1>Processing Episode</h1>
+            <h1>${pageTitle}</h1>
             <p class="page-subtitle">Job ID: <code class="job-id">${escapeHtml(job.id)}</code></p>
         </div>
 
         <div class="card">
             ${progressBarHtml}
 
+            ${!isCompleted ? `
             <div class="steps">
                 ${stepsHtml}
             </div>
+            ` : ""}
 
+            ${successHtml}
             ${errorHtml}
 
             ${actionsHtml}
         </div>
 
-        ${!isFailed ? `
+        ${!isFailed && !isCompleted ? `
         <div class="text-center mt-4">
             <p class="text-muted text-sm">This page will automatically update. You can safely navigate away and return later.</p>
         </div>

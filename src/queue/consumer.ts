@@ -70,19 +70,40 @@ const queueHandler = {
                         type: message.body.type,
                         error: error instanceof Error ? error.message : "Unknown error",
                         stack: error instanceof Error ? error.stack : undefined,
+                        attempts: message.attempts,
                     })
                 );
 
-                // Mark job as failed in KV before retrying
-                try {
-                    const errorMessage = mapErrorToUserMessage(error);
-                    await updateJobStatus(env.TLDL_DATA, message.body.jobId, "failed", errorMessage);
-                } catch (updateError) {
-                    console.error("Failed to update job status:", updateError);
+                // Check if we've exhausted retries (max_retries = 2 in wrangler.toml means 3 total attempts)
+                const maxAttempts = 3;
+                if (message.attempts >= maxAttempts) {
+                    // Final attempt failed - mark job as failed and acknowledge
+                    try {
+                        const errorMessage = mapErrorToUserMessage(error);
+                        await updateJobStatus(env.TLDL_DATA, message.body.jobId, "failed", errorMessage);
+                        console.log(
+                            JSON.stringify({
+                                event: "job_marked_failed",
+                                jobId: message.body.jobId,
+                                errorMessage,
+                            })
+                        );
+                    } catch (updateError) {
+                        console.error("Failed to update job status:", updateError);
+                    }
+                    message.ack(); // Don't retry anymore
+                } else {
+                    // Will retry - don't mark as failed, just log and retry
+                    console.log(
+                        JSON.stringify({
+                            event: "job_retry",
+                            jobId: message.body.jobId,
+                            attempt: message.attempts,
+                            maxAttempts,
+                        })
+                    );
+                    message.retry();
                 }
-
-                // Retry the message (queue handles max_retries)
-                message.retry();
             }
         }
     },
@@ -143,17 +164,64 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
 
 /**
  * Full episode processing pipeline:
- * 1. Fetch metadata
- * 2. Check for/get transcript
- * 3. Generate summary
- * 4. Store all data
+ * 1. Check for existing episode/transcript (fast path for regeneration)
+ * 2. Fetch metadata if needed
+ * 3. Check RSS for transcript if needed
+ * 4. Transcribe via Whisper if needed
+ * 5. Generate summary
+ * 6. Store all data
  */
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
     const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate } = ctx;
     const kv = env.TLDL_DATA;
     const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 80;
 
-    // Step 1: Fetch episode metadata
+    // Step 1: Quick check for existing episode and transcript (fast path)
+    // Don't update status yet - check silently first
+    const existingEpisode = await getEpisode(kv, episodeId);
+    let transcript: Transcript | null = await getTranscript(kv, episodeId);
+    let transcriptSource: TranscriptSource = "openai";
+
+    // Fast path: If we have both episode and transcript, skip to summarization
+    if (existingEpisode && transcript) {
+        // Show "checking transcript" briefly since we found cached data
+        await updateJobStatus(kv, jobId, "checking_transcript");
+
+        console.log(
+            JSON.stringify({
+                event: "fast_path_summarization",
+                episodeId,
+                transcriptSource: transcript.source,
+            })
+        );
+
+        transcriptSource = transcript.source;
+
+        // Jump straight to summary generation
+        await updateJobStatus(kv, jobId, "summarizing");
+        await updateJobEstimate(kv, jobId, 30); // ~30 seconds for summary
+
+        const summaryResult = await generateSummary(
+            transcript.text,
+            templateId,
+            env.OPENAI_API_KEY
+        );
+
+        const summary: Summary = {
+            episodeId,
+            templateId,
+            text: summaryResult.text,
+            model: summaryResult.model,
+            createdAt: new Date().toISOString(),
+        };
+        await saveSummary(kv, summary);
+
+        // Mark job as completed
+        await updateJobStatus(kv, jobId, "completed");
+        return;
+    }
+
+    // Standard path: Need to fetch metadata first
     await updateJobStatus(kv, jobId, "fetching_metadata");
     await updateJobEstimate(kv, jobId, 180); // ~3 minutes initial estimate
 
@@ -170,14 +238,10 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         expectedDate,
     });
 
-    // Step 2: Check for existing transcript
-    await updateJobStatus(kv, jobId, "checking_transcript");
-
-    let transcript: Transcript | null = await getTranscript(kv, episodeId);
-    let transcriptSource: TranscriptSource = "openai";
-
+    // Step 2: Check RSS for transcript if we don't have one
     if (!transcript) {
-        // Check RSS feed for transcript
+        await updateJobStatus(kv, jobId, "checking_transcript");
+
         if (metadata.transcriptUrl && metadata.transcriptType) {
             const rssTranscriptText = await fetchRssTranscript(
                 metadata.transcriptUrl,
@@ -195,7 +259,6 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             }
         }
     } else {
-        // Use existing transcript source
         transcriptSource = transcript.source;
     }
 
@@ -242,24 +305,26 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     };
     await saveSummary(kv, summary);
 
-    // Step 5: Save episode metadata
-    const now = new Date();
-    const expiresAt = new Date(now);
-    expiresAt.setDate(expiresAt.getDate() + 365);
+    // Step 5: Save episode metadata (only if it doesn't exist)
+    if (!existingEpisode) {
+        const now = new Date();
+        const expiresAt = new Date(now);
+        expiresAt.setDate(expiresAt.getDate() + 365);
 
-    const episode: Episode = {
-        id: episodeId,
-        appleUrl,
-        podcastName: metadata.podcastName,
-        episodeTitle: metadata.episodeTitle,
-        episodeDuration: metadata.episodeDuration,
-        episodeDate: metadata.episodeDate,
-        audioUrl: metadata.audioUrl,
-        transcriptSource,
-        createdAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-    };
-    await saveEpisode(kv, episode);
+        const episode: Episode = {
+            id: episodeId,
+            appleUrl,
+            podcastName: metadata.podcastName,
+            episodeTitle: metadata.episodeTitle,
+            episodeDuration: metadata.episodeDuration,
+            episodeDate: metadata.episodeDate,
+            audioUrl: metadata.audioUrl,
+            transcriptSource,
+            createdAt: now.toISOString(),
+            expiresAt: expiresAt.toISOString(),
+        };
+        await saveEpisode(kv, episode);
+    }
 
     // Step 6: Mark job as completed
     await updateJobStatus(kv, jobId, "completed");

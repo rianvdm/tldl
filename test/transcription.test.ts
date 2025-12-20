@@ -144,28 +144,47 @@ describe("transcribeAudio", () => {
         expect(result.source).toBe("openai");
     });
 
-    it("should throw AUDIO_TOO_LARGE for files over 25MB", async () => {
-        const largeSize = 30 * 1024 * 1024; // 30MB
+    it("should use chunked transcription for files over 25MB", async () => {
+        const largeSize = 30 * 1024 * 1024; // 30MB - will be split into 2 chunks
+        const mockAudioBuffer = new ArrayBuffer(20 * 1024 * 1024); // Mock chunk size
 
-        vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            new Response(null, {
-                status: 200,
-                headers: {
-                    "content-length": String(largeSize),
-                    "content-type": "audio/mpeg",
-                },
-            })
+        vi.spyOn(globalThis, "fetch")
+            // HEAD request for validation
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": String(largeSize),
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            // First chunk fetch (Range request)
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 206 })
+            )
+            // First chunk Whisper transcription
+            .mockResolvedValueOnce(
+                new Response("This is the first part of the transcript.", { status: 200 })
+            )
+            // Second chunk fetch
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 206 })
+            )
+            // Second chunk Whisper transcription
+            .mockResolvedValueOnce(
+                new Response("And this is the second part.", { status: 200 })
+            );
+
+        const result = await transcribeAudio(
+            "https://example.com/large.mp3",
+            "test-api-key"
         );
 
-        try {
-            await transcribeAudio("https://example.com/large.mp3", "test-api-key");
-            expect.fail("Expected error");
-        } catch (error) {
-            expect(error).toBeInstanceOf(AppError);
-            expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_TOO_LARGE);
-            expect((error as AppError).message).toContain("30MB");
-            expect((error as AppError).message).toContain("maximum is 25MB");
-        }
+        // Verify result is the stitched transcript
+        expect(result.source).toBe("openai");
+        expect(result.text).toContain("first part");
+        expect(result.text).toContain("second part");
     });
 
     it("should throw TRANSCRIPTION_FAILED on Whisper API error", async () => {

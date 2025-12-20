@@ -980,6 +980,54 @@ h4 {
     color: var(--foreground);
 }
 
+/* ============================================================================
+   In Progress Cards
+   ============================================================================ */
+
+.episode-card-progress {
+    border-color: #3b82f6;
+    border-style: dashed;
+}
+
+.episode-card-progress:hover {
+    border-color: #60a5fa;
+}
+
+.status-indicator {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    margin-right: 0.375rem;
+}
+
+.status-indicator-active {
+    background-color: #3b82f6;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.section-header {
+    margin-bottom: 1rem;
+}
+
+.section-header h2 {
+    margin-bottom: 0;
+}
+
 .job-id {
     font-family: var(--font-mono);
     font-size: 0.75rem;

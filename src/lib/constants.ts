@@ -36,7 +36,7 @@ Write in flowing paragraphs that capture:
 
 Avoid bullet points. Write as if you're telling a friend about a fascinating conversation you overheard. Capture the essence without losing the nuance.
 
-Total length: 400-600 words.`,
+Total length: 300-400 words.`,
     },
 
     eli5: {

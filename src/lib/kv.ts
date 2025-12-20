@@ -69,6 +69,49 @@ export async function updateJobStatus(
     await kv.put(KV_KEYS.job(jobId), JSON.stringify(updatedJob), {
         expirationTtl: TTL.JOB,
     });
+
+    console.log(
+        JSON.stringify({
+            event: "job_status_updated",
+            jobId,
+            previousStatus: job.status,
+            newStatus: status,
+            hasError: error !== undefined,
+        })
+    );
+}
+
+/**
+ * List all active (non-completed, non-failed) jobs, sorted by createdAt descending
+ */
+export async function listActiveJobs(kv: KVNamespace): Promise<Job[]> {
+    const prefix = "job:";
+    const keys = await kv.list({ prefix });
+
+    if (keys.keys.length === 0) {
+        return [];
+    }
+
+    // Batch fetch all job values
+    const jobs = await Promise.all(
+        keys.keys.map(async (key) => {
+            const data = await kv.get(key.name);
+            if (!data) return null;
+            return JSON.parse(data) as Job;
+        })
+    );
+
+    // Filter to only active jobs (not completed, not failed) and sort by createdAt descending
+    return jobs
+        .filter((job): job is Job =>
+            job !== null &&
+            job.status !== "completed" &&
+            job.status !== "failed"
+        )
+        .sort(
+            (a, b) =>
+                new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
 }
 
 // ============================================================================
