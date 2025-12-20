@@ -23,6 +23,29 @@ const MAINTENANCE_MODE = false;
 // Create the Hono app
 const app = new Hono<HonoEnv>();
 
+// ============================================================================
+// Security Headers Middleware (applies to all routes)
+// ============================================================================
+
+app.use("*", async (c, next) => {
+    await next();
+
+    // Security headers for all responses
+    c.res.headers.set("X-Content-Type-Options", "nosniff");
+    c.res.headers.set("X-Frame-Options", "DENY");
+    c.res.headers.set("X-XSS-Protection", "1; mode=block");
+    c.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+
+    // Content Security Policy for HTML responses
+    const contentType = c.res.headers.get("Content-Type") || "";
+    if (contentType.includes("text/html")) {
+        c.res.headers.set(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'"
+        );
+    }
+});
+
 if (MAINTENANCE_MODE) {
     // Return 503 for all requests when in maintenance mode
     app.all("*", (c) => {
@@ -85,8 +108,13 @@ if (MAINTENANCE_MODE) {
         }
     });
 
-    // Debug route for transcription (will be removed in production)
+    // Debug route for transcription (disabled in production - calls OpenAI API)
     app.get("/debug/transcribe", async (c) => {
+        // Block in production to prevent unauthorized OpenAI API usage
+        if (c.env.ENVIRONMENT !== "development") {
+            return c.json({ error: "Debug routes are disabled in production" }, 403);
+        }
+
         const audioUrl = c.req.query("url");
         const full = c.req.query("full") === "true";
         if (!audioUrl) {
@@ -137,8 +165,13 @@ if (MAINTENANCE_MODE) {
         }
     });
 
-    // Debug route for summarization (will be removed in production)
+    // Debug route for summarization (disabled in production - calls OpenAI API)
     app.get("/debug/summarize", async (c) => {
+        // Block in production to prevent unauthorized OpenAI API usage
+        if (c.env.ENVIRONMENT !== "development") {
+            return c.json({ error: "Debug routes are disabled in production" }, 403);
+        }
+
         const text = c.req.query("text");
         const template = c.req.query("template") || "key-takeaways";
 

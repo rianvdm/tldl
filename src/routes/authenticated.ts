@@ -31,27 +31,97 @@ import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 const authenticated = new Hono<HonoEnv>();
 
 // ============================================================================
+// Rate Limiting Constants
+// ============================================================================
+
+const RATE_LIMIT_MAX_REQUESTS = 10;  // Max submissions per hour
+const RATE_LIMIT_WINDOW_SECONDS = 3600;  // 1 hour
+
+// ============================================================================
+// Rate Limiting Helper
+// ============================================================================
+
+interface RateLimitData {
+    count: number;
+}
+
+/**
+ * Check and update rate limit for a user.
+ * Returns the current count and whether the limit is exceeded.
+ */
+async function checkRateLimit(
+    kv: KVNamespace,
+    userEmail: string
+): Promise<{ count: number; exceeded: boolean }> {
+    const hour = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
+    const key = `ratelimit:${userEmail}:${hour}`;
+
+    const current = await kv.get<RateLimitData>(key, "json");
+    const count = (current?.count || 0) + 1;
+
+    // Update the count
+    await kv.put(key, JSON.stringify({ count }), {
+        expirationTtl: RATE_LIMIT_WINDOW_SECONDS,
+    });
+
+    return {
+        count,
+        exceeded: count > RATE_LIMIT_MAX_REQUESTS,
+    };
+}
+
+/**
+ * Add rate limit headers to response.
+ */
+function setRateLimitHeaders(
+    c: { res: { headers: Headers } },
+    count: number
+): void {
+    const hour = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
+    c.res.headers.set("X-RateLimit-Limit", String(RATE_LIMIT_MAX_REQUESTS));
+    c.res.headers.set("X-RateLimit-Remaining", String(Math.max(0, RATE_LIMIT_MAX_REQUESTS - count)));
+    c.res.headers.set("X-RateLimit-Reset", String((hour + 1) * RATE_LIMIT_WINDOW_SECONDS));
+}
+
+// ============================================================================
 // Middleware - Auth Check
 // ============================================================================
 
 /**
+ * Extract user email from Cloudflare Access JWT.
+ * CF Access validates the signature, we just decode the payload.
+ */
+function getUserEmailFromJwt(jwt: string): string | null {
+    try {
+        const payload = JSON.parse(atob(jwt.split(".")[1]));
+        return payload.email || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Middleware to validate authentication.
  * In production, Cloudflare Access adds CF-Access-Jwt-Assertion header.
+ * FAIL-CLOSED: In production, requests without valid JWT are rejected.
  * For local dev, we skip auth checks.
  */
 authenticated.use("*", async (c, next) => {
     // Check for Cloudflare Access JWT header
     const cfAccessJwt = c.req.header("Cf-Access-Jwt-Assertion");
+    const isDevelopment = c.env.ENVIRONMENT === "development";
 
-    // In production (when deployed to Cloudflare), Access should add the JWT
-    // For local development, we allow requests without the JWT
-    // The env.ENVIRONMENT check could be added to wrangler.toml for explicit mode detection
+    // FAIL-CLOSED: In production, reject requests without valid JWT
+    if (!isDevelopment && !cfAccessJwt) {
+        return c.json({ error: "Unauthorized" }, 401);
+    }
 
-    // For now, we just log and continue - Access will handle auth in production
+    // Extract user email for rate limiting (if JWT present)
     if (cfAccessJwt) {
-        // Could decode JWT here to get user email for logging/rate limiting
-        // const payload = JSON.parse(atob(cfAccessJwt.split('.')[1]));
-        // c.set('userEmail', payload.email);
+        const userEmail = getUserEmailFromJwt(cfAccessJwt);
+        if (userEmail) {
+            c.set("userEmail", userEmail);
+        }
     }
 
     await next();
@@ -124,6 +194,20 @@ authenticated.post("/submit", async (c, next) => {
     // If not JSON, let the HTML form handler handle it
     if (!contentType.includes("application/json")) {
         return next();
+    }
+
+    // Rate limiting check (only if user email is available)
+    const userEmail = c.get("userEmail");
+    if (userEmail) {
+        const rateLimit = await checkRateLimit(c.env.TLDL_DATA, userEmail);
+        setRateLimitHeaders(c, rateLimit.count);
+
+        if (rateLimit.exceeded) {
+            return c.json(
+                { error: "Rate limit exceeded. Maximum 10 submissions per hour." },
+                429
+            );
+        }
     }
 
     let body: SubmitRequest;
@@ -270,6 +354,20 @@ authenticated.get("/job/:jobId", async (c, next) => {
 // ============================================================================
 
 authenticated.post("/episode/:episodeId/regenerate", async (c) => {
+    // Rate limiting check (only if user email is available)
+    const userEmail = c.get("userEmail");
+    if (userEmail) {
+        const rateLimit = await checkRateLimit(c.env.TLDL_DATA, userEmail);
+        setRateLimitHeaders(c, rateLimit.count);
+
+        if (rateLimit.exceeded) {
+            return c.json(
+                { error: "Rate limit exceeded. Maximum 10 submissions per hour." },
+                429
+            );
+        }
+    }
+
     const episodeId = c.req.param("episodeId");
 
     let body: RegenerateRequest;

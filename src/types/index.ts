@@ -128,9 +128,15 @@ export interface Env {
     MAX_EPISODE_MINUTES: string;
     CACHE_TTL_DAYS: string;
     DEFAULT_TEMPLATE: string;
+    ENVIRONMENT: string;  // "production" or "development"
 }
 
 /**
- * Hono app type with environment bindings
+ * Hono app type with environment bindings and context variables
  */
-export type HonoEnv = { Bindings: Env };
+export type HonoEnv = {
+    Bindings: Env;
+    Variables: {
+        userEmail?: string;
+    };
+};

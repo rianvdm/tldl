@@ -87,7 +87,7 @@ npm run deploy
 - [x] **Audio Chunking**: Large file transcription (>25MB) with MP3 frame-aware splitting
 - [x] **Prompt 12**: PDF generation (button hidden, route functional)
 - [x] **Prompt 13**: Error handling hardening
-- [ ] **Prompt 14**: Security + rate limiting
+- [x] **Prompt 14**: Security + rate limiting
 - [ ] **Prompt 15**: Integration tests + polish
 
 ---
