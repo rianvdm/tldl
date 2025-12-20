@@ -4,16 +4,16 @@
 
 ## 🚨 Maintenance Mode Toggle
 
-**Current Status**: ✅ MAINTENANCE MODE ENABLED (all HTTP endpoints disabled)
+**Current Status**: 🟢 MAINTENANCE MODE DISABLED (endpoints active)
 
-The worker is currently deployed in maintenance mode to prevent API abuse until authentication is implemented.
+The worker is currently deployed with all endpoints enabled.
 
 ### How to Toggle
 
 Maintenance mode is controlled by a single flag at the top of `src/index.ts`:
 
 ```typescript
-const MAINTENANCE_MODE = true;  // Change to false to enable endpoints
+const MAINTENANCE_MODE = false;  // Change to true to disable endpoints
 ```
 
 ### To DISABLE maintenance mode (restore normal operation):
@@ -83,6 +83,7 @@ npm run deploy
 - [x] **Prompt 11**: Authenticated HTML pages (submit, status)
 
 ### Features & Polish
+- [x] **Audio Chunking**: Large file transcription (>25MB) with MP3 frame-aware splitting
 - [ ] **Prompt 12**: PDF generation
 - [ ] **Prompt 13**: Error handling hardening
 - [ ] **Prompt 14**: Security + rate limiting
@@ -92,13 +93,14 @@ npm run deploy
 
 ## Key Milestones
 
-- [ ] Worker runs locally (`wrangler dev`)
-- [ ] Submit form accepts URL and creates job
-- [ ] Queue processes job and updates status
-- [ ] First episode processed end-to-end (with Whisper)
-- [ ] Episode displays on public list
+- [x] Worker runs locally (`wrangler dev`)
+- [x] Submit form accepts URL and creates job
+- [x] Queue processes job and updates status
+- [x] First episode processed end-to-end (with Whisper)
+- [x] Large audio files chunked and transcribed
+- [x] Episode displays on public list
 - [ ] PDF download works
-- [ ] Full flow works in production
+- [x] Full flow works in production
 
 ---
 
