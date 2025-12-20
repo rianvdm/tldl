@@ -600,10 +600,31 @@ h4 {
 .error-page {
     text-align: center;
     padding: 4rem 1rem;
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.error-icon {
+    color: var(--muted-foreground);
+    margin-bottom: 1.5rem;
 }
 
 .error-page h1 {
     margin-bottom: 1rem;
+    font-size: 1.75rem;
+}
+
+.error-message {
+    color: var(--muted-foreground);
+    margin-bottom: 2rem;
+    line-height: 1.6;
+}
+
+.error-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
 }
 
 .error-page p {

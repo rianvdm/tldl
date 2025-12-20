@@ -1,10 +1,12 @@
 import { Hono } from "hono";
+import { html } from "hono/html";
 import type { HonoEnv } from "./types";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
 import { CSS } from "./lib/styles";
+import { AppError, logError } from "./lib/errors";
 import api from "./routes/api";
 import authenticated from "./routes/authenticated";
 import publicRoutes from "./routes/public";
@@ -179,7 +181,115 @@ if (MAINTENANCE_MODE) {
     // ============================================================================
 
     app.route("/", publicRoutes);
+
+    // ============================================================================
+    // Global Error Handler
+    // ============================================================================
+
+    app.onError((err, c) => {
+        // Log the error with context
+        logError(err, {
+            url: c.req.url,
+            requestId: c.req.header("cf-ray"),
+        });
+
+        // Determine if this is an API request (expects JSON)
+        const isApiRequest = c.req.path.startsWith("/api/") ||
+            c.req.header("Accept")?.includes("application/json");
+
+        if (err instanceof AppError) {
+            if (isApiRequest) {
+                return c.json(err.toJSON(), err.httpStatus as 400);
+            }
+            // Return HTML error page for browser requests
+            return c.html(ErrorPage({
+                title: `Error`,
+                message: err.userMessage,
+                showRetry: true,
+            }), err.httpStatus as 400);
+        }
+
+        // Unknown error - return generic message
+        if (isApiRequest) {
+            return c.json({
+                code: "UNKNOWN_ERROR",
+                message: "Something went wrong. Please try again later.",
+            }, 500);
+        }
+
+        return c.html(ErrorPage({
+            title: "Something went wrong",
+            message: "An unexpected error occurred. Please try again later.",
+            showRetry: true,
+        }), 500);
+    });
+
+    // ============================================================================
+    // 404 Handler
+    // ============================================================================
+
+    app.notFound((c) => {
+        const isApiRequest = c.req.path.startsWith("/api/") ||
+            c.req.header("Accept")?.includes("application/json");
+
+        if (isApiRequest) {
+            return c.json({
+                code: "NOT_FOUND",
+                message: "The requested resource was not found.",
+            }, 404);
+        }
+
+        return c.html(ErrorPage({
+            title: "Page not found",
+            message: "The page you're looking for doesn't exist.",
+            showRetry: false,
+        }), 404);
+    });
 } // End of if (!MAINTENANCE_MODE)
+
+// ============================================================================
+// Error Page Component
+// ============================================================================
+
+function ErrorPage(props: { title: string; message: string; showRetry: boolean }) {
+    return html`<!DOCTYPE html>
+        <html lang="en" class="dark">
+            <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>${props.title} - TLDL</title>
+                <link rel="stylesheet" href="/styles.css" />
+            </head>
+            <body>
+                <div class="container">
+                    <nav class="nav">
+                        <a href="/" class="nav-brand">TLDL</a>
+                        <span class="nav-tagline">Too Long Didn't Listen</span>
+                    </nav>
+                    <main class="main">
+                        <div class="error-page">
+                            <div class="error-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="12" y1="8" x2="12" y2="12"/>
+                                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                                </svg>
+                            </div>
+                            <h1>${props.title}</h1>
+                            <p class="error-message">${props.message}</p>
+                            <div class="error-actions">
+                                <a href="/" class="button button-primary">Go Home</a>
+                                ${props.showRetry ? html`<button onclick="location.reload()" class="button">Try Again</button>` : ""}
+                            </div>
+                        </div>
+                    </main>
+                    <footer class="footer">
+                        <p>AI-powered podcast summaries</p>
+                    </footer>
+                </div>
+            </body>
+        </html>`;
+}
 
 // ============================================================================
 // Export Durable Object class (required by Cloudflare)
