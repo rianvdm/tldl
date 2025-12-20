@@ -3,6 +3,7 @@ import type { Env, HonoEnv, QueueMessage } from "./types";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
+import { generateSummary } from "./services/summarization";
 
 // Create the Hono app
 const app = new Hono<HonoEnv>();
@@ -106,6 +107,33 @@ app.get("/debug/episode", async (c) => {
         }, 500);
     }
 });
+
+// Debug route for summarization (will be removed in production)
+app.get("/debug/summarize", async (c) => {
+    const text = c.req.query("text");
+    const template = c.req.query("template") || "key-takeaways";
+
+    if (!text) {
+        return c.json({ error: "Missing text query parameter" }, 400);
+    }
+
+    try {
+        const result = await generateSummary(text, template, c.env.OPENAI_API_KEY);
+        return c.json({
+            success: true,
+            model: result.model,
+            template,
+            summaryLength: result.text.length,
+            summary: result.text,
+        });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
+});
+
 // ============================================================================
 // Queue Consumer (placeholder)
 // ============================================================================

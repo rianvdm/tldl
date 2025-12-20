@@ -25,7 +25,7 @@
 
 ### Core Services
 - [x] **Prompt 5**: OpenAI Whisper transcription
-- [ ] **Prompt 6**: GPT-5.2 summarization
+- [x] **Prompt 6**: GPT-5.2 summarization
 
 ### API Routes
 - [ ] **Prompt 7**: Public API (read-only)
