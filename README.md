@@ -4,16 +4,17 @@
 
 ## Current Status
 
-🚧 **In Development** — Foundation complete, building core features.
+🚧 **In Development** — Core transcription working, building remaining features.
 
 | Component | Status |
 |-----------|--------|
 | Project scaffolding | ✅ Complete |
 | TypeScript types & constants | ✅ Complete |
 | KV storage layer | ✅ Complete |
-| URL parser + iTunes API | 🔲 Not started |
-| RSS feed parser | 🔲 Not started |
-| OpenAI Whisper transcription | 🔲 Not started |
+| URL parser + iTunes API | ✅ Complete |
+| RSS feed parser | ✅ Complete |
+| Episode matching (multi-strategy) | ✅ Complete |
+| OpenAI Whisper transcription | ✅ Complete |
 | GPT summarization | 🔲 Not started |
 | Public API routes | 🔲 Not started |
 | Authenticated API routes | 🔲 Not started |
