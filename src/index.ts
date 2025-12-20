@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env, HonoEnv, QueueMessage } from "./types";
+import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 
 // Create the Hono app
 const app = new Hono<HonoEnv>();
@@ -17,6 +18,20 @@ app.get("/", (c) => {
 app.get("/health", (c) => {
     return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+
+// Debug route for URL parsing (will be removed in production)
+app.get("/debug/parse", (c) => {
+    const url = c.req.query("url");
+    if (!url) {
+        return c.json({ error: "Missing url query parameter" }, 400);
+    }
+    const parsed = parseApplePodcastsUrl(url);
+    const storageId = parsed
+        ? deriveEpisodeId(parsed.podcastId, parsed.episodeId)
+        : null;
+    return c.json({ parsed, storageId });
+});
+
 
 // ============================================================================
 // Queue Consumer (placeholder)

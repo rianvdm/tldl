@@ -19,7 +19,8 @@
 - [x] **Prompt 2**: KV storage layer
 
 ### External Integrations
-- [ ] **Prompt 3**: URL parser + iTunes API
+- [x] **Prompt 3**: URL parser + iTunes API
+
 - [ ] **Prompt 4**: RSS feed parser
 
 ### Core Services
