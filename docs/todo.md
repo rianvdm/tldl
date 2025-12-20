@@ -32,7 +32,7 @@
 - [x] **Prompt 8**: Authenticated API (mutations)
 
 ### Processing
-- [ ] **Prompt 9**: Queue consumer pipeline
+- [x] **Prompt 9**: Queue consumer pipeline
 
 ### UI
 - [ ] **Prompt 10**: Public HTML pages (list, detail)

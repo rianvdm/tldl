@@ -1,11 +1,12 @@
 import { Hono } from "hono";
-import type { Env, HonoEnv, QueueMessage } from "./types";
+import type { HonoEnv } from "./types";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
 import api from "./routes/api";
 import authenticated from "./routes/authenticated";
+import queueConsumer from "./queue/consumer";
 
 // Create the Hono app
 const app = new Hono<HonoEnv>();
@@ -150,27 +151,10 @@ app.route("/api", api);
 app.route("/", authenticated);
 
 // ============================================================================
-// Queue Consumer (placeholder)
-// ============================================================================
-
-const queueHandler = {
-    async queue(
-        batch: MessageBatch<QueueMessage>,
-        _env: Env
-    ): Promise<void> {
-        for (const message of batch.messages) {
-            console.log(`Processing job: ${message.body.jobId}`);
-            // Queue processing will be implemented in Prompt 9
-            message.ack();
-        }
-    },
-};
-
-// ============================================================================
 // Export handlers
 // ============================================================================
 
 export default {
     fetch: app.fetch,
-    queue: queueHandler.queue,
+    queue: queueConsumer.queue,
 };
