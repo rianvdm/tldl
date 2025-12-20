@@ -115,7 +115,7 @@ export async function prefetchEpisodeInfo(
         const titleFromRedirect = await getEpisodeTitleFromAppleRedirect(appleUrl);
         
         if (titleFromRedirect) {
-            // Now match this title in Podcast Index
+            // Now match this title in Podcast Index using the same matching logic
             try {
                 const episodes = await getEpisodesByItunesId(
                     podcastId,
@@ -125,16 +125,14 @@ export async function prefetchEpisodeInfo(
                 );
                 
                 if (episodes.length > 0) {
-                    // Fuzzy match by title
-                    const normalizedExpected = titleFromRedirect.toLowerCase().trim();
-                    const matched = episodes.find(ep => {
-                        const normalizedTitle = ep.title.toLowerCase().trim();
-                        // Check if titles are similar (one contains the other or high overlap)
-                        return normalizedTitle.includes(normalizedExpected) ||
-                               normalizedExpected.includes(normalizedTitle) ||
-                               // Also try matching start of title (slugs are often truncated)
-                               normalizedTitle.startsWith(normalizedExpected.substring(0, 20));
-                    });
+                    // Use findEpisodeByAppleId with the title from redirect
+                    // This uses the improved normalization (hyphens -> spaces, etc.)
+                    const matched = findEpisodeByAppleId(
+                        episodes,
+                        episodeId,
+                        titleFromRedirect,
+                        undefined // no date available from redirect
+                    );
                     
                     if (matched) {
                         console.log(JSON.stringify({
