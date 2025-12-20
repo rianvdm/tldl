@@ -8,22 +8,39 @@ import api from "./routes/api";
 import authenticated from "./routes/authenticated";
 import queueConsumer from "./queue/consumer";
 
+// ============================================================================
+// MAINTENANCE MODE TOGGLE
+// Set to true to disable all HTTP endpoints (prevents API abuse)
+// Set to false to enable normal operation
+// Queue consumer continues to work regardless
+// ============================================================================
+const MAINTENANCE_MODE = true;
+
 // Create the Hono app
 const app = new Hono<HonoEnv>();
 
-// ============================================================================
-// Public Routes
-// ============================================================================
+if (MAINTENANCE_MODE) {
+    // Return 503 for all requests when in maintenance mode
+    app.all("*", (c) => {
+        return c.json({
+            status: "maintenance",
+            message: "Service temporarily unavailable. Public access has been disabled for security.",
+        }, 503);
+    });
+} else {
+    // ============================================================================
+    // Public Routes
+    // ============================================================================
 
-// Home page - placeholder until UI is implemented
-app.get("/", (c) => {
-    return c.text("TLDL - Coming Soon");
-});
+    // Home page - placeholder until UI is implemented
+    app.get("/", (c) => {
+        return c.text("TLDL - Coming Soon");
+    });
 
-// Health check endpoint
-app.get("/health", (c) => {
-    return c.json({ status: "ok", timestamp: new Date().toISOString() });
-});
+    // Health check endpoint
+    app.get("/health", (c) => {
+        return c.json({ status: "ok", timestamp: new Date().toISOString() });
+    });
 
 // Debug route for URL parsing (will be removed in production)
 app.get("/debug/parse", (c) => {
@@ -148,7 +165,8 @@ app.route("/api", api);
 // These routes will be protected by Cloudflare Access in production
 // ============================================================================
 
-app.route("/", authenticated);
+    app.route("/", authenticated);
+} // End of if (!MAINTENANCE_MODE)
 
 // ============================================================================
 // Export handlers

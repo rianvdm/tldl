@@ -1,5 +1,49 @@
 # TLDL — Project Checklist
 
+---
+
+## 🚨 Maintenance Mode Toggle
+
+**Current Status**: ✅ MAINTENANCE MODE ENABLED (all HTTP endpoints disabled)
+
+The worker is currently deployed in maintenance mode to prevent API abuse until authentication is implemented.
+
+### How to Toggle
+
+Maintenance mode is controlled by a single flag at the top of `src/index.ts`:
+
+```typescript
+const MAINTENANCE_MODE = true;  // Change to false to enable endpoints
+```
+
+### To DISABLE maintenance mode (restore normal operation):
+```bash
+# 1. Edit src/index.ts and change:
+#    const MAINTENANCE_MODE = true;
+#    to
+#    const MAINTENANCE_MODE = false;
+
+# 2. Deploy
+npm run deploy
+```
+
+### To ENABLE maintenance mode (disable all HTTP endpoints):
+```bash
+# 1. Edit src/index.ts and change:
+#    const MAINTENANCE_MODE = false;
+#    to
+#    const MAINTENANCE_MODE = true;
+
+# 2. Deploy
+npm run deploy
+```
+
+**Note**: 
+- Maintenance mode only affects HTTP endpoints. The queue consumer continues processing jobs.
+- All your code changes are preserved - just toggle the flag!
+
+---
+
 ## Infrastructure Setup
 
 - [ ] Create Cloudflare account/project
