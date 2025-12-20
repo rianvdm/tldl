@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.3.3",
     "hono": "^4.6.0"
   },
   "devDependencies": {

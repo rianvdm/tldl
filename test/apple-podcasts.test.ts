@@ -160,6 +160,21 @@ describe("lookupPodcast", () => {
 });
 
 describe("getEpisodeMetadata", () => {
+    // Sample RSS feed for mocking
+    const sampleRssFeed = `<?xml version="1.0"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Test Podcast</title>
+    <item>
+      <guid>episode-67890</guid>
+      <title>Test Episode Title</title>
+      <pubDate>Mon, 15 Dec 2024 10:00:00 GMT</pubDate>
+      <itunes:duration>1:30:00</itunes:duration>
+      <enclosure url="https://example.com/audio.mp3" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>`;
+
     beforeEach(() => {
         vi.restoreAllMocks();
     });
@@ -169,7 +184,7 @@ describe("getEpisodeMetadata", () => {
     });
 
     it("should return metadata for valid parsed URL", async () => {
-        const mockResponse = {
+        const mockItunesResponse = {
             resultCount: 1,
             results: [
                 {
@@ -181,9 +196,14 @@ describe("getEpisodeMetadata", () => {
             ],
         };
 
-        vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            new Response(JSON.stringify(mockResponse), { status: 200 })
-        );
+        // Mock iTunes API call first, then RSS feed call
+        vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(mockItunesResponse), { status: 200 })
+            )
+            .mockResolvedValueOnce(
+                new Response(sampleRssFeed, { status: 200 })
+            );
 
         const parsedUrl: ParsedAppleUrl = {
             podcastId: "12345",
@@ -193,10 +213,11 @@ describe("getEpisodeMetadata", () => {
 
         const result = await getEpisodeMetadata(parsedUrl);
 
-        expect(result).toEqual({
-            feedUrl: "https://feeds.example.com/podcast.rss",
-            podcastName: "Test Podcast",
-        });
+        expect(result.podcastName).toBe("Test Podcast");
+        expect(result.episodeTitle).toBe("Test Episode Title");
+        expect(result.episodeDuration).toBe(5400); // 1:30:00
+        expect(result.audioUrl).toBe("https://example.com/audio.mp3");
+        expect(result.feedUrl).toBe("https://feeds.example.com/podcast.rss");
     });
 
     it("should throw EPISODE_NOT_FOUND when podcast not found", async () => {
@@ -215,9 +236,49 @@ describe("getEpisodeMetadata", () => {
             country: "us",
         };
 
-        await expect(getEpisodeMetadata(parsedUrl)).rejects.toThrow(AppError);
-        await expect(getEpisodeMetadata(parsedUrl)).rejects.toMatchObject({
-            code: ERROR_CODES.EPISODE_NOT_FOUND,
-        });
+        try {
+            await getEpisodeMetadata(parsedUrl);
+            expect.fail("Should have thrown");
+        } catch (error) {
+            expect(error).toBeInstanceOf(AppError);
+            expect((error as AppError).code).toBe(ERROR_CODES.EPISODE_NOT_FOUND);
+        }
+    });
+
+    it("should throw EPISODE_NOT_FOUND when episode not in feed", async () => {
+        const mockItunesResponse = {
+            resultCount: 1,
+            results: [
+                {
+                    wrapperType: "collection",
+                    feedUrl: "https://feeds.example.com/podcast.rss",
+                    collectionName: "Test Podcast",
+                    artistName: "Test Artist",
+                },
+            ],
+        };
+
+        vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(mockItunesResponse), { status: 200 })
+            )
+            .mockResolvedValueOnce(
+                new Response(sampleRssFeed, { status: 200 })
+            );
+
+        const parsedUrl: ParsedAppleUrl = {
+            podcastId: "12345",
+            episodeId: "NONEXISTENT",
+            country: "us",
+        };
+
+        try {
+            await getEpisodeMetadata(parsedUrl);
+            expect.fail("Should have thrown");
+        } catch (error) {
+            expect(error).toBeInstanceOf(AppError);
+            expect((error as AppError).code).toBe(ERROR_CODES.EPISODE_NOT_FOUND);
+        }
     });
 });
+

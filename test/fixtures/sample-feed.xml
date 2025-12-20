@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" 
+     xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+     xmlns:podcast="https://podcastindex.org/namespace/1.0">
+  <channel>
+    <title>Test Podcast</title>
+    <link>https://example.com/podcast</link>
+    <description>A test podcast for unit testing</description>
+    <itunes:author>Test Author</itunes:author>
+    
+    <item>
+      <guid isPermaLink="false">episode-1000680000000</guid>
+      <title>Episode One: The Beginning</title>
+      <description>This is the first episode</description>
+      <pubDate>Mon, 15 Dec 2024 10:00:00 GMT</pubDate>
+      <itunes:duration>1:30:45</itunes:duration>
+      <enclosure url="https://example.com/audio/episode1.mp3" type="audio/mpeg" length="54321000"/>
+      <podcast:transcript url="https://example.com/transcripts/episode1.srt" type="application/srt"/>
+    </item>
+    
+    <item>
+      <guid>https://example.com/episodes/987654321</guid>
+      <title>Episode Two: The Sequel</title>
+      <description>This is the second episode</description>
+      <pubDate>Wed, 18 Dec 2024 10:00:00 GMT</pubDate>
+      <itunes:duration>3600</itunes:duration>
+      <enclosure url="https://example.com/audio/episode2.mp3" type="audio/mpeg" length="72000000"/>
+    </item>
+    
+    <item>
+      <guid>episode-without-duration</guid>
+      <title>Episode Three: No Duration</title>
+      <description>This episode has no duration specified</description>
+      <pubDate>Fri, 20 Dec 2024 10:00:00 GMT</pubDate>
+      <enclosure url="https://example.com/audio/episode3.mp3" type="audio/mpeg" length="36000000"/>
+    </item>
+    
+    <item>
+      <guid>episode-45-30</guid>
+      <title>Episode Four: MM:SS Duration</title>
+      <description>Duration in MM:SS format</description>
+      <pubDate>Sat, 21 Dec 2024 10:00:00 GMT</pubDate>
+      <itunes:duration>45:30</itunes:duration>
+      <enclosure url="https://example.com/audio/episode4.mp3" type="audio/mpeg" length="27000000"/>
+    </item>
+    
+    <item>
+      <guid>episode%3A1000123456789</guid>
+      <title>Episode Five: URL Encoded GUID</title>
+      <description>GUID contains URL encoded characters</description>
+      <pubDate>Sun, 22 Dec 2024 10:00:00 GMT</pubDate>
+      <itunes:duration>2700</itunes:duration>
+      <enclosure url="https://example.com/audio/episode5.mp3" type="audio/mpeg" length="40500000"/>
+      <podcast:transcript url="https://example.com/transcripts/episode5.vtt" type="text/vtt"/>
+    </item>
+  </channel>
+</rss>

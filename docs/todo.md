@@ -21,7 +21,8 @@
 ### External Integrations
 - [x] **Prompt 3**: URL parser + iTunes API
 
-- [ ] **Prompt 4**: RSS feed parser
+- [x] **Prompt 4**: RSS feed parser
+
 
 ### Core Services
 - [ ] **Prompt 5**: OpenAI Whisper transcription

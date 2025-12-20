@@ -6,6 +6,7 @@
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
 import type { ParsedAppleUrl } from "../lib/url-parser";
+import { fetchAndParseFeed, findEpisodeInFeed } from "./rss";
 
 /**
  * Result from iTunes Lookup API for a podcast
@@ -18,7 +19,6 @@ export interface ItunesLookupResult {
 
 /**
  * Episode metadata extracted from RSS feed
- * (RSS parsing will be implemented in Prompt 4)
  */
 export interface EpisodeMetadata {
     podcastName: string;
@@ -27,6 +27,8 @@ export interface EpisodeMetadata {
     episodeDate: string; // ISO date
     audioUrl: string;
     feedUrl: string;
+    transcriptUrl?: string;
+    transcriptType?: string;
 }
 
 /**
@@ -41,6 +43,27 @@ interface ItunesApiResponse {
         collectionName?: string;
         artistName?: string;
     }>;
+}
+
+/**
+ * Validate episode duration is within limits
+ *
+ * @param durationSeconds - Duration in seconds
+ * @param maxMinutes - Maximum allowed duration in minutes
+ * @throws AppError with EPISODE_TOO_LONG if exceeded
+ */
+export function validateDuration(
+    durationSeconds: number,
+    maxMinutes: number
+): void {
+    const maxSeconds = maxMinutes * 60;
+    if (durationSeconds > maxSeconds) {
+        const durationMinutes = Math.round(durationSeconds / 60);
+        throw new AppError(
+            ERROR_CODES.EPISODE_TOO_LONG,
+            `Episode is ${durationMinutes} minutes long, which exceeds the ${maxMinutes} minute limit.`
+        );
+    }
 }
 
 /**
@@ -115,16 +138,17 @@ export async function lookupPodcast(
 /**
  * Get episode metadata for a parsed Apple Podcasts URL
  *
- * Note: This is a skeleton implementation. Full RSS parsing
- * will be added in Prompt 4. Currently returns feedUrl only.
- *
  * @param parsedUrl - The parsed Apple Podcasts URL
- * @returns Partial episode metadata with feedUrl
- * @throws AppError with EPISODE_NOT_FOUND if podcast doesn't exist
+ * @param maxMinutes - Optional max episode duration (for validation)
+ * @returns Full episode metadata
+ * @throws AppError with EPISODE_NOT_FOUND if podcast or episode doesn't exist
+ * @throws AppError with EPISODE_TOO_LONG if duration exceeds limit
  */
 export async function getEpisodeMetadata(
-    parsedUrl: ParsedAppleUrl
-): Promise<{ feedUrl: string; podcastName: string }> {
+    parsedUrl: ParsedAppleUrl,
+    maxMinutes?: number
+): Promise<EpisodeMetadata> {
+    // Step 1: Look up podcast via iTunes API
     const podcast = await lookupPodcast(parsedUrl.podcastId);
 
     if (!podcast) {
@@ -134,10 +158,34 @@ export async function getEpisodeMetadata(
         );
     }
 
-    // RSS parsing will be added in Prompt 4
-    // For now, return the basic info we have from iTunes
+    // Step 2: Fetch and parse RSS feed
+    const feed = await fetchAndParseFeed(podcast.feedUrl);
+
+    // Step 3: Find episode in feed
+    const episode = findEpisodeInFeed(feed, parsedUrl.episodeId);
+
+    if (!episode) {
+        throw new AppError(
+            ERROR_CODES.EPISODE_NOT_FOUND,
+            "Episode not found in podcast feed. It may have been removed or the URL is incorrect."
+        );
+    }
+
+    // Step 4: Validate duration if limit specified
+    if (maxMinutes !== undefined && episode.duration > 0) {
+        validateDuration(episode.duration, maxMinutes);
+    }
+
+    // Return full metadata
     return {
+        podcastName: feed.title,
+        episodeTitle: episode.title,
+        episodeDuration: episode.duration,
+        episodeDate: episode.pubDate,
+        audioUrl: episode.audioUrl,
         feedUrl: podcast.feedUrl,
-        podcastName: podcast.collectionName,
+        ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
+        ...(episode.transcriptType && { transcriptType: episode.transcriptType }),
     };
 }
+
