@@ -8,12 +8,12 @@ MAX_EPISODE_MINUTES = "80"
 CACHE_TTL_DAYS = "365"
 DEFAULT_TEMPLATE = "key-takeaways"
 
-# KV Namespace - create with: wrangler kv:namespace create TLDL_DATA
+# KV Namespace
 [[kv_namespaces]]
 binding = "TLDL_DATA"
-id = "<placeholder>"
+id = "ee123158d5d54359b4257f8a1b678adf"
 
-# Queue - create with: wrangler queues create tldl-jobs
+# Queue
 [[queues.producers]]
 binding = "TLDL_QUEUE"
 queue = "tldl-jobs"

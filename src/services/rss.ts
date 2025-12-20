@@ -242,6 +242,8 @@ export interface FindEpisodeOptions {
     expectedDate?: string;
     /** Episode index from Apple URL (some feeds use sequential ordering) */
     episodeIndex?: number;
+    /** Episode GUID from iTunes API for direct matching */
+    episodeGuid?: string;
 }
 
 /**
@@ -316,7 +318,25 @@ export function findEpisodeInFeed(
     appleEpisodeId: string,
     options: FindEpisodeOptions = {}
 ): RssEpisode | null {
-    // Strategy 1 & 2: GUID matching (most reliable)
+    // Strategy 0: Match by iTunes episodeGuid (most reliable when available)
+    if (options.episodeGuid) {
+        for (const episode of feed.episodes) {
+            if (episode.guid === options.episodeGuid) {
+                return episode;
+            }
+            // Also try URL-decoded match
+            try {
+                const decoded = decodeURIComponent(episode.guid);
+                if (decoded === options.episodeGuid) {
+                    return episode;
+                }
+            } catch {
+                // Ignore decode errors
+            }
+        }
+    }
+
+    // Strategy 1 & 2: GUID matching by Apple episode ID (numeric)
     for (const episode of feed.episodes) {
         // Direct match
         if (episode.guid.includes(appleEpisodeId)) {

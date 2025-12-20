@@ -46,7 +46,10 @@ describe("lookupPodcast", () => {
         expect(fetch).toHaveBeenCalledWith(
             "https://itunes.apple.com/lookup?id=12345&entity=podcast",
             expect.objectContaining({
-                headers: { Accept: "application/json" },
+                headers: {
+                    Accept: "application/json",
+                    "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+                },
             })
         );
     });

@@ -24,6 +24,7 @@ export interface ItunesEpisodeInfo {
     trackId: number;
     trackName: string;
     releaseDate: string;
+    episodeGuid?: string; // The podcast's internal GUID for this episode
 }
 
 /**
@@ -54,6 +55,7 @@ interface ItunesApiResponse {
         trackId?: number;
         trackName?: string;
         releaseDate?: string;
+        episodeGuid?: string; // The podcast's internal GUID
     }>;
 }
 
@@ -94,6 +96,7 @@ export async function lookupPodcast(
         const response = await fetch(url, {
             headers: {
                 Accept: "application/json",
+                "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
             },
         });
 
@@ -165,10 +168,12 @@ export async function lookupEpisodeInfo(
         const response = await fetch(url, {
             headers: {
                 Accept: "application/json",
+                "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
             },
         });
 
         if (!response.ok) {
+            console.log(JSON.stringify({ event: "itunes_lookup_failed", status: response.status }));
             return null; // Non-critical - we'll fall back to other matching
         }
 
@@ -176,11 +181,21 @@ export async function lookupEpisodeInfo(
 
         // Find the episode by trackId (the episode ID from the URL)
         const episodeIdNum = parseInt(episodeId, 10);
+        
+        console.log(JSON.stringify({
+            event: "itunes_episode_search",
+            episodeId,
+            episodeIdNum,
+            resultCount: data.resultCount,
+            sampleTrackIds: data.results.slice(0, 5).map(r => ({ trackId: r.trackId, wrapperType: r.wrapperType })),
+        }));
+        
         const episode = data.results.find(
             (r) => r.trackId === episodeIdNum && r.wrapperType !== "collection"
         );
 
         if (!episode || !episode.trackName) {
+            console.log(JSON.stringify({ event: "itunes_episode_not_found", episodeFound: !!episode, hasTrackName: !!episode?.trackName }));
             return null;
         }
 
@@ -188,8 +203,10 @@ export async function lookupEpisodeInfo(
             trackId: episode.trackId!,
             trackName: episode.trackName,
             releaseDate: episode.releaseDate || "",
+            episodeGuid: episode.episodeGuid,
         };
-    } catch {
+    } catch (err) {
+        console.log(JSON.stringify({ event: "itunes_lookup_error", error: err instanceof Error ? err.message : String(err) }));
         return null; // Non-critical fallback
     }
 }
@@ -223,10 +240,24 @@ export async function getEpisodeMetadata(
         lookupEpisodeInfo(parsedUrl.podcastId, parsedUrl.episodeId),
     ]);
 
+    // Debug logging
+    console.log(JSON.stringify({
+        event: "episode_lookup_debug",
+        podcastId: parsedUrl.podcastId,
+        episodeId: parsedUrl.episodeId,
+        feedUrl: podcast.feedUrl,
+        feedEpisodeCount: feed.episodes.length,
+        firstFiveGuids: feed.episodes.slice(0, 5).map(e => e.guid),
+        episodeInfoFound: !!episodeInfo,
+        episodeGuid: episodeInfo?.episodeGuid,
+        expectedTitle: episodeInfo?.trackName,
+    }));
+
     // Step 3: Find episode in feed with fallback options
     const episode = findEpisodeInFeed(feed, parsedUrl.episodeId, {
         expectedTitle: episodeInfo?.trackName,
         expectedDate: episodeInfo?.releaseDate,
+        episodeGuid: episodeInfo?.episodeGuid,
     });
 
     if (!episode) {
