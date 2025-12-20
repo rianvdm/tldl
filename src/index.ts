@@ -4,6 +4,7 @@ import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
+import api from "./routes/api";
 
 // Create the Hono app
 const app = new Hono<HonoEnv>();
@@ -133,6 +134,12 @@ app.get("/debug/summarize", async (c) => {
         }, 500);
     }
 });
+
+// ============================================================================
+// API Routes
+// ============================================================================
+
+app.route("/api", api);
 
 // ============================================================================
 // Queue Consumer (placeholder)

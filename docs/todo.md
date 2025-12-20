@@ -28,7 +28,7 @@
 - [x] **Prompt 6**: GPT-5.2 summarization
 
 ### API Routes
-- [ ] **Prompt 7**: Public API (read-only)
+- [x] **Prompt 7**: Public API (read-only)
 - [ ] **Prompt 8**: Authenticated API (mutations)
 
 ### Processing
