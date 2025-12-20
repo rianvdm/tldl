@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env, HonoEnv, QueueMessage } from "./types";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
+import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 
 // Create the Hono app
 const app = new Hono<HonoEnv>();
@@ -32,6 +33,49 @@ app.get("/debug/parse", (c) => {
     return c.json({ parsed, storageId });
 });
 
+// Debug route for audio validation (will be removed in production)
+app.get("/debug/validate-audio", async (c) => {
+    const audioUrl = c.req.query("url");
+    if (!audioUrl) {
+        return c.json({ error: "Missing url query parameter" }, 400);
+    }
+    try {
+        const validation = await validateAudioUrl(audioUrl);
+        return c.json({
+            valid: true,
+            ...validation,
+            sizeMB: (validation.contentLength / 1024 / 1024).toFixed(2),
+        });
+    } catch (error) {
+        return c.json({
+            valid: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 400);
+    }
+});
+
+// Debug route for transcription (will be removed in production)
+app.get("/debug/transcribe", async (c) => {
+    const audioUrl = c.req.query("url");
+    if (!audioUrl) {
+        return c.json({ error: "Missing url query parameter" }, 400);
+    }
+
+    try {
+        const result = await transcribeAudio(audioUrl, c.env.OPENAI_API_KEY);
+        return c.json({
+            success: true,
+            source: result.source,
+            textLength: result.text.length,
+            textPreview: result.text.substring(0, 500) + (result.text.length > 500 ? "..." : ""),
+        });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
+});
 
 // ============================================================================
 // Queue Consumer (placeholder)
