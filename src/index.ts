@@ -5,6 +5,7 @@ import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
 import api from "./routes/api";
+import authenticated from "./routes/authenticated";
 
 // Create the Hono app
 const app = new Hono<HonoEnv>();
@@ -140,6 +141,13 @@ app.get("/debug/summarize", async (c) => {
 // ============================================================================
 
 app.route("/api", api);
+
+// ============================================================================
+// Authenticated Routes
+// These routes will be protected by Cloudflare Access in production
+// ============================================================================
+
+app.route("/", authenticated);
 
 // ============================================================================
 // Queue Consumer (placeholder)

@@ -29,7 +29,7 @@
 
 ### API Routes
 - [x] **Prompt 7**: Public API (read-only)
-- [ ] **Prompt 8**: Authenticated API (mutations)
+- [x] **Prompt 8**: Authenticated API (mutations)
 
 ### Processing
 - [ ] **Prompt 9**: Queue consumer pipeline
