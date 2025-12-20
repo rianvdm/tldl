@@ -342,7 +342,8 @@ h4 {
 }
 
 .button-primary:hover {
-    opacity: 0.9;
+    background-color: #e5e5e5;
+    border-color: #e5e5e5;
 }
 
 /* ============================================================================
@@ -708,14 +709,19 @@ h4 {
 }
 
 .form-fieldset {
+    border: 0;
     border: none;
     padding: 0;
     margin: 0;
+    min-width: 0;
 }
 
 .form-fieldset legend {
     padding: 0;
     margin-bottom: 0.75rem;
+    border: 0;
+    float: none;
+    width: 100%;
 }
 
 .form-actions {
