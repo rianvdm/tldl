@@ -1,7 +1,7 @@
 # Debugging Episode Matching Issue
 
 **Date**: December 20, 2025  
-**Status**: In Progress
+**Status**: ✅ **RESOLVED**
 
 ## Problem Summary
 
@@ -67,13 +67,21 @@ Without `episodeGuid`, the matching falls back to:
 2. Title similarity match - **should work** but apparently not triggering
 3. Date match - **should work** but apparently not triggering
 
-## Root Cause Hypothesis
+## Root Cause - CONFIRMED ✅
 
-The `lookupEpisodeInfo()` function is returning `null` in the queue consumer context, but the same function works in the HTTP handler context. Possible causes:
+**Apple iTunes API returns 403 Forbidden when called from queue consumer context**, but works fine from HTTP handler context.
 
-1. **iTunes API rate limiting** in queue context (different IP/region?)
-2. **Fetch behavior difference** between HTTP handler and queue handler
-3. **Silent error** being caught and returning null
+Evidence from logs:
+- HTTP handler: iTunes API returns 200 OK with episode data including `episodeGuid`
+- Queue consumer: iTunes API returns 403 Forbidden, so `lookupEpisodeInfo()` returns `null`
+
+This means:
+1. iTunes API is likely blocking/rate-limiting based on IP address or request pattern
+2. Queue consumers run on different Cloudflare infrastructure than HTTP handlers  
+3. Without `episodeGuid`, the fallback matching strategies (1-5) fail because:
+   - Strategy 1-2: GUID matching by numeric Apple episode ID fails (RSS uses UUID GUIDs)
+   - Strategy 3-4: Title/date matching should work but isn't being reached or matching
+   - Strategy 5: Index matching not applicable
 
 ## Code Location
 
@@ -152,13 +160,45 @@ cd /Users/rian/Documents/GitHub/tldl && npx wrangler tail --format=json
 curl -s "https://itunes.apple.com/lookup?id=1438054347&entity=podcastEpisode&limit=200" | jq '.results[] | select(.trackId == 1000739383619)'
 ```
 
-## Proposed Fix (After Root Cause Confirmed)
+## Solution Implemented ✅
 
-If the issue is that `lookupEpisodeInfo` fails silently, we should:
+**Root cause**: Apple iTunes API returns 403 Forbidden when called from queue consumer context, but works from HTTP handler context.
 
-1. Make the title/date fallback matching more robust (it should work even without `episodeGuid`)
-2. Add better error logging to understand why iTunes lookup fails in queue context
-3. Consider caching iTunes lookup results to avoid repeated API calls
+**Solution**: Pre-fetch iTunes episode metadata during the `/submit` request (HTTP context where it works), then pass it through the queue message to the consumer.
+
+### Changes Made:
+
+1. **Extended `QueueMessage` type** to include pre-fetched metadata:
+   ```typescript
+   episodeGuid?: string;
+   expectedTitle?: string;
+   expectedDate?: string;
+   ```
+
+2. **Modified `/submit` endpoint** to call `lookupEpisodeInfo()` before queuing:
+   - Fetches episode GUID, title, and date from iTunes API
+   - Passes this data in the queue message
+
+3. **Updated `getEpisodeMetadata()`** to accept pre-fetched metadata:
+   - New `GetEpisodeMetadataOptions` parameter
+   - Uses pre-fetched data instead of calling iTunes in queue context
+   - Maintains backward compatibility with numeric `maxMinutes` parameter
+
+4. **Modified queue consumer** to pass pre-fetched metadata to `getEpisodeMetadata()`
+
+### Results:
+
+✅ Episode matching now works reliably in queue consumer
+✅ Job completed successfully: `1438054347_1000739383619`
+✅ Episode found using pre-fetched GUID: `c5e22f17-3bc0-4d4b-a58f-9e00f163e932`
+✅ Transcribed and summarized correctly
+
+### Why This Works:
+
+- iTunes API calls work fine in HTTP handler context
+- By pre-fetching during submit, we avoid the 403 error in queue context
+- The episode GUID is the most reliable matching strategy (Strategy 0)
+- Fallback strategies (title/date matching) are still available if pre-fetch fails
 
 ## Environment
 

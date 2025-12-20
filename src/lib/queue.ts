@@ -23,6 +23,9 @@ export function createProcessEpisodeMessage(params: {
     episodeId: string;
     appleUrl: string;
     templateId: string;
+    episodeGuid?: string;
+    expectedTitle?: string;
+    expectedDate?: string;
 }): QueueMessage {
     return {
         type: "process_episode",
@@ -30,6 +33,9 @@ export function createProcessEpisodeMessage(params: {
         episodeId: params.episodeId,
         appleUrl: params.appleUrl,
         templateId: params.templateId,
+        ...(params.episodeGuid && { episodeGuid: params.episodeGuid }),
+        ...(params.expectedTitle && { expectedTitle: params.expectedTitle }),
+        ...(params.expectedDate && { expectedDate: params.expectedDate }),
     };
 }
 

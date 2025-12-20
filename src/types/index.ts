@@ -100,6 +100,10 @@ export interface QueueMessage {
     episodeId: string;
     appleUrl: string;
     templateId: string;
+    // Pre-fetched iTunes metadata (to avoid 403 errors in queue consumer)
+    episodeGuid?: string;
+    expectedTitle?: string;
+    expectedDate?: string;
 }
 
 /**

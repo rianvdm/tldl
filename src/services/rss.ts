@@ -318,22 +318,47 @@ export function findEpisodeInFeed(
     appleEpisodeId: string,
     options: FindEpisodeOptions = {}
 ): RssEpisode | null {
+    console.log(JSON.stringify({
+        event: "episode_matching_start",
+        appleEpisodeId,
+        hasEpisodeGuid: !!options.episodeGuid,
+        hasExpectedTitle: !!options.expectedTitle,
+        hasExpectedDate: !!options.expectedDate,
+        episodeGuid: options.episodeGuid,
+        expectedTitle: options.expectedTitle,
+        expectedDate: options.expectedDate
+    }));
+
     // Strategy 0: Match by iTunes episodeGuid (most reliable when available)
     if (options.episodeGuid) {
         for (const episode of feed.episodes) {
             if (episode.guid === options.episodeGuid) {
+                console.log(JSON.stringify({
+                    event: "episode_matched_guid_exact",
+                    guid: episode.guid,
+                    title: episode.title
+                }));
                 return episode;
             }
             // Also try URL-decoded match
             try {
                 const decoded = decodeURIComponent(episode.guid);
                 if (decoded === options.episodeGuid) {
+                    console.log(JSON.stringify({
+                        event: "episode_matched_guid_decoded",
+                        guid: episode.guid,
+                        title: episode.title
+                    }));
                     return episode;
                 }
             } catch {
                 // Ignore decode errors
             }
         }
+        console.log(JSON.stringify({
+            event: "episode_guid_not_matched",
+            episodeGuid: options.episodeGuid
+        }));
     }
 
     // Strategy 1 & 2: GUID matching by Apple episode ID (numeric)
@@ -358,16 +383,32 @@ export function findEpisodeInFeed(
     if (options.expectedTitle) {
         let bestMatch: RssEpisode | null = null;
         let bestScore = 0;
+        const scores: Array<{ title: string; score: number }> = [];
 
         for (const episode of feed.episodes) {
             const score = calculateSimilarity(episode.title, options.expectedTitle);
+            scores.push({ title: episode.title, score });
             if (score > bestScore && score >= 0.8) {
                 bestScore = score;
                 bestMatch = episode;
             }
         }
 
+        console.log(JSON.stringify({
+            event: "episode_title_matching",
+            expectedTitle: options.expectedTitle,
+            bestScore,
+            threshold: 0.8,
+            matched: !!bestMatch,
+            topScores: scores.sort((a, b) => b.score - a.score).slice(0, 5)
+        }));
+
         if (bestMatch) {
+            console.log(JSON.stringify({
+                event: "episode_matched_title",
+                title: bestMatch.title,
+                score: bestScore
+            }));
             return bestMatch;
         }
     }
@@ -378,8 +419,19 @@ export function findEpisodeInFeed(
             datesAreClose(ep.pubDate, options.expectedDate!, 2)
         );
 
+        console.log(JSON.stringify({
+            event: "episode_date_matching",
+            expectedDate: options.expectedDate,
+            dateMatchCount: dateMatches.length,
+            dateMatches: dateMatches.map(e => ({ title: e.title, pubDate: e.pubDate }))
+        }));
+
         // If only one episode on that date, return it
         if (dateMatches.length === 1) {
+            console.log(JSON.stringify({
+                event: "episode_matched_date_single",
+                title: dateMatches[0].title
+            }));
             return dateMatches[0];
         }
 
@@ -398,6 +450,11 @@ export function findEpisodeInFeed(
 
             // Accept lower threshold since we already matched on date
             if (bestMatch && bestScore >= 0.3) {
+                console.log(JSON.stringify({
+                    event: "episode_matched_date_title",
+                    title: bestMatch.title,
+                    score: bestScore
+                }));
                 return bestMatch;
             }
         }
@@ -407,9 +464,25 @@ export function findEpisodeInFeed(
     // Apple episode IDs often correlate with recency - try matching by position
     if (options.episodeIndex !== undefined && options.episodeIndex >= 0) {
         if (options.episodeIndex < feed.episodes.length) {
+            console.log(JSON.stringify({
+                event: "episode_matched_index",
+                index: options.episodeIndex,
+                title: feed.episodes[options.episodeIndex].title
+            }));
             return feed.episodes[options.episodeIndex];
         }
     }
+
+    console.log(JSON.stringify({
+        event: "episode_not_matched",
+        strategies_tried: {
+            guid: !!options.episodeGuid,
+            numericGuid: true,
+            title: !!options.expectedTitle,
+            date: !!options.expectedDate,
+            index: options.episodeIndex !== undefined
+        }
+    }));
 
     return null;
 }

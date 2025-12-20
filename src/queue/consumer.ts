@@ -37,6 +37,10 @@ interface ProcessingContext {
     episodeId: string;
     appleUrl: string;
     templateId: string;
+    // Pre-fetched iTunes metadata (avoids 403 errors from iTunes API)
+    episodeGuid?: string;
+    expectedTitle?: string;
+    expectedDate?: string;
 }
 
 // ============================================================================
@@ -100,6 +104,9 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         episodeId: msg.episodeId,
         appleUrl: msg.appleUrl,
         templateId: msg.templateId,
+        episodeGuid: msg.episodeGuid,
+        expectedTitle: msg.expectedTitle,
+        expectedDate: msg.expectedDate,
     };
 
     console.log(
@@ -108,6 +115,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
             jobId: msg.jobId,
             type: msg.type,
             episodeId: msg.episodeId,
+            hasPreFetchedMetadata: !!(msg.episodeGuid || msg.expectedTitle),
         })
     );
 
@@ -141,7 +149,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
  * 4. Store all data
  */
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
-    const { env, jobId, episodeId, appleUrl, templateId } = ctx;
+    const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate } = ctx;
     const kv = env.TLDL_DATA;
     const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 80;
 
@@ -154,7 +162,13 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         throw new AppError(ERROR_CODES.INVALID_URL, "Invalid Apple Podcasts URL");
     }
 
-    const metadata = await getEpisodeMetadata(parsedUrl, maxMinutes);
+    // Use pre-fetched iTunes metadata from queue message (avoids 403 errors)
+    const metadata = await getEpisodeMetadata(parsedUrl, {
+        maxMinutes,
+        episodeGuid,
+        expectedTitle,
+        expectedDate,
+    });
 
     // Step 2: Check for existing transcript
     await updateJobStatus(kv, jobId, "checking_transcript");

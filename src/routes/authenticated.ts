@@ -22,6 +22,7 @@ import {
 } from "../lib/queue";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId } from "../lib/constants";
+import { lookupEpisodeInfo } from "../services/apple-podcasts";
 
 const authenticated = new Hono<HonoEnv>();
 
@@ -165,6 +166,18 @@ authenticated.post("/submit", async (c) => {
         }
     }
 
+    // Pre-fetch iTunes episode info (works in HTTP context, fails in queue context)
+    // This provides episodeGuid for reliable RSS matching
+    const episodeInfo = await lookupEpisodeInfo(parsed.podcastId, parsed.episodeId);
+    
+    console.log(JSON.stringify({
+        event: "submit_prefetch_itunes",
+        podcastId: parsed.podcastId,
+        episodeId: parsed.episodeId,
+        episodeInfoFound: !!episodeInfo,
+        episodeGuid: episodeInfo?.episodeGuid
+    }));
+
     // Create new job
     const jobId = generateUUID();
     const now = new Date().toISOString();
@@ -181,12 +194,15 @@ authenticated.post("/submit", async (c) => {
 
     await createJob(c.env.TLDL_DATA, job);
 
-    // Queue the job for processing
+    // Queue the job for processing with pre-fetched iTunes metadata
     const message = createProcessEpisodeMessage({
         jobId,
         episodeId,
         appleUrl,
         templateId: effectiveTemplateId,
+        episodeGuid: episodeInfo?.episodeGuid,
+        expectedTitle: episodeInfo?.trackName,
+        expectedDate: episodeInfo?.releaseDate,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 

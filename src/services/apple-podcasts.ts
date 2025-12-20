@@ -165,6 +165,13 @@ export async function lookupEpisodeInfo(
     const url = `https://itunes.apple.com/lookup?id=${encodeURIComponent(podcastId)}&entity=podcastEpisode&limit=200`;
 
     try {
+        console.log(JSON.stringify({ 
+            event: "itunes_lookup_start", 
+            podcastId, 
+            episodeId,
+            url 
+        }));
+
         const response = await fetch(url, {
             headers: {
                 Accept: "application/json",
@@ -173,7 +180,12 @@ export async function lookupEpisodeInfo(
         });
 
         if (!response.ok) {
-            console.log(JSON.stringify({ event: "itunes_lookup_failed", status: response.status }));
+            console.log(JSON.stringify({ 
+                event: "itunes_lookup_failed", 
+                status: response.status,
+                statusText: response.statusText,
+                headers: Object.fromEntries(response.headers.entries())
+            }));
             return null; // Non-critical - we'll fall back to other matching
         }
 
@@ -187,7 +199,14 @@ export async function lookupEpisodeInfo(
             episodeId,
             episodeIdNum,
             resultCount: data.resultCount,
-            sampleTrackIds: data.results.slice(0, 5).map(r => ({ trackId: r.trackId, wrapperType: r.wrapperType })),
+            totalResults: data.results.length,
+            allTrackIds: data.results.map(r => r.trackId),
+            sampleResults: data.results.slice(0, 5).map(r => ({ 
+                trackId: r.trackId, 
+                wrapperType: r.wrapperType,
+                trackName: r.trackName,
+                episodeGuid: r.episodeGuid 
+            })),
         }));
         
         const episode = data.results.find(
@@ -195,9 +214,26 @@ export async function lookupEpisodeInfo(
         );
 
         if (!episode || !episode.trackName) {
-            console.log(JSON.stringify({ event: "itunes_episode_not_found", episodeFound: !!episode, hasTrackName: !!episode?.trackName }));
+            console.log(JSON.stringify({ 
+                event: "itunes_episode_not_found", 
+                episodeFound: !!episode, 
+                hasTrackName: !!episode?.trackName,
+                episodeDetails: episode ? {
+                    trackId: episode.trackId,
+                    wrapperType: episode.wrapperType,
+                    trackName: episode.trackName
+                } : null
+            }));
             return null;
         }
+
+        console.log(JSON.stringify({
+            event: "itunes_episode_found",
+            trackId: episode.trackId,
+            trackName: episode.trackName,
+            episodeGuid: episode.episodeGuid,
+            releaseDate: episode.releaseDate
+        }));
 
         return {
             trackId: episode.trackId!,
@@ -206,24 +242,44 @@ export async function lookupEpisodeInfo(
             episodeGuid: episode.episodeGuid,
         };
     } catch (err) {
-        console.log(JSON.stringify({ event: "itunes_lookup_error", error: err instanceof Error ? err.message : String(err) }));
+        console.log(JSON.stringify({ 
+            event: "itunes_lookup_error", 
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined
+        }));
         return null; // Non-critical fallback
     }
+}
+
+/**
+ * Options for episode metadata fetching
+ */
+export interface GetEpisodeMetadataOptions {
+    maxMinutes?: number;
+    // Pre-fetched iTunes metadata (to avoid API calls that might fail)
+    episodeGuid?: string;
+    expectedTitle?: string;
+    expectedDate?: string;
 }
 
 /**
  * Get episode metadata for a parsed Apple Podcasts URL
  *
  * @param parsedUrl - The parsed Apple Podcasts URL
- * @param maxMinutes - Optional max episode duration (for validation)
+ * @param options - Optional max duration and pre-fetched metadata
  * @returns Full episode metadata
  * @throws AppError with EPISODE_NOT_FOUND if podcast or episode doesn't exist
  * @throws AppError with EPISODE_TOO_LONG if duration exceeds limit
  */
 export async function getEpisodeMetadata(
     parsedUrl: ParsedAppleUrl,
-    maxMinutes?: number
+    optionsOrMaxMinutes?: GetEpisodeMetadataOptions | number
 ): Promise<EpisodeMetadata> {
+    // Handle backwards compatibility: support both number and options object
+    const options: GetEpisodeMetadataOptions = typeof optionsOrMaxMinutes === 'number' 
+        ? { maxMinutes: optionsOrMaxMinutes }
+        : (optionsOrMaxMinutes || {});
+    
     // Step 1: Look up podcast via iTunes API
     const podcast = await lookupPodcast(parsedUrl.podcastId);
 
@@ -234,11 +290,33 @@ export async function getEpisodeMetadata(
         );
     }
 
-    // Step 2: Look up episode info for fallback matching (parallel with RSS fetch)
-    const [feed, episodeInfo] = await Promise.all([
-        fetchAndParseFeed(podcast.feedUrl),
-        lookupEpisodeInfo(parsedUrl.podcastId, parsedUrl.episodeId),
-    ]);
+    // Step 2: Get episode info - use pre-fetched if available, otherwise lookup
+    let episodeInfo: ItunesEpisodeInfo | null = null;
+    
+    if (options.episodeGuid || options.expectedTitle || options.expectedDate) {
+        // Use pre-fetched metadata (avoids iTunes API 403 errors in queue context)
+        console.log(JSON.stringify({
+            event: "using_prefetched_metadata",
+            hasEpisodeGuid: !!options.episodeGuid,
+            hasExpectedTitle: !!options.expectedTitle,
+            hasExpectedDate: !!options.expectedDate
+        }));
+        
+        if (options.expectedTitle) {
+            episodeInfo = {
+                trackId: parseInt(parsedUrl.episodeId, 10),
+                trackName: options.expectedTitle,
+                releaseDate: options.expectedDate || "",
+                episodeGuid: options.episodeGuid,
+            };
+        }
+    } else {
+        // Fetch fresh from iTunes (HTTP context only)
+        episodeInfo = await lookupEpisodeInfo(parsedUrl.podcastId, parsedUrl.episodeId);
+    }
+
+    // Fetch RSS feed
+    const feed = await fetchAndParseFeed(podcast.feedUrl);
 
     // Debug logging
     console.log(JSON.stringify({
@@ -251,6 +329,7 @@ export async function getEpisodeMetadata(
         episodeInfoFound: !!episodeInfo,
         episodeGuid: episodeInfo?.episodeGuid,
         expectedTitle: episodeInfo?.trackName,
+        usedPrefetchedMetadata: !!(options.episodeGuid || options.expectedTitle)
     }));
 
     // Step 3: Find episode in feed with fallback options
@@ -268,8 +347,8 @@ export async function getEpisodeMetadata(
     }
 
     // Step 4: Validate duration if limit specified
-    if (maxMinutes !== undefined && episode.duration > 0) {
-        validateDuration(episode.duration, maxMinutes);
+    if (options.maxMinutes !== undefined && episode.duration > 0) {
+        validateDuration(episode.duration, options.maxMinutes);
     }
 
     // Return full metadata
