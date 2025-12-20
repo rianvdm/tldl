@@ -20,7 +20,6 @@
 
 ### External Integrations
 - [x] **Prompt 3**: URL parser + iTunes API
-
 - [x] **Prompt 4**: RSS feed parser
 
 
