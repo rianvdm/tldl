@@ -22,10 +22,43 @@ import {
     saveTranscript,
     saveSummary,
 } from "../lib/kv";
+import {
+    updateJobStatusDO,
+    updateJobEstimateDO,
+} from "../lib/job-status-do";
 import { getEpisodeMetadata } from "../services/apple-podcasts";
 import { fetchTranscript as fetchRssTranscript } from "../services/rss";
 import { transcribeAudio } from "../services/transcription";
 import { generateSummary } from "../services/summarization";
+
+// ============================================================================
+// Helper: Update status in both DO (immediate) and KV (backup)
+// ============================================================================
+
+async function updateJobStatusBoth(
+    env: Env,
+    kv: KVNamespace,
+    jobId: string,
+    status: import("../types").JobStatus,
+    error?: string
+): Promise<void> {
+    // Write to DO first for immediate visibility
+    await updateJobStatusDO(env, jobId, status, error);
+    // Also write to KV as backup
+    await updateJobStatus(kv, jobId, status, error);
+}
+
+async function updateJobEstimateBoth(
+    env: Env,
+    kv: KVNamespace,
+    jobId: string,
+    estimatedSeconds: number
+): Promise<void> {
+    // Update DO (non-critical, logs errors internally)
+    await updateJobEstimateDO(env, jobId, estimatedSeconds);
+    // Update KV as backup
+    await updateJobEstimate(kv, jobId, estimatedSeconds);
+}
 
 // ============================================================================
 // Types
@@ -80,6 +113,8 @@ const queueHandler = {
                     // Final attempt failed - mark job as failed and acknowledge
                     try {
                         const errorMessage = mapErrorToUserMessage(error);
+                        // Write to both DO (immediate) and KV (backup)
+                        await updateJobStatusDO(env, message.body.jobId, "failed", errorMessage);
                         await updateJobStatus(env.TLDL_DATA, message.body.jobId, "failed", errorMessage);
                         console.log(
                             JSON.stringify({
@@ -185,7 +220,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     // Fast path: If we have both episode and transcript, skip to summarization
     if (existingEpisode && transcript) {
         // Show "checking transcript" briefly since we found cached data
-        await updateJobStatus(kv, jobId, "checking_transcript");
+        await updateJobStatusBoth(env, kv, jobId, "checking_transcript");
 
         console.log(
             JSON.stringify({
@@ -198,8 +233,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         transcriptSource = transcript.source;
 
         // Jump straight to summary generation
-        await updateJobStatus(kv, jobId, "summarizing");
-        await updateJobEstimate(kv, jobId, 30); // ~30 seconds for summary
+        await updateJobStatusBoth(env, kv, jobId, "summarizing");
+        await updateJobEstimateBoth(env, kv, jobId, 30); // ~30 seconds for summary
 
         const summaryResult = await generateSummary(
             transcript.text,
@@ -217,13 +252,13 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         await saveSummary(kv, summary);
 
         // Mark job as completed
-        await updateJobStatus(kv, jobId, "completed");
+        await updateJobStatusBoth(env, kv, jobId, "completed");
         return;
     }
 
     // Standard path: Need to fetch metadata first
-    await updateJobStatus(kv, jobId, "fetching_metadata");
-    await updateJobEstimate(kv, jobId, 180); // ~3 minutes initial estimate
+    await updateJobStatusBoth(env, kv, jobId, "fetching_metadata");
+    await updateJobEstimateBoth(env, kv, jobId, 180); // ~3 minutes initial estimate
 
     const parsedUrl = parseApplePodcastsUrl(appleUrl);
     if (!parsedUrl) {
@@ -240,7 +275,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
 
     // Step 2: Check RSS for transcript if we don't have one
     if (!transcript) {
-        await updateJobStatus(kv, jobId, "checking_transcript");
+        await updateJobStatusBoth(env, kv, jobId, "checking_transcript");
 
         if (metadata.transcriptUrl && metadata.transcriptType) {
             const rssTranscriptText = await fetchRssTranscript(
@@ -264,12 +299,12 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
 
     // Step 3: Transcribe via Whisper if no transcript found
     if (!transcript) {
-        await updateJobStatus(kv, jobId, "transcribing");
+        await updateJobStatusBoth(env, kv, jobId, "transcribing");
 
         // Update estimate based on duration (~1-2 min per 15 min audio + 30s for summary)
         const durationMinutes = metadata.episodeDuration / 60;
         const estimatedTranscriptionSeconds = Math.round((durationMinutes / 15) * 90);
-        await updateJobEstimate(kv, jobId, estimatedTranscriptionSeconds + 30);
+        await updateJobEstimateBoth(env, kv, jobId, estimatedTranscriptionSeconds + 30);
 
         const transcriptionResult = await transcribeAudio(
             metadata.audioUrl,
@@ -287,8 +322,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     }
 
     // Step 4: Generate summary
-    await updateJobStatus(kv, jobId, "summarizing");
-    await updateJobEstimate(kv, jobId, 30); // ~30 seconds for summary
+    await updateJobStatusBoth(env, kv, jobId, "summarizing");
+    await updateJobEstimateBoth(env, kv, jobId, 30); // ~30 seconds for summary
 
     const summaryResult = await generateSummary(
         transcript.text,
@@ -327,7 +362,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     }
 
     // Step 6: Mark job as completed
-    await updateJobStatus(kv, jobId, "completed");
+    await updateJobStatusBoth(env, kv, jobId, "completed");
 }
 
 // ============================================================================
@@ -361,8 +396,8 @@ async function regenerateSummary(ctx: ProcessingContext): Promise<void> {
     }
 
     // Generate summary
-    await updateJobStatus(kv, jobId, "summarizing");
-    await updateJobEstimate(kv, jobId, 30);
+    await updateJobStatusBoth(env, kv, jobId, "summarizing");
+    await updateJobEstimateBoth(env, kv, jobId, 30);
 
     const summaryResult = await generateSummary(
         transcript.text,
@@ -380,7 +415,7 @@ async function regenerateSummary(ctx: ProcessingContext): Promise<void> {
     await saveSummary(kv, summary);
 
     // Mark completed
-    await updateJobStatus(kv, jobId, "completed");
+    await updateJobStatusBoth(env, kv, jobId, "completed");
 }
 
 // ============================================================================

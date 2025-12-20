@@ -8,13 +8,17 @@ import { Hono } from "hono";
 import type { HonoEnv, Job } from "../types";
 import {
     createJob,
-    getJob,
     updateJobStatus,
     getEpisode,
     getTranscript,
     getSummary,
     deleteEpisode,
 } from "../lib/kv";
+import {
+    createJobDO,
+    getJobWithFallback,
+    updateJobStatusDO,
+} from "../lib/job-status-do";
 import {
     enqueueJob,
     createProcessEpisodeMessage,
@@ -201,6 +205,8 @@ authenticated.post("/submit", async (c, next) => {
         updatedAt: now,
     };
 
+    // Create job in both DO (immediate consistency) and KV (backup)
+    await createJobDO(c.env, job);
     await createJob(c.env.TLDL_DATA, job);
 
     // Queue the job for processing with pre-fetched iTunes metadata
@@ -241,7 +247,8 @@ authenticated.get("/job/:jobId", async (c, next) => {
 
     const jobId = c.req.param("jobId");
 
-    const job = await getJob(c.env.TLDL_DATA, jobId);
+    // Use DO with fallback to KV for job status
+    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
     if (!job) {
         return c.json({ error: "Job not found" }, 404);
     }
@@ -326,6 +333,8 @@ authenticated.post("/episode/:episodeId/regenerate", async (c) => {
         updatedAt: now,
     };
 
+    // Create job in both DO (immediate consistency) and KV (backup)
+    await createJobDO(c.env, job);
     await createJob(c.env.TLDL_DATA, job);
 
     // Queue regeneration job
@@ -386,8 +395,8 @@ authenticated.post("/job/:jobId/retry", async (c, next) => {
 
     const jobId = c.req.param("jobId");
 
-    // Get existing job
-    const job = await getJob(c.env.TLDL_DATA, jobId);
+    // Get existing job using DO with fallback
+    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
     if (!job) {
         return c.json({ error: "Job not found" }, 404);
     }
@@ -400,7 +409,8 @@ authenticated.post("/job/:jobId/retry", async (c, next) => {
         );
     }
 
-    // Reset job status to queued
+    // Reset job status to queued in both DO and KV
+    await updateJobStatusDO(c.env, jobId, "queued");
     await updateJobStatus(c.env.TLDL_DATA, jobId, "queued");
 
     // Re-queue the job

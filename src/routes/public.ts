@@ -13,9 +13,13 @@ import {
     getTranscript,
     listSummariesForEpisode,
     createJob,
-    getJob,
     updateJobStatus,
 } from "../lib/kv";
+import {
+    createJobDO,
+    getJobWithFallback,
+    updateJobStatusDO,
+} from "../lib/job-status-do";
 import { getTemplate, TEMPLATES, isValidTemplateId } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
@@ -625,6 +629,8 @@ publicRoutes.post("/submit", async (c) => {
         updatedAt: now,
     };
 
+    // Create job in both DO (immediate consistency) and KV (backup)
+    await createJobDO(c.env, job);
     await createJob(c.env.TLDL_DATA, job);
 
     // Queue the job for processing
@@ -743,7 +749,8 @@ function SubmitFormPage(props: SubmitFormProps): string {
 publicRoutes.get("/job/:jobId", async (c) => {
     const jobId = c.req.param("jobId");
 
-    const job = await getJob(c.env.TLDL_DATA, jobId);
+    // Use DO with fallback to KV for strongly consistent status
+    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
     if (!job) {
         const content = `
             <div class="error-page">
@@ -792,7 +799,8 @@ publicRoutes.get("/job/:jobId", async (c) => {
 publicRoutes.post("/job/:jobId/retry", async (c) => {
     const jobId = c.req.param("jobId");
 
-    const job = await getJob(c.env.TLDL_DATA, jobId);
+    // Use DO with fallback for job lookup
+    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
     if (!job) {
         return c.redirect("/");
     }
@@ -801,7 +809,8 @@ publicRoutes.post("/job/:jobId/retry", async (c) => {
         return c.redirect(`/job/${jobId}`);
     }
 
-    // Reset job status
+    // Reset job status in both DO and KV
+    await updateJobStatusDO(c.env, jobId, "queued");
     await updateJobStatus(c.env.TLDL_DATA, jobId, "queued");
 
     // Re-queue the job

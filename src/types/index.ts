@@ -116,6 +116,9 @@ export interface Env {
     // Queue
     TLDL_QUEUE: Queue<QueueMessage>;
 
+    // Durable Object for job status (strong consistency)
+    JOB_STATUS: DurableObjectNamespace;
+
     // Secrets (set via wrangler secret put)
     OPENAI_API_KEY: string;
 

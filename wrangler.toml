@@ -23,3 +23,12 @@ queue = "tldl-jobs"
 max_batch_size = 1
 max_batch_timeout = 5
 max_retries = 2
+
+# Durable Object for job status (strong consistency)
+[[durable_objects.bindings]]
+name = "JOB_STATUS"
+class_name = "JobStatusDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["JobStatusDO"]
