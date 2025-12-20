@@ -15,7 +15,7 @@
 | RSS feed parser | ✅ Complete |
 | Episode matching (multi-strategy) | ✅ Complete |
 | OpenAI Whisper transcription | ✅ Complete |
-| GPT summarization | 🔲 Not started |
+| GPT summarization | ✅ Complete |
 | Public API routes | 🔲 Not started |
 | Authenticated API routes | 🔲 Not started |
 | Queue consumer pipeline | 🔲 Not started |
