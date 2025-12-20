@@ -233,20 +233,90 @@ export function parseFeedXml(xml: string): ParsedFeed {
 }
 
 /**
- * Find an episode in a parsed feed by Apple episode ID
+ * Options for finding episodes with additional context for better matching
+ */
+export interface FindEpisodeOptions {
+    /** Episode title from external source (e.g., Apple API scrape) for fallback matching */
+    expectedTitle?: string;
+    /** Episode publication date (ISO string) for fallback matching */
+    expectedDate?: string;
+    /** Episode index from Apple URL (some feeds use sequential ordering) */
+    episodeIndex?: number;
+}
+
+/**
+ * Normalize text for comparison (lowercase, remove punctuation, collapse whitespace)
+ */
+function normalizeText(text: string): string {
+    return text
+        .toLowerCase()
+        .replace(/[^\w\s]/g, " ") // Replace punctuation with spaces
+        .replace(/\s+/g, " ") // Collapse whitespace
+        .trim();
+}
+
+/**
+ * Calculate similarity between two strings (0-1 score)
+ * Uses a simple word overlap algorithm
+ */
+function calculateSimilarity(a: string, b: string): number {
+    const aNorm = normalizeText(a);
+    const bNorm = normalizeText(b);
+
+    if (aNorm === bNorm) return 1;
+    if (!aNorm || !bNorm) return 0;
+
+    const aWords = new Set(aNorm.split(" ").filter((w) => w.length > 2));
+    const bWords = new Set(bNorm.split(" ").filter((w) => w.length > 2));
+
+    if (aWords.size === 0 || bWords.size === 0) return 0;
+
+    let matches = 0;
+    for (const word of aWords) {
+        if (bWords.has(word)) matches++;
+    }
+
+    // Jaccard-like similarity
+    const union = new Set([...aWords, ...bWords]);
+    return matches / union.size;
+}
+
+/**
+ * Check if two dates are within a certain number of days of each other
+ */
+function datesAreClose(date1: string, date2: string, maxDaysDiff: number): boolean {
+    try {
+        const d1 = new Date(date1);
+        const d2 = new Date(date2);
+        const diffMs = Math.abs(d1.getTime() - d2.getTime());
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+        return diffDays <= maxDaysDiff;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Find an episode in a parsed feed by Apple episode ID with fallback strategies
  *
- * Matches by:
- * 1. guid contains appleEpisodeId
+ * Matching strategies (in order of priority):
+ * 1. guid contains appleEpisodeId (exact match)
  * 2. guid URL-decoded contains appleEpisodeId
+ * 3. Title similarity match (if expectedTitle provided, >80% similarity)
+ * 4. Date match + partial title overlap (if expectedDate provided)
+ * 5. Recent episode by index (if episodeIndex provided)
  *
  * @param feed - Parsed feed data
  * @param appleEpisodeId - Episode ID from Apple Podcasts URL
+ * @param options - Additional context for fallback matching
  * @returns Matching episode or null
  */
 export function findEpisodeInFeed(
     feed: ParsedFeed,
-    appleEpisodeId: string
+    appleEpisodeId: string,
+    options: FindEpisodeOptions = {}
 ): RssEpisode | null {
+    // Strategy 1 & 2: GUID matching (most reliable)
     for (const episode of feed.episodes) {
         // Direct match
         if (episode.guid.includes(appleEpisodeId)) {
@@ -261,6 +331,63 @@ export function findEpisodeInFeed(
             }
         } catch {
             // Ignore decode errors
+        }
+    }
+
+    // Strategy 3: Title similarity match (high confidence)
+    if (options.expectedTitle) {
+        let bestMatch: RssEpisode | null = null;
+        let bestScore = 0;
+
+        for (const episode of feed.episodes) {
+            const score = calculateSimilarity(episode.title, options.expectedTitle);
+            if (score > bestScore && score >= 0.8) {
+                bestScore = score;
+                bestMatch = episode;
+            }
+        }
+
+        if (bestMatch) {
+            return bestMatch;
+        }
+    }
+
+    // Strategy 4: Date match with title overlap (medium confidence)
+    if (options.expectedDate) {
+        const dateMatches = feed.episodes.filter((ep) =>
+            datesAreClose(ep.pubDate, options.expectedDate!, 2)
+        );
+
+        // If only one episode on that date, return it
+        if (dateMatches.length === 1) {
+            return dateMatches[0];
+        }
+
+        // If multiple episodes on that date and we have a title, pick best match
+        if (dateMatches.length > 1 && options.expectedTitle) {
+            let bestMatch: RssEpisode | null = null;
+            let bestScore = 0;
+
+            for (const episode of dateMatches) {
+                const score = calculateSimilarity(episode.title, options.expectedTitle);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = episode;
+                }
+            }
+
+            // Accept lower threshold since we already matched on date
+            if (bestMatch && bestScore >= 0.3) {
+                return bestMatch;
+            }
+        }
+    }
+
+    // Strategy 5: Episode index (lowest confidence fallback)
+    // Apple episode IDs often correlate with recency - try matching by position
+    if (options.episodeIndex !== undefined && options.episodeIndex >= 0) {
+        if (options.episodeIndex < feed.episodes.length) {
+            return feed.episodes[options.episodeIndex];
         }
     }
 

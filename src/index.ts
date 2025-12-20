@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env, HonoEnv, QueueMessage } from "./types";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 import { transcribeAudio, validateAudioUrl } from "./services/transcription";
+import { getEpisodeMetadata } from "./services/apple-podcasts";
 
 // Create the Hono app
 const app = new Hono<HonoEnv>();
@@ -57,6 +58,7 @@ app.get("/debug/validate-audio", async (c) => {
 // Debug route for transcription (will be removed in production)
 app.get("/debug/transcribe", async (c) => {
     const audioUrl = c.req.query("url");
+    const full = c.req.query("full") === "true";
     if (!audioUrl) {
         return c.json({ error: "Missing url query parameter" }, 400);
     }
@@ -67,7 +69,8 @@ app.get("/debug/transcribe", async (c) => {
             success: true,
             source: result.source,
             textLength: result.text.length,
-            textPreview: result.text.substring(0, 500) + (result.text.length > 500 ? "..." : ""),
+            text: full ? result.text : undefined,
+            textPreview: full ? undefined : result.text.substring(0, 500) + (result.text.length > 500 ? "..." : ""),
         });
     } catch (error) {
         return c.json({
@@ -77,6 +80,32 @@ app.get("/debug/transcribe", async (c) => {
     }
 });
 
+// Debug route for episode metadata (will be removed in production)
+app.get("/debug/episode", async (c) => {
+    const url = c.req.query("url");
+    if (!url) {
+        return c.json({ error: "Missing url query parameter" }, 400);
+    }
+
+    const parsed = parseApplePodcastsUrl(url);
+    if (!parsed) {
+        return c.json({ error: "Invalid Apple Podcasts URL" }, 400);
+    }
+
+    try {
+        const metadata = await getEpisodeMetadata(parsed, 80);
+        return c.json({
+            success: true,
+            storageId: deriveEpisodeId(parsed.podcastId, parsed.episodeId),
+            ...metadata,
+        });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
+});
 // ============================================================================
 // Queue Consumer (placeholder)
 // ============================================================================

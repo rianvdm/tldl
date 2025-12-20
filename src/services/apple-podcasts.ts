@@ -18,6 +18,15 @@ export interface ItunesLookupResult {
 }
 
 /**
+ * Episode info from iTunes Lookup API
+ */
+export interface ItunesEpisodeInfo {
+    trackId: number;
+    trackName: string;
+    releaseDate: string;
+}
+
+/**
  * Episode metadata extracted from RSS feed
  */
 export interface EpisodeMetadata {
@@ -42,6 +51,9 @@ interface ItunesApiResponse {
         feedUrl?: string;
         collectionName?: string;
         artistName?: string;
+        trackId?: number;
+        trackName?: string;
+        releaseDate?: string;
     }>;
 }
 
@@ -136,6 +148,53 @@ export async function lookupPodcast(
 }
 
 /**
+ * Look up episode info from iTunes API to get title and date for RSS matching
+ *
+ * @param podcastId - The Apple podcast ID
+ * @param episodeId - The Apple episode ID (trackId)
+ * @returns Episode info if found, null otherwise
+ */
+export async function lookupEpisodeInfo(
+    podcastId: string,
+    episodeId: string
+): Promise<ItunesEpisodeInfo | null> {
+    // Fetch recent episodes from iTunes (limit to 200 to cover most cases)
+    const url = `https://itunes.apple.com/lookup?id=${encodeURIComponent(podcastId)}&entity=podcastEpisode&limit=200`;
+
+    try {
+        const response = await fetch(url, {
+            headers: {
+                Accept: "application/json",
+            },
+        });
+
+        if (!response.ok) {
+            return null; // Non-critical - we'll fall back to other matching
+        }
+
+        const data = (await response.json()) as ItunesApiResponse;
+
+        // Find the episode by trackId (the episode ID from the URL)
+        const episodeIdNum = parseInt(episodeId, 10);
+        const episode = data.results.find(
+            (r) => r.trackId === episodeIdNum && r.wrapperType !== "collection"
+        );
+
+        if (!episode || !episode.trackName) {
+            return null;
+        }
+
+        return {
+            trackId: episode.trackId!,
+            trackName: episode.trackName,
+            releaseDate: episode.releaseDate || "",
+        };
+    } catch {
+        return null; // Non-critical fallback
+    }
+}
+
+/**
  * Get episode metadata for a parsed Apple Podcasts URL
  *
  * @param parsedUrl - The parsed Apple Podcasts URL
@@ -158,11 +217,17 @@ export async function getEpisodeMetadata(
         );
     }
 
-    // Step 2: Fetch and parse RSS feed
-    const feed = await fetchAndParseFeed(podcast.feedUrl);
+    // Step 2: Look up episode info for fallback matching (parallel with RSS fetch)
+    const [feed, episodeInfo] = await Promise.all([
+        fetchAndParseFeed(podcast.feedUrl),
+        lookupEpisodeInfo(parsedUrl.podcastId, parsedUrl.episodeId),
+    ]);
 
-    // Step 3: Find episode in feed
-    const episode = findEpisodeInFeed(feed, parsedUrl.episodeId);
+    // Step 3: Find episode in feed with fallback options
+    const episode = findEpisodeInFeed(feed, parsedUrl.episodeId, {
+        expectedTitle: episodeInfo?.trackName,
+        expectedDate: episodeInfo?.releaseDate,
+    });
 
     if (!episode) {
         throw new AppError(

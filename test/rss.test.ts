@@ -172,31 +172,154 @@ describe("findEpisodeInFeed", () => {
         feed = parseFeedXml(sampleFeedXml);
     });
 
-    it("should find episode by exact guid match", () => {
-        const episode = findEpisodeInFeed(feed, "1000680000000");
+    describe("Strategy 1 & 2: GUID matching", () => {
+        it("should find episode by exact guid match", () => {
+            const episode = findEpisodeInFeed(feed, "1000680000000");
 
-        expect(episode).not.toBeNull();
-        expect(episode?.title).toBe("Episode One: The Beginning");
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode One: The Beginning");
+        });
+
+        it("should find episode with URL-encoded guid", () => {
+            const episode = findEpisodeInFeed(feed, "1000123456789");
+
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode Five: URL Encoded GUID");
+        });
+
+        it("should return null for non-existent episode", () => {
+            const episode = findEpisodeInFeed(feed, "9999999999");
+
+            expect(episode).toBeNull();
+        });
+
+        it("should handle partial guid matches", () => {
+            const episode = findEpisodeInFeed(feed, "987654321");
+
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode Two: The Sequel");
+        });
     });
 
-    it("should find episode with URL-encoded guid", () => {
-        const episode = findEpisodeInFeed(feed, "1000123456789");
+    describe("Strategy 3: Title similarity matching", () => {
+        it("should find episode by similar title (high confidence)", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                expectedTitle: "Episode One: The Beginning",
+            });
 
-        expect(episode).not.toBeNull();
-        expect(episode?.title).toBe("Episode Five: URL Encoded GUID");
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode One: The Beginning");
+        });
+
+        it("should find episode with partial title match", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                expectedTitle: "Episode Two The Sequel Show",
+            });
+
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode Two: The Sequel");
+        });
+
+        it("should not match low similarity titles", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                expectedTitle: "Completely Different Title About Cats",
+            });
+
+            expect(episode).toBeNull();
+        });
     });
 
-    it("should return null for non-existent episode", () => {
-        const episode = findEpisodeInFeed(feed, "9999999999");
+    describe("Strategy 4: Date matching", () => {
+        it("should find episode by exact date when only one match", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                expectedDate: "2024-12-15T10:00:00.000Z",
+            });
 
-        expect(episode).toBeNull();
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode One: The Beginning");
+        });
+
+        it("should find episode by close date (within 2 days)", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                expectedDate: "2024-12-14T10:00:00.000Z", // 1 day before
+            });
+
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode One: The Beginning");
+        });
+
+        it("should use title to disambiguate when multiple episodes on same date", () => {
+            // Create a feed with two episodes on the same day
+            const sameDayFeedXml = `<?xml version="1.0"?>
+            <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+                <channel>
+                    <title>Same Day Podcast</title>
+                    <item>
+                        <guid>ep-morning</guid>
+                        <title>Morning Show</title>
+                        <pubDate>Mon, 15 Dec 2024 08:00:00 GMT</pubDate>
+                        <itunes:duration>3600</itunes:duration>
+                        <enclosure url="https://example.com/morning.mp3" type="audio/mpeg"/>
+                    </item>
+                    <item>
+                        <guid>ep-evening</guid>
+                        <title>Evening Show</title>
+                        <pubDate>Mon, 15 Dec 2024 18:00:00 GMT</pubDate>
+                        <itunes:duration>3600</itunes:duration>
+                        <enclosure url="https://example.com/evening.mp3" type="audio/mpeg"/>
+                    </item>
+                </channel>
+            </rss>`;
+            const sameDayFeed = parseFeedXml(sameDayFeedXml);
+
+            const episode = findEpisodeInFeed(sameDayFeed, "nomatch", {
+                expectedDate: "2024-12-15T12:00:00.000Z",
+                expectedTitle: "Evening Show",
+            });
+
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Evening Show");
+        });
     });
 
-    it("should handle partial guid matches", () => {
-        const episode = findEpisodeInFeed(feed, "987654321");
+    describe("Strategy 5: Episode index fallback", () => {
+        it("should find episode by index", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                episodeIndex: 0,
+            });
 
-        expect(episode).not.toBeNull();
-        expect(episode?.title).toBe("Episode Two: The Sequel");
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode One: The Beginning");
+        });
+
+        it("should find last episode in feed", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                episodeIndex: 4,
+            });
+
+            expect(episode).not.toBeNull();
+            expect(episode?.title).toBe("Episode Five: URL Encoded GUID");
+        });
+
+        it("should return null for out of bounds index", () => {
+            const episode = findEpisodeInFeed(feed, "nomatch", {
+                episodeIndex: 100,
+            });
+
+            expect(episode).toBeNull();
+        });
+    });
+
+    describe("Strategy priority", () => {
+        it("should prefer GUID match over title match", () => {
+            // GUID matches episode 1, but title matches episode 2
+            const episode = findEpisodeInFeed(feed, "1000680000000", {
+                expectedTitle: "Episode Two: The Sequel",
+            });
+
+            // Should return episode 1 (GUID match wins)
+            expect(episode?.title).toBe("Episode One: The Beginning");
+        });
     });
 });
 
