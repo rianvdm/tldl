@@ -830,6 +830,20 @@ Use `console.error()` for Workers logging, viewable in dashboard or `wrangler ta
 
 ## Security
 
+### OpenAI API Protection (Critical)
+
+Routes that trigger OpenAI API calls (costing money) MUST be protected:
+
+| Route | OpenAI API | Protection Required |
+|-------|-----------|---------------------|
+| `POST /submit` | Whisper + GPT | Cloudflare Access JWT |
+| `POST /episode/:id/regenerate` | GPT | Cloudflare Access JWT |
+| `POST /job/:id/retry` | Whisper + GPT | Cloudflare Access JWT |
+| `GET /debug/transcribe` | Whisper | Remove in production or gate behind secret |
+| `GET /debug/summarize` | GPT | Remove in production or gate behind secret |
+
+**Implementation**: Auth middleware must fail-closed in production (reject requests without valid JWT).
+
 ### Authentication & Authorization
 
 | Route Pattern | Auth Required | Access Level |

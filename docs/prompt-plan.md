@@ -1597,10 +1597,69 @@ function logError(context: {
 
 ## Prompt 14: Security Hardening and Rate Limiting
 
-**Goal**: Add security headers, CORS configuration, and per-user rate limiting.
+**Goal**: Protect OpenAI API from abuse, add security headers, CORS configuration, and per-user rate limiting.
 
 ```markdown
 Implement security hardening and rate limiting.
+
+## CRITICAL: Protect OpenAI API Endpoints
+
+### Remove or Protect Debug Routes
+
+The following debug routes directly call OpenAI APIs and MUST be protected before production:
+
+1. **Remove these routes entirely** (or gate behind a secret):
+   - `GET /debug/transcribe` - calls Whisper API
+   - `GET /debug/summarize` - calls GPT API
+
+2. **Safe to keep** (no OpenAI calls):
+   - `GET /debug/parse` - just URL parsing
+   - `GET /debug/validate-audio` - just HEAD request
+   - `GET /debug/episode` - just iTunes/RSS fetch
+
+Implementation:
+```typescript
+// Option A: Remove entirely in production
+if (c.env.ENVIRONMENT !== 'development') {
+  // Don't register debug routes
+}
+
+// Option B: Gate behind secret header
+app.use('/debug/transcribe', async (c, next) => {
+  if (c.req.header('X-Debug-Secret') !== c.env.DEBUG_SECRET) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+  await next();
+});
+```
+
+### Make Auth Middleware Fail-Closed
+
+Update `src/routes/authenticated.ts` to REJECT requests without valid Cloudflare Access JWT in production:
+
+```typescript
+authenticated.use('*', async (c, next) => {
+  const cfAccessJwt = c.req.header('Cf-Access-Jwt-Assertion');
+  
+  // In development, allow requests without JWT for testing
+  const isDevelopment = c.env.ENVIRONMENT === 'development';
+  
+  if (!isDevelopment && !cfAccessJwt) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  
+  await next();
+});
+```
+
+Add `ENVIRONMENT` to wrangler.toml:
+```toml
+[vars]
+ENVIRONMENT = "production"
+
+[env.dev.vars]
+ENVIRONMENT = "development"
+```
 
 ## Security Headers Middleware
 
@@ -1711,13 +1770,25 @@ app.use('*', async (c, next) => {
 
 ## Tests
 
-1. Security headers present on all responses
-2. CSP header on HTML responses
-3. CORS rejects unauthorized origins
-4. Rate limit blocks after 10 requests
-5. Rate limit resets after hour
-6. JWT email extraction works
-7. Oversized requests rejected
+### OpenAI Protection Tests (CRITICAL)
+1. Debug transcribe/summarize routes return 403 in production without secret
+2. POST /submit returns 401 in production without CF Access JWT
+3. POST /episode/:id/regenerate returns 401 in production without CF Access JWT
+4. POST /job/:id/retry returns 401 in production without CF Access JWT
+
+### Security Headers Tests
+5. Security headers present on all responses
+6. CSP header on HTML responses
+7. CORS rejects unauthorized origins
+
+### Rate Limiting Tests
+8. Rate limit blocks after 10 requests per hour
+9. Rate limit resets after hour
+10. Rate limit headers present in responses
+
+### Other Security Tests
+11. JWT email extraction works
+12. Oversized requests rejected
 ```
 
 ---
