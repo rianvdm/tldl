@@ -109,10 +109,19 @@ interface RetryResponse {
 }
 
 // ============================================================================
-// POST /submit - Submit new episode for processing
+// POST /submit - Submit new episode for processing (JSON API)
+// This only handles JSON requests; form submissions fall through to public routes
 // ============================================================================
 
-authenticated.post("/submit", async (c) => {
+authenticated.post("/submit", async (c, next) => {
+    // Check if client is sending JSON
+    const contentType = c.req.header("Content-Type") || "";
+
+    // If not JSON, let the HTML form handler handle it
+    if (!contentType.includes("application/json")) {
+        return next();
+    }
+
     let body: SubmitRequest;
     try {
         body = await c.req.json<SubmitRequest>();
@@ -169,7 +178,7 @@ authenticated.post("/submit", async (c) => {
     // Pre-fetch iTunes episode info (works in HTTP context, fails in queue context)
     // This provides episodeGuid for reliable RSS matching
     const episodeInfo = await lookupEpisodeInfo(parsed.podcastId, parsed.episodeId);
-    
+
     console.log(JSON.stringify({
         event: "submit_prefetch_itunes",
         podcastId: parsed.podcastId,
@@ -216,11 +225,20 @@ authenticated.post("/submit", async (c) => {
     return c.json(response, 201);
 });
 
-// ============================================================================
-// GET /job/:jobId - Get job status
+// GET /job/:jobId - Get job status (JSON API)
+// This only handles JSON requests; HTML requests fall through to public routes
 // ============================================================================
 
-authenticated.get("/job/:jobId", async (c) => {
+authenticated.get("/job/:jobId", async (c, next) => {
+    // Check if client wants JSON (explicit Accept header or Content-Type: application/json)
+    const accept = c.req.header("Accept") || "";
+    const contentType = c.req.header("Content-Type") || "";
+
+    // If not explicitly requesting JSON, let the HTML route handle it
+    if (!accept.includes("application/json") && !contentType.includes("application/json")) {
+        return next();
+    }
+
     const jobId = c.req.param("jobId");
 
     const job = await getJob(c.env.TLDL_DATA, jobId);
@@ -352,10 +370,20 @@ authenticated.delete("/episode/:episodeId", async (c) => {
 });
 
 // ============================================================================
-// POST /job/:jobId/retry - Retry a failed job
+// POST /job/:jobId/retry - Retry a failed job (JSON API)
+// This only handles JSON requests; form submissions fall through to public routes
 // ============================================================================
 
-authenticated.post("/job/:jobId/retry", async (c) => {
+authenticated.post("/job/:jobId/retry", async (c, next) => {
+    // Check if client wants JSON
+    const accept = c.req.header("Accept") || "";
+    const contentType = c.req.header("Content-Type") || "";
+
+    // If not explicitly requesting JSON, let the HTML form handler handle it
+    if (!accept.includes("application/json") && !contentType.includes("application/json")) {
+        return next();
+    }
+
     const jobId = c.req.param("jobId");
 
     // Get existing job
