@@ -4,8 +4,10 @@ import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
+import { CSS } from "./lib/styles";
 import api from "./routes/api";
 import authenticated from "./routes/authenticated";
+import publicRoutes from "./routes/public";
 import queueConsumer from "./queue/consumer";
 
 // ============================================================================
@@ -29,12 +31,17 @@ if (MAINTENANCE_MODE) {
     });
 } else {
     // ============================================================================
-    // Public Routes
+    // Static Assets
     // ============================================================================
 
-    // Home page - placeholder until UI is implemented
-    app.get("/", (c) => {
-        return c.text("TLDL - Coming Soon");
+    // Serve CSS styles
+    app.get("/styles.css", () => {
+        return new Response(CSS, {
+            headers: {
+                "Content-Type": "text/css",
+                "Cache-Control": "public, max-age=3600",
+            },
+        });
     });
 
     // Health check endpoint
@@ -166,6 +173,12 @@ app.route("/api", api);
 // ============================================================================
 
     app.route("/", authenticated);
+
+// ============================================================================
+// Public HTML Routes (must be after authenticated to allow overrides)
+// ============================================================================
+
+    app.route("/", publicRoutes);
 } // End of if (!MAINTENANCE_MODE)
 
 // ============================================================================

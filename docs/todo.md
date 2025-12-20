@@ -79,7 +79,7 @@ npm run deploy
 - [x] **Prompt 9**: Queue consumer pipeline
 
 ### UI
-- [ ] **Prompt 10**: Public HTML pages (list, detail)
+- [x] **Prompt 10**: Public HTML pages (list, detail)
 - [ ] **Prompt 11**: Authenticated HTML pages (submit, status)
 
 ### Features & Polish
