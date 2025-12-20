@@ -121,6 +121,8 @@ export interface Env {
 
     // Secrets (set via wrangler secret put)
     OPENAI_API_KEY: string;
+    PODCAST_INDEX_KEY: string;
+    PODCAST_INDEX_SECRET: string;
 
     // Environment variables (from wrangler.toml [vars])
     MAX_EPISODE_MINUTES: string;

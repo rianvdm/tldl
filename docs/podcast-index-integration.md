@@ -281,15 +281,39 @@ Create `test/podcast-index.test.ts`:
 |------|--------|
 | `src/types/index.ts` | Add `PODCAST_INDEX_KEY`, `PODCAST_INDEX_SECRET` to `Env` |
 | `src/services/podcast-index.ts` | **NEW** - Podcast Index API client |
-| `src/services/apple-podcasts.ts` | Update to use Podcast Index as primary |
+| `src/services/apple-podcasts.ts` | Add `prefetchEpisodeInfo` with Apple redirect fallback, `getEpisodeFromPodcastIndex` |
+| `src/services/transcription.ts` | Accept `binary/octet-stream` content type for audio |
+| `src/routes/authenticated.ts` | Pass `appleUrl` to `prefetchEpisodeInfo` |
+| `src/routes/public.ts` | Pass `appleUrl` to `prefetchEpisodeInfo` |
 | `src/queue/consumer.ts` | Pass `env` to `getEpisodeMetadata()` |
+| `src/index.ts` | Pass `env` to debug route |
 | `test/podcast-index.test.ts` | **NEW** - Tests for Podcast Index |
 
-## Migration Strategy
+## Actual Implementation (Dec 2024)
 
-1. **Phase 1**: Add Podcast Index as primary, keep iTunes as fallback
-2. **Phase 2**: Monitor logs to ensure Podcast Index works reliably
-3. **Phase 3**: Remove iTunes episode lookup code (keep for URL parsing only)
+The implementation differs slightly from the original plan:
+
+### Episode Title Resolution Flow
+
+1. **HTTP prefetch** (`prefetchEpisodeInfo`):
+   - Try iTunes API → if works, use it
+   - If iTunes 403s → fetch Apple Podcasts URL with `redirect: "manual"`
+   - Extract episode title from redirect URL slug (e.g., `the-100-person-ai-lab` → `the 100 person ai lab`)
+   - Match title in Podcast Index to get full metadata
+
+2. **Queue consumer** (`getEpisodeMetadata`):
+   - Try Podcast Index with prefetched `expectedTitle` → match by title
+   - Falls back to iTunes + RSS if Podcast Index fails
+
+### Key Insight
+
+Apple Podcasts redirects to a canonical URL containing the episode title slug:
+```
+Input:  https://podcasts.apple.com/us/podcast/lennys-podcast/id123?i=456
+Redirect: https://podcasts.apple.com/us/podcast/episode-title-here/id123?i=456
+```
+
+This allows us to get the episode title without the iTunes API.
 
 ## Rollback Plan
 
@@ -300,9 +324,10 @@ If issues occur:
 ## Notes
 
 - Podcast Index sometimes has `transcriptUrl` in the episode data - free transcript!
-- Episode matching needs fuzzy logic since Apple IDs don't map directly
+- Episode matching uses fuzzy title matching since Apple IDs don't map directly
 - Rate limit is 10 requests/second (very generous)
 - API keys never expire
+- Some audio URLs return `binary/octet-stream` instead of `audio/*` - this is now accepted
 
 ## Resources
 

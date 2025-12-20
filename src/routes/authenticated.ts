@@ -26,7 +26,7 @@ import {
 } from "../lib/queue";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId } from "../lib/constants";
-import { lookupEpisodeInfo } from "../services/apple-podcasts";
+import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 
 const authenticated = new Hono<HonoEnv>();
 
@@ -179,12 +179,12 @@ authenticated.post("/submit", async (c, next) => {
         }
     }
 
-    // Pre-fetch iTunes episode info (works in HTTP context, fails in queue context)
+    // Pre-fetch episode info (tries iTunes, then Apple redirect + Podcast Index)
     // This provides episodeGuid for reliable RSS matching
-    const episodeInfo = await lookupEpisodeInfo(parsed.podcastId, parsed.episodeId);
+    const episodeInfo = await prefetchEpisodeInfo(parsed.podcastId, parsed.episodeId, c.env, appleUrl);
 
     console.log(JSON.stringify({
-        event: "submit_prefetch_itunes",
+        event: "submit_prefetch_complete",
         podcastId: parsed.podcastId,
         episodeId: parsed.episodeId,
         episodeInfoFound: !!episodeInfo,

@@ -121,7 +121,7 @@ if (MAINTENANCE_MODE) {
         }
 
         try {
-            const metadata = await getEpisodeMetadata(parsed, 80);
+            const metadata = await getEpisodeMetadata(parsed, { maxMinutes: 80, env: c.env });
             return c.json({
                 success: true,
                 storageId: deriveEpisodeId(parsed.podcastId, parsed.episodeId),

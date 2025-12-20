@@ -6,7 +6,13 @@
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
 import type { ParsedAppleUrl } from "../lib/url-parser";
+import type { Env } from "../types";
 import { fetchAndParseFeed, findEpisodeInFeed } from "./rss";
+import {
+    lookupPodcastByItunesId,
+    getEpisodesByItunesId,
+    findEpisodeByAppleId,
+} from "./podcast-index";
 
 /**
  * Result from iTunes Lookup API for a podcast
@@ -25,6 +31,148 @@ export interface ItunesEpisodeInfo {
     trackName: string;
     releaseDate: string;
     episodeGuid?: string; // The podcast's internal GUID for this episode
+}
+
+/**
+ * Extract episode title from Apple Podcasts redirect URL
+ * Apple redirects to a canonical URL containing the episode title slug
+ */
+async function getEpisodeTitleFromAppleRedirect(
+    appleUrl: string
+): Promise<string | null> {
+    try {
+        // Fetch with redirect: "manual" to get the Location header
+        const response = await fetch(appleUrl, {
+            method: "HEAD",
+            redirect: "manual",
+            headers: {
+                "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+            },
+        });
+        
+        const location = response.headers.get("location");
+        if (!location) {
+            return null;
+        }
+        
+        // Parse the redirect URL to extract episode title
+        // Format: https://podcasts.apple.com/us/podcast/episode-title-slug/id123?i=456
+        const match = location.match(/\/podcast\/([^/]+)\/id\d+\?i=/);
+        if (!match) {
+            return null;
+        }
+        
+        // Convert slug to title: "the-100-person-ai-lab" -> "the 100 person ai lab"
+        const slug = match[1];
+        const title = slug.replace(/-/g, " ");
+        
+        console.log(JSON.stringify({
+            event: "apple_redirect_title_extracted",
+            slug,
+            title,
+        }));
+        
+        return title;
+    } catch (error) {
+        console.log(JSON.stringify({
+            event: "apple_redirect_fetch_error",
+            error: error instanceof Error ? error.message : String(error),
+        }));
+        return null;
+    }
+}
+
+/**
+ * Pre-fetch episode info for queue message
+ * Tries iTunes first, then Apple redirect + Podcast Index matching
+ */
+export async function prefetchEpisodeInfo(
+    podcastId: string,
+    episodeId: string,
+    env: Env,
+    appleUrl?: string
+): Promise<ItunesEpisodeInfo | null> {
+    // Try iTunes first - it sometimes works in HTTP context
+    const itunesResult = await lookupEpisodeInfo(podcastId, episodeId);
+    if (itunesResult) {
+        console.log(JSON.stringify({
+            event: "prefetch_itunes_success",
+            podcastId,
+            episodeId,
+            title: itunesResult.trackName,
+        }));
+        return itunesResult;
+    }
+    
+    console.log(JSON.stringify({
+        event: "prefetch_itunes_failed",
+        podcastId,
+        episodeId,
+    }));
+    
+    // iTunes failed - try to get title from Apple redirect URL
+    if (appleUrl && env.PODCAST_INDEX_KEY && env.PODCAST_INDEX_SECRET) {
+        const titleFromRedirect = await getEpisodeTitleFromAppleRedirect(appleUrl);
+        
+        if (titleFromRedirect) {
+            // Now match this title in Podcast Index
+            try {
+                const episodes = await getEpisodesByItunesId(
+                    podcastId,
+                    env.PODCAST_INDEX_KEY,
+                    env.PODCAST_INDEX_SECRET,
+                    500
+                );
+                
+                if (episodes.length > 0) {
+                    // Fuzzy match by title
+                    const normalizedExpected = titleFromRedirect.toLowerCase().trim();
+                    const matched = episodes.find(ep => {
+                        const normalizedTitle = ep.title.toLowerCase().trim();
+                        // Check if titles are similar (one contains the other or high overlap)
+                        return normalizedTitle.includes(normalizedExpected) ||
+                               normalizedExpected.includes(normalizedTitle) ||
+                               // Also try matching start of title (slugs are often truncated)
+                               normalizedTitle.startsWith(normalizedExpected.substring(0, 20));
+                    });
+                    
+                    if (matched) {
+                        console.log(JSON.stringify({
+                            event: "prefetch_redirect_podcast_index_match",
+                            podcastId,
+                            episodeId,
+                            searchTitle: titleFromRedirect,
+                            matchedTitle: matched.title,
+                        }));
+                        return {
+                            trackId: parseInt(episodeId, 10),
+                            trackName: matched.title,
+                            releaseDate: new Date(matched.datePublished * 1000).toISOString(),
+                            episodeGuid: matched.guid,
+                        };
+                    }
+                    
+                    console.log(JSON.stringify({
+                        event: "prefetch_redirect_no_match",
+                        podcastId,
+                        episodeId,
+                        searchTitle: titleFromRedirect,
+                        episodeCount: episodes.length,
+                        sampleTitles: episodes.slice(0, 5).map(e => e.title),
+                    }));
+                }
+            } catch (error) {
+                console.log(JSON.stringify({
+                    event: "prefetch_podcast_index_error",
+                    podcastId,
+                    episodeId,
+                    error: error instanceof Error ? error.message : String(error),
+                }));
+            }
+        }
+    }
+    
+    return null;
 }
 
 /**
@@ -260,6 +408,8 @@ export interface GetEpisodeMetadataOptions {
     episodeGuid?: string;
     expectedTitle?: string;
     expectedDate?: string;
+    // Environment for Podcast Index API access
+    env?: Env;
 }
 
 /**
@@ -280,6 +430,25 @@ export async function getEpisodeMetadata(
         ? { maxMinutes: optionsOrMaxMinutes }
         : (optionsOrMaxMinutes || {});
     
+    // Try Podcast Index first (primary source - no IP blocking issues)
+    if (options.env?.PODCAST_INDEX_KEY && options.env?.PODCAST_INDEX_SECRET) {
+        const podcastIndexResult = await getEpisodeFromPodcastIndex(
+            parsedUrl,
+            options.env.PODCAST_INDEX_KEY,
+            options.env.PODCAST_INDEX_SECRET,
+            options
+        );
+        if (podcastIndexResult) {
+            return podcastIndexResult;
+        }
+        console.log(JSON.stringify({
+            event: "podcast_index_fallback_to_itunes",
+            podcastId: parsedUrl.podcastId,
+            episodeId: parsedUrl.episodeId,
+        }));
+    }
+    
+    // Fall back to iTunes + RSS (existing implementation)
     // Step 1: Look up podcast via iTunes API
     const podcast = await lookupPodcast(parsedUrl.podcastId);
 
@@ -364,3 +533,88 @@ export async function getEpisodeMetadata(
     };
 }
 
+// ============================================================================
+// Podcast Index Integration
+// ============================================================================
+
+/**
+ * Get episode metadata from Podcast Index API
+ * Returns null if not found (caller should fall back to iTunes)
+ */
+async function getEpisodeFromPodcastIndex(
+    parsedUrl: ParsedAppleUrl,
+    apiKey: string,
+    apiSecret: string,
+    options: GetEpisodeMetadataOptions
+): Promise<EpisodeMetadata | null> {
+    try {
+        // Step 1: Look up podcast by iTunes ID
+        const podcast = await lookupPodcastByItunesId(
+            parsedUrl.podcastId,
+            apiKey,
+            apiSecret
+        );
+        
+        if (!podcast) {
+            return null;
+        }
+        
+        // Step 2: Get episodes from Podcast Index
+        const episodes = await getEpisodesByItunesId(
+            parsedUrl.podcastId,
+            apiKey,
+            apiSecret,
+            1000
+        );
+        
+        if (episodes.length === 0) {
+            return null;
+        }
+        
+        // Step 3: Find the specific episode
+        const episode = findEpisodeByAppleId(
+            episodes,
+            parsedUrl.episodeId,
+            options.expectedTitle,
+            options.expectedDate
+        );
+        
+        if (!episode) {
+            return null;
+        }
+        
+        // Step 4: Validate duration if limit specified
+        if (options.maxMinutes !== undefined && episode.duration > 0) {
+            validateDuration(episode.duration, options.maxMinutes);
+        }
+        
+        // Convert Unix timestamp to ISO date
+        const episodeDate = new Date(episode.datePublished * 1000).toISOString();
+        
+        console.log(JSON.stringify({
+            event: "podcast_index_metadata_success",
+            podcastId: parsedUrl.podcastId,
+            episodeId: parsedUrl.episodeId,
+            episodeTitle: episode.title,
+            hasTranscript: !!episode.transcriptUrl,
+        }));
+        
+        return {
+            podcastName: podcast.title,
+            episodeTitle: episode.title,
+            episodeDuration: episode.duration,
+            episodeDate,
+            audioUrl: episode.enclosureUrl,
+            feedUrl: podcast.url,
+            ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
+        };
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: "podcast_index_metadata_error",
+            podcastId: parsedUrl.podcastId,
+            episodeId: parsedUrl.episodeId,
+            error: error instanceof Error ? error.message : String(error),
+        }));
+        return null;
+    }
+}

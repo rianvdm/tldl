@@ -56,6 +56,7 @@ TLDL allows users to submit Apple Podcasts episode URLs and receive AI-generated
 | Framework | Hono |
 | Background Jobs | Cloudflare Queues |
 | Storage | Cloudflare Workers KV |
+| Episode Metadata | Podcast Index API (primary), iTunes API (fallback) |
 | Transcription (primary) | Existing transcripts (Apple Podcasts, RSS) |
 | Transcription (fallback) | OpenAI Whisper API |
 | Summarization | OpenAI GPT-5.2 (Responses API) |
@@ -109,8 +110,9 @@ TLDL allows users to submit Apple Podcasts episode URLs and receive AI-generated
 ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
 │  Workers KV     │ │ Cloudflare      │ │  External APIs  │
 │  - transcripts  │ │ Queues          │ │  - OpenAI       │
-│  - summaries    │ │                 │ │  - iTunes API   │
-│  - jobs         │ │                 │ │  - RSS Feeds    │
+│  - summaries    │ │                 │ │  - Podcast Index│
+│  - jobs         │ │                 │ │  - iTunes API   │
+│                 │ │                 │ │  - RSS Feeds    │
 └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
@@ -762,16 +764,14 @@ max_retries = 2
 
 ```bash
 wrangler secret put OPENAI_API_KEY
-# Paste your OpenAI API key when prompted
+wrangler secret put PODCAST_INDEX_KEY
+wrangler secret put PODCAST_INDEX_SECRET
 ```
 
 Required secrets:
 - `OPENAI_API_KEY` - OpenAI API key for Whisper and GPT-5.2
-
-Optional secrets (for future Apple API integration):
-- `APPLE_TEAM_ID`
-- `APPLE_KEY_ID`
-- `APPLE_PRIVATE_KEY`
+- `PODCAST_INDEX_KEY` - Podcast Index API key (free at podcastindex.org)
+- `PODCAST_INDEX_SECRET` - Podcast Index API secret
 
 ### Cloudflare Access Configuration
 

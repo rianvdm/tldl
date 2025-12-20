@@ -266,11 +266,13 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     }
 
     // Use pre-fetched iTunes metadata from queue message (avoids 403 errors)
+    // Pass env for Podcast Index API access (primary source)
     const metadata = await getEpisodeMetadata(parsedUrl, {
         maxMinutes,
         episodeGuid,
         expectedTitle,
         expectedDate,
+        env,
     });
 
     // Step 2: Check RSS for transcript if we don't have one

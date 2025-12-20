@@ -64,8 +64,11 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
         const contentLength = parseInt(response.headers.get("content-length") || "0", 10);
         const contentType = response.headers.get("content-type") || "unknown";
 
-        // Validate content type is audio
-        if (!contentType.startsWith("audio/")) {
+        // Validate content type is audio (also accept binary/octet-stream and application/octet-stream)
+        const isAudio = contentType.startsWith("audio/") || 
+                        contentType === "binary/octet-stream" ||
+                        contentType === "application/octet-stream";
+        if (!isAudio) {
             throw new AppError(
                 ERROR_CODES.AUDIO_UNAVAILABLE,
                 `Invalid content type: expected audio/*, got ${contentType}`,

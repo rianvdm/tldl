@@ -23,7 +23,7 @@ import {
 import { getTemplate, TEMPLATES, isValidTemplateId } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
-import { lookupEpisodeInfo } from "../services/apple-podcasts";
+import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -606,13 +606,13 @@ publicRoutes.post("/submit", async (c) => {
         }
     }
 
-    // Pre-fetch iTunes episode info
+    // Pre-fetch episode info (tries iTunes, then Apple redirect + Podcast Index)
     let episodeInfo = null;
     try {
-        episodeInfo = await lookupEpisodeInfo(parsed.podcastId, parsed.episodeId);
+        episodeInfo = await prefetchEpisodeInfo(parsed.podcastId, parsed.episodeId, c.env, appleUrl);
     } catch (e) {
         // Log but continue - queue consumer will handle this
-        console.error("Failed to prefetch iTunes info:", e);
+        console.error("Failed to prefetch episode info:", e);
     }
 
     // Create new job

@@ -65,6 +65,7 @@ npm run deploy
 ### External Integrations
 - [x] **Prompt 3**: URL parser + iTunes API
 - [x] **Prompt 4**: RSS feed parser
+- [x] **Podcast Index Integration**: Replace iTunes API with Podcast Index to solve 403 errors (see `docs/podcast-index-integration.md`)
 
 
 ### Core Services

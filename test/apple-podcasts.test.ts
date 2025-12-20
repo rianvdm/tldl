@@ -187,7 +187,7 @@ describe("getEpisodeMetadata", () => {
     });
 
     it("should return metadata for valid parsed URL", async () => {
-        const mockItunesResponse = {
+        const mockItunesPodcastResponse = {
             resultCount: 1,
             results: [
                 {
@@ -199,10 +199,30 @@ describe("getEpisodeMetadata", () => {
             ],
         };
 
-        // Mock iTunes API call first, then RSS feed call
+        const mockItunesEpisodeResponse = {
+            resultCount: 1,
+            results: [
+                {
+                    wrapperType: "collection",
+                    feedUrl: "https://feeds.example.com/podcast.rss",
+                },
+                {
+                    wrapperType: "podcastEpisode",
+                    trackId: 67890,
+                    trackName: "Test Episode Title",
+                    releaseDate: "2024-12-15T10:00:00Z",
+                    episodeGuid: "episode-67890",
+                },
+            ],
+        };
+
+        // Mock: 1) iTunes podcast lookup, 2) iTunes episode lookup, 3) RSS feed
         vi.spyOn(globalThis, "fetch")
             .mockResolvedValueOnce(
-                new Response(JSON.stringify(mockItunesResponse), { status: 200 })
+                new Response(JSON.stringify(mockItunesPodcastResponse), { status: 200 })
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(mockItunesEpisodeResponse), { status: 200 })
             )
             .mockResolvedValueOnce(
                 new Response(sampleRssFeed, { status: 200 })
