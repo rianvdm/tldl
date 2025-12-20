@@ -16,7 +16,7 @@
 
 ### Foundation
 - [x] **Prompt 1**: Project scaffolding, types, constants
-- [ ] **Prompt 2**: KV storage layer
+- [x] **Prompt 2**: KV storage layer
 
 ### External Integrations
 - [ ] **Prompt 3**: URL parser + iTunes API
