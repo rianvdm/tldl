@@ -15,7 +15,7 @@
 ## Implementation Prompts
 
 ### Foundation
-- [ ] **Prompt 1**: Project scaffolding, types, constants
+- [x] **Prompt 1**: Project scaffolding, types, constants
 - [ ] **Prompt 2**: KV storage layer
 
 ### External Integrations
