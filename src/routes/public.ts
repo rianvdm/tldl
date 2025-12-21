@@ -226,6 +226,7 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                 <meta name="twitter:description" content="${ogDescription}" />
                 <meta name="twitter:image" content="${ogImage}" />
                 <link rel="stylesheet" href="/styles.css" />
+                <link rel="alternate" type="application/rss+xml" title="TL;DL RSS Feed" href="/feed" />
                 ${raw(props.headExtra || "")}
             </head>
             <body>
@@ -1440,5 +1441,111 @@ function JobStatusPage(job: Job): string {
         ` : ""}
     `;
 }
+
+// ============================================================================
+// GET /feed — RSS Feed (with optional tag filter)
+// ============================================================================
+
+/**
+ * Escape XML special characters for RSS content
+ */
+function escapeXml(text: string): string {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+}
+
+/**
+ * Format date to RFC 822 format for RSS pubDate
+ */
+function toRfc822Date(isoDate: string): string {
+    const date = new Date(isoDate);
+    return date.toUTCString();
+}
+
+/**
+ * Build RSS 2.0 feed XML
+ */
+function buildRssFeed(
+    episodes: EpisodeIndexEntry[],
+    tagFilter: string | undefined,
+    baseUrl: string
+): string {
+    const feedTitle = tagFilter
+        ? `TL;DL - ${tagFilter} episodes`
+        : "TL;DL - Too Long Didn't Listen";
+    const feedDescription = tagFilter
+        ? `AI-generated podcast summaries tagged with "${tagFilter}"`
+        : "AI-generated podcast summaries from Apple Podcasts";
+    const feedLink = tagFilter
+        ? `${baseUrl}/?tag=${encodeURIComponent(tagFilter)}`
+        : baseUrl;
+    const selfLink = tagFilter
+        ? `${baseUrl}/feed?tag=${encodeURIComponent(tagFilter)}`
+        : `${baseUrl}/feed`;
+
+    const items = episodes.map((ep) => {
+        const itemLink = `${baseUrl}/episode/${ep.id}`;
+        const categories = ep.tags
+            ? ep.tags.map((tag) => `        <category>${escapeXml(tag)}</category>`).join("\n")
+            : "";
+
+        return `    <item>
+      <title>${escapeXml(ep.episodeTitle)}</title>
+      <link>${itemLink}</link>
+      <guid isPermaLink="true">${itemLink}</guid>
+      <pubDate>${toRfc822Date(ep.createdAt)}</pubDate>
+      <description>${escapeXml(ep.podcastName)} • ${formatDuration(ep.episodeDuration)}</description>
+      <source url="${baseUrl}/feed">${escapeXml(ep.podcastName)}</source>
+${categories}
+    </item>`;
+    }).join("\n");
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${escapeXml(feedTitle)}</title>
+    <link>${feedLink}</link>
+    <description>${escapeXml(feedDescription)}</description>
+    <language>en-us</language>
+    <lastBuildDate>${toRfc822Date(new Date().toISOString())}</lastBuildDate>
+    <atom:link href="${selfLink}" rel="self" type="application/rss+xml"/>
+${items}
+  </channel>
+</rss>`;
+}
+
+publicRoutes.get("/feed", async (c) => {
+    const tagFilter = c.req.query("tag") || "";
+
+    // Validate tag if provided
+    if (tagFilter && !isValidTag(tagFilter)) {
+        return c.text("Invalid tag", 400);
+    }
+
+    // Get episodes (up to 50 for the feed)
+    const { episodes } = await listEpisodes(c.env.TLDL_DATA, {
+        pageSize: 50,
+        tag: tagFilter || undefined,
+    });
+
+    // Build the base URL from the request
+    const url = new URL(c.req.url);
+    const baseUrl = `${url.protocol}//${url.host}`;
+
+    // Generate RSS feed
+    const xml = buildRssFeed(episodes, tagFilter || undefined, baseUrl);
+
+    // Return with proper content type and caching (1 hour cache)
+    return c.text(xml, {
+        headers: {
+            "Content-Type": "application/rss+xml; charset=utf-8",
+            "Cache-Control": "public, max-age=3600",
+        },
+    });
+});
 
 export default publicRoutes;
