@@ -735,38 +735,4 @@ authenticated.post("/job/:jobId/retry", async (c, next) => {
     return c.json(response);
 });
 
-// ============================================================================
-// POST /admin/migrate-episodes - One-time migration to set submittedBy
-// ============================================================================
-
-authenticated.post("/admin/migrate-episodes", async (c) => {
-    // Auth check
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!userEmail) {
-        return c.json({ error: "No user email found" }, 400);
-    }
-
-    // Get all episodes
-    const prefix = "episode:";
-    const keys = await c.env.TLDL_DATA.list({ prefix });
-
-    let updated = 0;
-    for (const key of keys.keys) {
-        const data = await c.env.TLDL_DATA.get(key.name);
-        if (!data) continue;
-
-        const episode = JSON.parse(data);
-        if (!episode.submittedBy) {
-            episode.submittedBy = userEmail;
-            await c.env.TLDL_DATA.put(key.name, JSON.stringify(episode));
-            updated++;
-        }
-    }
-
-    return c.json({ success: true, updated, total: keys.keys.length });
-});
-
 export default authenticated;
