@@ -70,20 +70,16 @@ You need to protect only specific paths. In the application settings:
 1. Click **Add public hostname** or edit the existing one
 2. Set the **Path** to protect specific routes
 
-**Option A: Protect specific paths (recommended)**
+**You MUST protect only specific paths:**
 
-Create multiple path rules:
+Create Access applications for these paths:
 - Path: `/submit` — Protected
+- Path: `/submit*` — Protected (catches POST too)
 - Path: `/job/*` — Protected  
 - Path: `/episode/*/regenerate` — Protected
+- Path: `/episode/*/delete` — Protected
 
-**Option B: Use a simpler approach**
-
-If path-based rules are complex, you can:
-1. Protect the entire Worker
-2. The app's code already allows public routes to work without JWT
-
-Since TLDL's code checks for the `Cf-Access-Jwt-Assertion` header only on authenticated routes, protecting the entire Worker is fine — public routes will still work.
+> ⚠️ **Important**: Do NOT protect the entire Worker! Cloudflare Access intercepts requests *before* they reach your code, so protecting everything would show the login page even for public routes like the home page.
 
 ---
 
