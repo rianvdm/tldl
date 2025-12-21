@@ -7,6 +7,7 @@ Paste an Apple Podcasts episode URL, get an AI-generated summary. Transcripts an
 ## Features
 
 - **Automatic transcription** — Uses existing transcripts from RSS feeds, or falls back to OpenAI Whisper
+- **AI-powered tagging** — Episodes automatically tagged with 1-4 relevant topics for easy filtering
 - **Smart episode matching** — Multi-strategy matching handles various podcast feed formats
 - **Large file support** — Audio files >25MB are automatically chunked at MP3 frame boundaries
 - **Three summary templates** — Key Takeaways, Narrative Summary, or ELI5
@@ -23,7 +24,8 @@ Paste an Apple Podcasts episode URL, get an AI-generated summary. Transcripts an
 | Storage | Cloudflare Workers KV + Durable Objects |
 | Podcast Metadata | [Podcast Index API](https://podcastindex.org) |
 | Transcription | OpenAI Whisper API |
-| Summarization | OpenAI GPT-5.2 |
+| Summarization | OpenAI GPT-4o |
+| Tag Generation | OpenAI GPT-5.2 Responses API |
 | Authentication | Cloudflare Access (Email OTP) |
 
 ## Quick Start
@@ -90,7 +92,8 @@ tldl/
 │   │   ├── podcast-index.ts     # Podcast Index API client
 │   │   ├── rss.ts               # RSS feed parsing + episode matching
 │   │   ├── transcription.ts     # OpenAI Whisper integration
-│   │   ├── summarization.ts     # OpenAI GPT integration
+│   │   ├── summarization.ts     # OpenAI GPT-4o integration
+│   │   ├── tag-generation.ts    # OpenAI GPT-5.2 for episode tags
 │   │   └── pdf.ts               # PDF generation with jsPDF
 │   ├── queue/
 │   │   └── consumer.ts          # Background job processor
@@ -99,7 +102,7 @@ tldl/
 │   └── lib/
 │       ├── kv.ts                # KV storage helpers
 │       ├── audio.ts             # MP3 chunking for large files
-│       ├── constants.ts         # Summary templates
+│       ├── constants.ts         # Summary templates + episode tags
 │       └── errors.ts            # Error types and messages
 ├── test/                        # Vitest tests (mirrors src/ structure)
 ├── public/
@@ -149,12 +152,23 @@ To protect the submit functionality:
 | **Narrative Summary** | Story-driven/interview podcasts | Flowing prose capturing the arc |
 | **ELI5** | Technical topics | Simple language with analogies |
 
+## Episode Tags
+
+Episodes are automatically tagged with 1-4 relevant topics from a predefined list:
+
+**Available Tags:** business, creativity, education, faith, health, music, politics, product, psychology, science, sport, technology
+
+- Tags generated automatically during episode processing using GPT-5.2
+- Filter episodes by tag on the home page (`/?tag=tagname`)
+- Admin users can manually edit tags via profile page
+- Easy to add/remove tags by editing `EPISODE_TAGS` in `src/lib/constants.ts`
+
 ## API Endpoints
 
 ### Public (no auth)
 
-- `GET /` — Episode list page
-- `GET /episode/:id` — Episode detail with summary
+- `GET /` — Episode list page (supports `?tag=tagname` filtering)
+- `GET /episode/:id` — Episode detail with summary and tags
 - `GET /episode/:id/pdf` — Download PDF
 - `GET /api/episodes` — JSON episode list
 - `GET /api/episode/:id` — JSON episode detail
@@ -166,6 +180,15 @@ To protect the submit functionality:
 - `POST /episode/:id/regenerate` — Regenerate with different template
 - `DELETE /episode/:id` — Delete episode and all data
 - `POST /job/:id/retry` — Retry failed job
+
+### Admin Only (under `/profile/*`)
+
+- `POST /profile/update-tags/:id` — Update episode tags
+- `POST /profile/backfill-tags` — Generate tags for episodes without them
+- `POST /profile/cleanup-invalid-tags` — Remove tags no longer in EPISODE_TAGS
+- `POST /profile/rebuild-index` — Rebuild episode index
+
+> **Note:** Admin endpoints must be under `/profile/*` to work with Cloudflare Access configuration
 
 ## Maintenance Mode
 
