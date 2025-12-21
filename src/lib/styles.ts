@@ -21,6 +21,8 @@ export const CSS = `/**
     --muted-foreground: #a3a3a3;
     --accent: #262626;
     --accent-foreground: #fafafa;
+    --accent-red: #e63946;
+    --accent-red-hover: #d62839;
     --border: #262626;
     --primary: #fafafa;
     --primary-foreground: #171717;
@@ -103,7 +105,7 @@ a {
 }
 
 .nav-link:hover {
-    color: var(--foreground);
+    color: var(--accent-red);
 }
 
 .main {
@@ -153,6 +155,10 @@ h4 {
     color: var(--muted-foreground);
 }
 
+.text-accent {
+    color: var(--accent-red);
+}
+
 /* ============================================================================
    Intro Section
    ============================================================================ */
@@ -163,7 +169,7 @@ h4 {
     background: linear-gradient(135deg, rgba(38, 38, 38, 0.5) 0%, rgba(23, 23, 23, 0.8) 100%);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    border-left: 3px solid var(--muted-foreground);
+    border-left: 3px solid var(--accent-red);
 }
 
 .intro-section p {
@@ -245,7 +251,7 @@ h4 {
 
 .episode-card:hover .episode-card-arrow {
     color: var(--foreground);
-    background-color: var(--muted);
+    background-color: var(--accent-red);
 }
 
 .episode-podcast {
@@ -371,14 +377,25 @@ h4 {
 }
 
 .button-primary {
-    background-color: var(--primary);
-    color: var(--primary-foreground);
-    border-color: var(--primary);
+    background-color: var(--accent-red);
+    color: white;
+    border-color: var(--accent-red);
 }
 
 .button-primary:hover {
-    background-color: #e5e5e5;
-    border-color: #e5e5e5;
+    background-color: var(--accent-red-hover);
+    border-color: var(--accent-red-hover);
+}
+
+.button-accent {
+    background-color: var(--accent-red);
+    color: white;
+    border-color: var(--accent-red);
+}
+
+.button-accent:hover {
+    background-color: var(--accent-red-hover);
+    border-color: var(--accent-red-hover);
 }
 
 /* ============================================================================
@@ -440,6 +457,7 @@ h4 {
 .tab-active {
     background-color: var(--card);
     color: var(--foreground);
+    box-shadow: inset 0 -2px 0 var(--accent-red);
 }
 
 /* ============================================================================
@@ -766,8 +784,8 @@ h4 {
 
 .form-input:focus {
     outline: none;
-    border-color: var(--muted-foreground);
-    box-shadow: 0 0 0 3px rgba(250, 250, 250, 0.1);
+    border-color: var(--accent-red);
+    box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.15);
 }
 
 .form-hint {
@@ -839,8 +857,8 @@ h4 {
 
 .search-input:focus {
     outline: none;
-    border-color: var(--muted-foreground);
-    box-shadow: 0 0 0 3px rgba(250, 250, 250, 0.1);
+    border-color: var(--accent-red);
+    box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.15);
 }
 
 .search-clear {
@@ -990,7 +1008,7 @@ h4 {
 
 .progress-fill {
     height: 100%;
-    background-color: var(--primary);
+    background-color: var(--accent-red);
     border-radius: 9999px;
     transition: width 0.5s ease;
 }

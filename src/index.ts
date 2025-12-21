@@ -343,7 +343,7 @@ function ErrorPage(props: { title: string; message: string; showRetry: boolean }
             <body>
                 <div class="container">
                     <nav class="nav">
-                        <a href="/" class="nav-brand">TL;DL</a>
+                        <a href="/" class="nav-brand">TL;D<span class="text-accent">L</span></a>
                         <span class="nav-tagline">Too Long Didn't Listen</span>
                     </nav>
                     <main class="main">
