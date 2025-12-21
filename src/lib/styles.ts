@@ -715,6 +715,17 @@ h4 {
     .button {
         width: 100%;
     }
+
+    .episode-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 1rem;
+    }
+
+    .episode-card .button {
+        width: auto;
+        align-self: flex-start;
+    }
 }
 
 /* ============================================================================
