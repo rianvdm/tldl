@@ -788,6 +788,83 @@ h4 {
 }
 
 /* ============================================================================
+   Search Form
+   ============================================================================ */
+
+.search-form {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.search-input-wrapper {
+    position: relative;
+    flex: 1;
+}
+
+.search-icon {
+    position: absolute;
+    left: 0.875rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted-foreground);
+    pointer-events: none;
+}
+
+.search-input {
+    width: 100%;
+    padding: 0.75rem 1rem 0.75rem 2.75rem;
+    font-size: 0.875rem;
+    background-color: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.search-input::placeholder {
+    color: var(--muted-foreground);
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: var(--muted-foreground);
+    box-shadow: 0 0 0 3px rgba(250, 250, 250, 0.1);
+}
+
+.search-clear {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 1.25rem;
+    height: 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-foreground);
+    font-size: 1.25rem;
+    line-height: 1;
+    border-radius: 50%;
+    transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.search-clear:hover {
+    color: var(--foreground);
+    background-color: var(--muted);
+}
+
+@media (max-width: 640px) {
+    .search-form {
+        flex-direction: column;
+    }
+
+    .search-form .button {
+        width: 100%;
+    }
+}
+
+/* ============================================================================
    Radio Group
    ============================================================================ */
 

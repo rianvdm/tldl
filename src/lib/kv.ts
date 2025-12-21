@@ -3,7 +3,7 @@
  * Provides typed helpers for all KV operations with consistent key schemas and TTLs.
  */
 
-import type { Job, JobStatus, Episode, Transcript, Summary } from "../types";
+import type { Job, JobStatus, Episode, Transcript, Summary, EpisodeIndexEntry } from "../types";
 
 // Key generation functions for consistent naming
 export const KV_KEYS = {
@@ -12,6 +12,7 @@ export const KV_KEYS = {
     transcript: (episodeId: string) => `transcript:${episodeId}`,
     summary: (episodeId: string, templateId: string) =>
         `summary:${episodeId}:${templateId}`,
+    episodeIndex: "episodes:index",
 };
 
 // TTL constants in seconds
@@ -161,6 +162,9 @@ export async function deleteEpisode(
     const summaryKeys = await kv.list({ prefix: summaryPrefix });
 
     await Promise.all(summaryKeys.keys.map((key) => kv.delete(key.name)));
+
+    // Remove from the episode index
+    await removeFromEpisodeIndex(kv, episodeId);
 }
 
 /**
@@ -195,7 +199,7 @@ export async function listEpisodesByUser(
 }
 
 export interface PaginatedEpisodes {
-    episodes: Episode[];
+    episodes: EpisodeIndexEntry[];
     total: number;
     page: number;
     pageSize: number;
@@ -203,24 +207,133 @@ export interface PaginatedEpisodes {
 }
 
 /**
- * List all episodes, sorted by createdAt descending (most recent first)
- * Supports pagination with page number and page size
+ * List episodes using the index (O(1) KV read instead of N reads)
+ * Supports pagination and optional search query
+ * Auto-rebuilds index if empty but episodes exist (migration fallback)
  */
 export async function listEpisodes(
     kv: KVNamespace,
-    options?: { page?: number; pageSize?: number }
+    options?: { page?: number; pageSize?: number; search?: string }
 ): Promise<PaginatedEpisodes> {
     const page = Math.max(1, options?.page ?? 1);
     const pageSize = options?.pageSize ?? 10;
-    
+    const search = options?.search?.toLowerCase().trim();
+
+    // Read the episode index (single KV read)
+    let index = await getEpisodeIndex(kv);
+
+    // Fallback: if index is empty, check if episodes exist and rebuild
+    if (index.length === 0) {
+        const episodeKeys = await kv.list({ prefix: "episode:" });
+        if (episodeKeys.keys.length > 0) {
+            // Episodes exist but index doesn't - rebuild it
+            console.log(JSON.stringify({
+                event: "episode_index_auto_rebuild",
+                episodeCount: episodeKeys.keys.length,
+            }));
+            await rebuildEpisodeIndex(kv);
+            index = await getEpisodeIndex(kv);
+        }
+    }
+
+    if (index.length === 0) {
+        return { episodes: [], total: 0, page, pageSize, totalPages: 0 };
+    }
+
+    // Filter by search query if provided
+    let filtered = index;
+    if (search) {
+        filtered = index.filter(
+            (ep) =>
+                ep.podcastName.toLowerCase().includes(search) ||
+                ep.episodeTitle.toLowerCase().includes(search)
+        );
+    }
+
+    const total = filtered.length;
+    const totalPages = Math.ceil(total / pageSize);
+    const start = (page - 1) * pageSize;
+    const episodes = filtered.slice(start, start + pageSize);
+
+    return { episodes, total, page, pageSize, totalPages };
+}
+
+// ============================================================================
+// Episode Index Operations
+// ============================================================================
+
+/**
+ * Get the episode index (lightweight entries for home page listing)
+ * Returns sorted array (most recent first)
+ */
+export async function getEpisodeIndex(
+    kv: KVNamespace
+): Promise<EpisodeIndexEntry[]> {
+    const data = await kv.get(KV_KEYS.episodeIndex);
+    if (!data) return [];
+    return JSON.parse(data) as EpisodeIndexEntry[];
+}
+
+/**
+ * Add an episode to the index (called when episode is saved)
+ * Maintains sorted order by createdAt descending
+ */
+export async function addToEpisodeIndex(
+    kv: KVNamespace,
+    entry: EpisodeIndexEntry
+): Promise<void> {
+    const index = await getEpisodeIndex(kv);
+
+    // Check if episode already exists (update case)
+    const existingIdx = index.findIndex((e) => e.id === entry.id);
+    if (existingIdx !== -1) {
+        index.splice(existingIdx, 1);
+    }
+
+    // Add new entry and sort by createdAt descending
+    index.push(entry);
+    index.sort(
+        (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    await kv.put(KV_KEYS.episodeIndex, JSON.stringify(index), {
+        expirationTtl: TTL.CONTENT,
+    });
+}
+
+/**
+ * Remove an episode from the index (called when episode is deleted)
+ */
+export async function removeFromEpisodeIndex(
+    kv: KVNamespace,
+    episodeId: string
+): Promise<void> {
+    const index = await getEpisodeIndex(kv);
+    const filtered = index.filter((e) => e.id !== episodeId);
+
+    // Only write if something was removed
+    if (filtered.length !== index.length) {
+        await kv.put(KV_KEYS.episodeIndex, JSON.stringify(filtered), {
+            expirationTtl: TTL.CONTENT,
+        });
+    }
+}
+
+/**
+ * Rebuild the episode index from all existing episodes
+ * Used for one-time backfill or recovery
+ */
+export async function rebuildEpisodeIndex(kv: KVNamespace): Promise<number> {
     const prefix = "episode:";
     const keys = await kv.list({ prefix });
 
     if (keys.keys.length === 0) {
-        return { episodes: [], total: 0, page, pageSize, totalPages: 0 };
+        await kv.delete(KV_KEYS.episodeIndex);
+        return 0;
     }
 
-    // Batch fetch all episode values
+    // Fetch all episodes
     const allEpisodes = await Promise.all(
         keys.keys.map(async (key) => {
             const data = await kv.get(key.name);
@@ -229,20 +342,28 @@ export async function listEpisodes(
         })
     );
 
-    // Filter out nulls and sort by createdAt descending
-    const sorted = allEpisodes
+    // Build index entries and sort
+    const index: EpisodeIndexEntry[] = allEpisodes
         .filter((ep): ep is Episode => ep !== null)
+        .map((ep) => ({
+            id: ep.id,
+            podcastName: ep.podcastName,
+            episodeTitle: ep.episodeTitle,
+            episodeDate: ep.episodeDate,
+            episodeDuration: ep.episodeDuration,
+            createdAt: ep.createdAt,
+            expiresAt: ep.expiresAt,
+        }))
         .sort(
             (a, b) =>
                 new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
-    
-    const total = sorted.length;
-    const totalPages = Math.ceil(total / pageSize);
-    const start = (page - 1) * pageSize;
-    const episodes = sorted.slice(start, start + pageSize);
-    
-    return { episodes, total, page, pageSize, totalPages };
+
+    await kv.put(KV_KEYS.episodeIndex, JSON.stringify(index), {
+        expirationTtl: TTL.CONTENT,
+    });
+
+    return index.length;
 }
 
 // ============================================================================

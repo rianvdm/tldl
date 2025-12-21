@@ -5,7 +5,7 @@
  */
 
 import { Hono } from "hono";
-import type { HonoEnv, Job } from "../types";
+import type { HonoEnv, Job, EpisodeIndexEntry } from "../types";
 import {
     createJob,
     updateJobStatus,
@@ -16,6 +16,7 @@ import {
     listEpisodesByUser,
     listEpisodes,
     listSummariesForEpisode,
+    rebuildEpisodeIndex,
 } from "../lib/kv";
 import {
     createJobDO,
@@ -190,6 +191,36 @@ function formatDate(dateString: string): string {
 // escapeHtml imported from ../lib/auth
 
 // ============================================================================
+// POST /profile/rebuild-index - Admin-only: Rebuild episode index
+// ============================================================================
+
+authenticated.post("/profile/rebuild-index", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    // Admin-only check
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    try {
+        const count = await rebuildEpisodeIndex(c.env.TLDL_DATA);
+        return c.json({
+            success: true,
+            message: "Episode index rebuilt successfully",
+            episodeCount: count,
+        });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
+});
+
+// ============================================================================
 // GET /profile - User Profile Page (shows submitted episodes with delete)
 // ============================================================================
 
@@ -207,7 +238,8 @@ authenticated.get("/profile", async (c) => {
     const pageSize = 10;
 
     // Get episodes - admin sees all (paginated), regular users see only their own
-    let episodes: import("../types").Episode[];
+    // Both EpisodeIndexEntry and Episode have the properties we need for display
+    let episodes: EpisodeIndexEntry[];
     let totalPages = 1;
 
     if (isAdmin) {
@@ -215,6 +247,7 @@ authenticated.get("/profile", async (c) => {
         episodes = result.episodes;
         totalPages = result.totalPages;
     } else {
+        // listEpisodesByUser returns Episode[], which extends EpisodeIndexEntry
         episodes = await listEpisodesByUser(c.env.TLDL_DATA, userEmail);
     }
 
@@ -308,6 +341,28 @@ authenticated.get("/profile", async (c) => {
             `}
         </section>
 
+        ${isAdmin ? `
+        <div class="divider"></div>
+        <section class="section">
+            <h2>Admin Tools</h2>
+            <div class="admin-tools">
+                <div class="admin-tool-item">
+                    <p class="text-muted">Rebuild the episode index (use after database changes or if home page is empty)</p>
+                    <button type="button" class="button" id="rebuild-index-btn" onclick="rebuildIndex()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                            <path d="M3 3v5h5"/>
+                            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+                            <path d="M16 21h5v-5"/>
+                        </svg>
+                        Rebuild Episode Index
+                    </button>
+                    <div id="rebuild-result" class="alert alert-success" style="display: none; margin-top: 1rem;"></div>
+                </div>
+            </div>
+        </section>
+        ` : ""}
+
         <div id="delete-modal" class="modal" style="display: none;">
             <div class="modal-backdrop" onclick="hideDeleteModal()"></div>
             <div class="modal-content">
@@ -356,6 +411,37 @@ authenticated.get("/profile", async (c) => {
                 } catch (err) {
                     alert('Failed to delete episode');
                 }
+            }
+
+            async function rebuildIndex() {
+                const btn = document.getElementById('rebuild-index-btn');
+                const result = document.getElementById('rebuild-result');
+                btn.disabled = true;
+                btn.textContent = 'Rebuilding...';
+                result.style.display = 'none';
+                
+                try {
+                    const response = await fetch('/profile/rebuild-index', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include'
+                    });
+                    const data = await response.json();
+                    if (response.ok) {
+                        result.className = 'alert alert-success';
+                        result.textContent = 'Index rebuilt successfully! ' + data.episodeCount + ' episodes indexed.';
+                    } else {
+                        result.className = 'alert alert-error';
+                        result.textContent = 'Failed: ' + (data.error || 'Unknown error');
+                    }
+                } catch (err) {
+                    result.className = 'alert alert-error';
+                    result.textContent = 'Failed to rebuild index';
+                }
+                
+                result.style.display = 'block';
+                btn.disabled = false;
+                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg> Rebuild Episode Index';
             }
         </script>
     `;

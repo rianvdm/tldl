@@ -15,6 +15,7 @@ import {
     saveSummary,
     getSummary,
     listSummariesForEpisode,
+    rebuildEpisodeIndex,
 } from "../src/lib/kv";
 import type { Job, Episode, Transcript, Summary } from "../src/types";
 
@@ -167,7 +168,7 @@ describe("Job Operations", () => {
 
 describe("Episode Operations", () => {
     beforeEach(async () => {
-        // Clear any existing test data
+        // Clear any existing test data including the episode index
         const episodeKeys = await env.TLDL_DATA.list({ prefix: "episode:" });
         const transcriptKeys = await env.TLDL_DATA.list({ prefix: "transcript:" });
         const summaryKeys = await env.TLDL_DATA.list({ prefix: "summary:" });
@@ -175,6 +176,7 @@ describe("Episode Operations", () => {
             ...episodeKeys.keys.map((k) => env.TLDL_DATA.delete(k.name)),
             ...transcriptKeys.keys.map((k) => env.TLDL_DATA.delete(k.name)),
             ...summaryKeys.keys.map((k) => env.TLDL_DATA.delete(k.name)),
+            env.TLDL_DATA.delete(KV_KEYS.episodeIndex),
         ]);
     });
 
@@ -252,6 +254,9 @@ describe("Episode Operations", () => {
         await saveEpisode(env.TLDL_DATA, older);
         await saveEpisode(env.TLDL_DATA, newest);
         await saveEpisode(env.TLDL_DATA, newer);
+
+        // Rebuild index from saved episodes (simulating what queue consumer does)
+        await rebuildEpisodeIndex(env.TLDL_DATA);
 
         const result = await listEpisodes(env.TLDL_DATA);
 

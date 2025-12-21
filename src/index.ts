@@ -5,6 +5,7 @@ import { parseApplePodcastsUrl, deriveEpisodeId } from "./lib/url-parser";
 import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
+import { rebuildEpisodeIndex } from "./lib/kv";
 import { CSS } from "./lib/styles";
 import { APPLE_PODCASTS_BADGE, FAVICON_SVG } from "./lib/assets";
 import { AppError, logError } from "./lib/errors";
@@ -207,6 +208,32 @@ if (MAINTENANCE_MODE) {
                 template,
                 summaryLength: result.text.length,
                 summary: result.text,
+            });
+        } catch (error) {
+            return c.json({
+                success: false,
+                error: error instanceof Error ? error.message : "Unknown error",
+            }, 500);
+        }
+    });
+
+    // Debug route for rebuilding episode index (one-time migration)
+    app.post("/debug/rebuild-index", async (c) => {
+        // Only allow in development or with proper auth
+        if (c.env.ENVIRONMENT !== "development") {
+            // Check for admin auth header or Cloudflare Access JWT
+            const cfAccessJwt = c.req.header("Cf-Access-Jwt-Assertion");
+            if (!cfAccessJwt) {
+                return c.json({ error: "Unauthorized" }, 401);
+            }
+        }
+
+        try {
+            const count = await rebuildEpisodeIndex(c.env.TLDL_DATA);
+            return c.json({
+                success: true,
+                message: `Episode index rebuilt successfully`,
+                episodeCount: count,
             });
         } catch (error) {
             return c.json({

@@ -21,6 +21,7 @@ import {
     getTranscript,
     saveTranscript,
     saveSummary,
+    addToEpisodeIndex,
 } from "../lib/kv";
 import {
     updateJobStatusDO,
@@ -133,7 +134,7 @@ const queueHandler = {
                     // Determine retry delay - use longer delay for rate limits
                     const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
                     const delaySeconds = isRateLimited ? 15 : 5; // 15s for rate limit, 5s for other errors
-                    
+
                     console.log(
                         JSON.stringify({
                             event: "job_retry",
@@ -372,6 +373,17 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             submittedBy,
         };
         await saveEpisode(kv, episode);
+
+        // Add to episode index for efficient home page listing
+        await addToEpisodeIndex(kv, {
+            id: episode.id,
+            podcastName: episode.podcastName,
+            episodeTitle: episode.episodeTitle,
+            episodeDate: episode.episodeDate,
+            episodeDuration: episode.episodeDuration,
+            createdAt: episode.createdAt,
+            expiresAt: episode.expiresAt,
+        });
     }
 
     // Step 6: Mark job as completed

@@ -5,7 +5,7 @@
 
 import { Hono } from "hono";
 import { html, raw } from "hono/html";
-import type { HonoEnv, Episode, Job, JobStatus } from "../types";
+import type { HonoEnv, EpisodeIndexEntry, Job, JobStatus } from "../types";
 import {
     listEpisodes,
     listActiveJobs,
@@ -201,7 +201,7 @@ function Layout(props: { title: string; children: string }) {
 // ============================================================================
 
 function EpisodeCard(
-    episode: Episode,
+    episode: EpisodeIndexEntry,
     summaryTemplates: string[]
 ): string {
     const templateBadges = summaryTemplates
@@ -280,15 +280,16 @@ function InProgressCard(job: Job): string {
 // ============================================================================
 
 publicRoutes.get("/", async (c) => {
-    // Parse page query param (default to 1)
+    // Parse query params
     const pageParam = c.req.query("page");
     const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
     const pageSize = 10;
+    const search = c.req.query("q") || "";
 
     // Fetch both active jobs and completed episodes
     const [activeJobs, paginatedEpisodes] = await Promise.all([
         listActiveJobs(c.env.TLDL_DATA),
-        listEpisodes(c.env.TLDL_DATA, { page, pageSize }),
+        listEpisodes(c.env.TLDL_DATA, { page, pageSize, search: search || undefined }),
     ]);
 
     const { episodes, totalPages } = paginatedEpisodes;
@@ -327,7 +328,7 @@ publicRoutes.get("/", async (c) => {
     `;
 
     const content =
-        episodes.length > 0 || activeJobs.length > 0
+        episodes.length > 0 || activeJobs.length > 0 || search
             ? `
         ${introSection}
         <div class="page-header-with-action">
@@ -342,6 +343,22 @@ publicRoutes.get("/", async (c) => {
                 Submit Episode
             </a>
         </div>
+        <form method="GET" action="/" class="search-form">
+            <div class="search-input-wrapper">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                </svg>
+                <input type="text" name="q" value="${escapeHtml(search)}" placeholder="Search podcasts or episodes..." class="search-input" id="search-input">
+                ${search ? `<a href="/" class="search-clear" title="Clear search">×</a>` : ""}
+            </div>
+            <button type="submit" class="button">Search</button>
+        </form>
+        ${search && episodes.length === 0 ? `
+        <div class="empty-state">
+            <p>No episodes found matching "${escapeHtml(search)}"</p>
+            <a href="/" class="button">Clear Search</a>
+        </div>
+        ` : ""}
         ${inProgressSection}
         ${episodes.length > 0 ? `
         <div class="episode-list">
@@ -350,7 +367,7 @@ publicRoutes.get("/", async (c) => {
         ${totalPages > 1 ? `
         <nav class="pagination" aria-label="Episode pagination">
             ${page > 1 ? `
-            <a href="/?page=${page - 1}" class="pagination-link pagination-prev">
+            <a href="/?page=${page - 1}${search ? `&q=${encodeURIComponent(search)}` : ""}" class="pagination-link pagination-prev">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m15 18-6-6 6-6"/>
                 </svg>
@@ -364,7 +381,7 @@ publicRoutes.get("/", async (c) => {
             </span>`}
             <span class="pagination-info">Page ${page} of ${totalPages}</span>
             ${page < totalPages ? `
-            <a href="/?page=${page + 1}" class="pagination-link pagination-next">
+            <a href="/?page=${page + 1}${search ? `&q=${encodeURIComponent(search)}` : ""}" class="pagination-link pagination-next">
                 Next
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m9 18 6-6-6-6"/>

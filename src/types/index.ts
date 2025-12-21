@@ -56,6 +56,21 @@ export interface Episode {
 }
 
 /**
+ * Episode index entry - lightweight data for home page listing
+ * Stored as array in KV with key: episodes:index
+ * TTL: 365 days (refreshed when index is updated)
+ */
+export interface EpisodeIndexEntry {
+    id: string;
+    podcastName: string;
+    episodeTitle: string;
+    episodeDate: string;
+    episodeDuration: number;
+    createdAt: string;
+    expiresAt: string;
+}
+
+/**
  * Transcript record - the full text transcript of an episode
  * Stored in KV with key: transcript:{episode_id}
  * TTL: 365 days
