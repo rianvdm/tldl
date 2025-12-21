@@ -29,6 +29,7 @@ import {
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
+import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
 
 const authenticated = new Hono<HonoEnv>();
 
@@ -88,19 +89,6 @@ function setRateLimitHeaders(
 // ============================================================================
 // Middleware - Auth Check
 // ============================================================================
-
-/**
- * Extract user email from Cloudflare Access JWT.
- * CF Access validates the signature, we just decode the payload.
- */
-function getUserEmailFromJwt(jwt: string): string | null {
-    try {
-        const payload = JSON.parse(atob(jwt.split(".")[1]));
-        return payload.email || null;
-    } catch {
-        return null;
-    }
-}
 
 /**
  * Auth check helper - validates JWT and extracts user email.
@@ -205,14 +193,7 @@ function formatDate(dateString: string): string {
     }).format(date);
 }
 
-function escapeHtml(text: string): string {
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
+// escapeHtml imported from ../lib/auth
 
 // ============================================================================
 // GET /profile - User Profile Page (shows submitted episodes with delete)
@@ -688,6 +669,12 @@ authenticated.delete("/episode/:episodeId", async (c) => {
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
         return c.json({ error: "Episode not found" }, 404);
+    }
+
+    // Verify user owns this episode (authorization check)
+    const userEmail = c.get("userEmail");
+    if (episode.submittedBy && episode.submittedBy !== userEmail) {
+        return c.json({ error: "You can only delete episodes you submitted" }, 403);
     }
 
     // Delete episode and all related data (transcript, summaries)

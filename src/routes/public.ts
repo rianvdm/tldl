@@ -25,25 +25,13 @@ import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { generateEpisodePdf } from "../services/pdf";
+import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
 
 const publicRoutes = new Hono<HonoEnv>();
 
 // ============================================================================
 // JWT Email Extraction
 // ============================================================================
-
-/**
- * Extract user email from Cloudflare Access JWT.
- * CF Access validates the signature, we just decode the payload.
- */
-function getUserEmailFromJwt(jwt: string): string | null {
-    try {
-        const payload = JSON.parse(atob(jwt.split(".")[1]));
-        return payload.email || null;
-    } catch {
-        return null;
-    }
-}
 
 /**
  * Extract user email from request (if Cloudflare Access JWT is present)
@@ -97,17 +85,7 @@ function calculateDaysRemaining(expiresAt: string): number {
     return Math.max(0, diffDays);
 }
 
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(text: string): string {
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
+// escapeHtml imported from ../lib/auth
 
 /**
  * Simple markdown to HTML converter
