@@ -186,14 +186,14 @@ h4 {
     flex-shrink: 0;
     padding: 0.5rem;
     border-radius: 50%;
-    background-color: var(--accent);
+    background-color: #2a2a2a;
     color: var(--muted-foreground);
     transition: color 0.2s ease, background-color 0.2s ease;
 }
 
 .episode-card:hover .episode-card-arrow {
     color: var(--foreground);
-    background-color: var(--muted);
+    background-color: #3a3a3a;
 }
 
 .episode-podcast {
