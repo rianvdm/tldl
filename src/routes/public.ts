@@ -128,7 +128,8 @@ function renderMarkdown(md: string): string {
     html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
 
     // Paragraphs - wrap text blocks that aren't already wrapped
-    const lines = html.split("\n\n");
+    // Split on single newlines to handle both single and double newline paragraph breaks
+    const lines = html.split("\n");
     html = lines
         .map((line) => {
             const trimmed = line.trim();
@@ -138,7 +139,8 @@ function renderMarkdown(md: string): string {
                 trimmed.startsWith("<ul") ||
                 trimmed.startsWith("<ol") ||
                 trimmed.startsWith("<pre") ||
-                trimmed.startsWith("<blockquote")
+                trimmed.startsWith("<blockquote") ||
+                trimmed.startsWith("<li")
             ) {
                 return trimmed;
             }
@@ -146,8 +148,8 @@ function renderMarkdown(md: string): string {
         })
         .join("\n");
 
-    // Clean up excessive whitespace between tags while preserving structure
-    html = html.replace(/>\s+</g, "><").replace(/\s+/g, " ").trim();
+    // Clean up excessive whitespace between tags only (don't collapse content)
+    html = html.replace(/>\s+</g, "><").trim();
 
     return html;
 }

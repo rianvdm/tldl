@@ -26,7 +26,6 @@ export const EPISODE_TAGS = [
     "creativity",
     "education",
     "health",
-    "interview",
     "politics",
     "product",
     "psychology",
