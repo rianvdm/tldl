@@ -154,15 +154,52 @@ function renderMarkdown(md: string): string {
     return html;
 }
 
+/**
+ * Extract the first sentence from text for use in meta descriptions
+ * Skips markdown headings (lines starting with #)
+ */
+function getFirstSentence(text: string, maxLength: number = 160): string {
+    if (!text) return "";
+
+    // Skip markdown headings and find the first content line
+    const lines = text.split('\n');
+    let contentText = "";
+    for (const line of lines) {
+        const trimmed = line.trim();
+        // Skip empty lines and markdown headings
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        contentText = trimmed;
+        break;
+    }
+
+    if (!contentText) return "";
+
+    // Find the first sentence-ending punctuation
+    const match = contentText.match(/^[^.!?]+[.!?]/);
+    const firstSentence = match ? match[0].trim() : contentText.substring(0, maxLength);
+
+    // Truncate if too long for meta descriptions
+    if (firstSentence.length > maxLength) {
+        return firstSentence.substring(0, maxLength - 3).trim() + "...";
+    }
+
+    return firstSentence;
+}
+
 // ============================================================================
 // Layout Component
 // ============================================================================
 
-export function Layout(props: { title: string; children: string; headExtra?: string }) {
+export function Layout(props: { title: string; children: string; headExtra?: string; description?: string }) {
     // Use custom title for home page
     const pageTitle = props.title === "Home"
         ? "TL;DL - Too Long Didn't Listen"
         : `${props.title} - TL;DL`;
+
+    // Use custom description or default
+    const defaultDescription = "AI-powered podcast summaries from Apple Podcasts URLs";
+    const metaDescription = props.description || defaultDescription;
+    const ogDescription = props.description || "Get AI summaries of podcast episodes";
 
     const ogImage = "https://file.elezea.com/tldl-hero.png";
 
@@ -177,16 +214,16 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                 <title>${pageTitle}</title>
                 <meta
                     name="description"
-                    content="AI-powered podcast summaries from Apple Podcasts URLs"
+                    content="${metaDescription}"
                 />
                 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
                 <meta property="og:title" content="${pageTitle}" />
-                <meta property="og:description" content="Get AI summaries of podcast episodes" />
+                <meta property="og:description" content="${ogDescription}" />
                 <meta property="og:type" content="website" />
                 <meta property="og:image" content="${ogImage}" />
                 <meta name="twitter:card" content="summary_large_image" />
                 <meta name="twitter:title" content="${pageTitle}" />
-                <meta name="twitter:description" content="Get AI summaries of podcast episodes" />
+                <meta name="twitter:description" content="${ogDescription}" />
                 <meta name="twitter:image" content="${ogImage}" />
                 <link rel="stylesheet" href="/styles.css" />
                 ${raw(props.headExtra || "")}
@@ -402,7 +439,7 @@ publicRoutes.get("/", async (c) => {
         ${introSection}
         <div class="page-header-with-action">
             <div class="page-header">
-                <h1>Recent Episodes</h1>
+                <h1>Recently Added Episodes</h1>
                 <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
             </div>
             <a href="/submit" class="button button-primary">
@@ -674,8 +711,8 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
                 <span class="meta-dot">•</span>
                 <div style="display: inline-flex; gap: 0.375rem;">
                     ${[...episode.tags].sort().map(tag =>
-                        `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`
-                    ).join('')}
+        `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`
+    ).join('')}
                 </div>
                 ` : ""}
             </div>
@@ -706,8 +743,13 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
         </section>
     `;
 
+    // Extract first sentence of summary for meta description
+    const episodeDescription = activeSummary
+        ? getFirstSentence(activeSummary.text)
+        : `AI-generated summary of "${episode.episodeTitle}" from ${episode.podcastName}`;
+
     return c.html(
-        Layout({ title: episode.episodeTitle, children: content })
+        Layout({ title: episode.episodeTitle, children: content, description: episodeDescription })
     );
 });
 
