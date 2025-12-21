@@ -239,7 +239,7 @@ authenticated.get("/profile", async (c) => {
         <div class="page-header">
             <h1>Your Profile</h1>
             <p class="page-subtitle">${escapeHtml(userEmail)}</p>
-            <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https://tldl.elezea.com/" class="button button-secondary">Log Out</a>
+            <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout" class="button button-secondary">Log Out</a>
         </div>
 
         <div class="divider"></div>
