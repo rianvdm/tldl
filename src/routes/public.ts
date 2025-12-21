@@ -29,6 +29,35 @@ import { generateEpisodePdf } from "../services/pdf";
 const publicRoutes = new Hono<HonoEnv>();
 
 // ============================================================================
+// JWT Email Extraction
+// ============================================================================
+
+/**
+ * Extract user email from Cloudflare Access JWT.
+ * CF Access validates the signature, we just decode the payload.
+ */
+function getUserEmailFromJwt(jwt: string): string | null {
+    try {
+        const payload = JSON.parse(atob(jwt.split(".")[1]));
+        return payload.email || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Extract user email from request (if Cloudflare Access JWT is present)
+ */
+function getUserEmail(c: import("hono").Context<HonoEnv>): string | undefined {
+    const cfAccessJwt = c.req.header("Cf-Access-Jwt-Assertion");
+    if (cfAccessJwt) {
+        const email = getUserEmailFromJwt(cfAccessJwt);
+        if (email) return email;
+    }
+    return undefined;
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -283,7 +312,7 @@ publicRoutes.get("/", async (c) => {
         listActiveJobs(c.env.TLDL_DATA),
         listEpisodes(c.env.TLDL_DATA, { page, pageSize }),
     ]);
-    
+
     const { episodes, totalPages } = paginatedEpisodes;
 
     // Build in-progress cards
@@ -397,7 +426,7 @@ publicRoutes.get("/", async (c) => {
 publicRoutes.get("/episode/:episodeId", async (c) => {
     const episodeId = c.req.param("episodeId");
     const selectedTemplate = c.req.query("template");
-    
+
     // Fetch episode
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
@@ -700,6 +729,9 @@ publicRoutes.post("/submit", async (c) => {
     await createJob(c.env.TLDL_DATA, job);
 
     // Queue the job for processing
+    // Extract user email from JWT if available (for profile page tracking)
+    const userEmail = getUserEmail(c);
+
     const message = createProcessEpisodeMessage({
         jobId,
         episodeId,
@@ -708,6 +740,7 @@ publicRoutes.post("/submit", async (c) => {
         episodeGuid: episodeInfo?.episodeGuid,
         expectedTitle: episodeInfo?.trackName,
         expectedDate: episodeInfo?.releaseDate,
+        submittedBy: userEmail,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 
@@ -902,12 +935,14 @@ publicRoutes.post("/job/:jobId/retry", async (c) => {
     await updateJobStatusDO(c.env, jobId, "queued");
     await updateJobStatus(c.env.TLDL_DATA, jobId, "queued");
 
-    // Re-queue the job
+    // Re-queue the job (include user email if available)
+    const userEmail = getUserEmail(c);
     const message = createProcessEpisodeMessage({
         jobId,
         episodeId: job.episodeId,
         appleUrl: job.appleUrl,
         templateId: job.templateId,
+        submittedBy: userEmail,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 

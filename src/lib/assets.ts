@@ -3,6 +3,14 @@
  * This allows serving assets without filesystem access in Cloudflare Workers
  */
 
+/**
+ * Favicon SVG for the TLDL application
+ */
+export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <rect width="32" height="32" rx="6" fill="#171717"/>
+  <path d="M8 10h16M8 16h12M8 22h8" stroke="#fafafa" stroke-width="2.5" stroke-linecap="round"/>
+</svg>`;
+
 export const APPLE_PODCASTS_BADGE = `<?xml version="1.0" encoding="utf-8"?>
 <svg version="1.1" id="Artwork" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
 	 width="129.155px" height="41px" viewBox="0 0 129.155 41" style="enable-background:new 0 0 129.155 41;" xml:space="preserve">

@@ -6,7 +6,7 @@ import { transcribeAudio, validateAudioUrl } from "./services/transcription";
 import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
 import { CSS } from "./lib/styles";
-import { APPLE_PODCASTS_BADGE } from "./lib/assets";
+import { APPLE_PODCASTS_BADGE, FAVICON_SVG } from "./lib/assets";
 import { AppError, logError } from "./lib/errors";
 import api from "./routes/api";
 import authenticated from "./routes/authenticated";
@@ -73,6 +73,16 @@ if (MAINTENANCE_MODE) {
     // Serve Apple Podcasts badge
     app.get("/apple-podcasts-badge.svg", () => {
         return new Response(APPLE_PODCASTS_BADGE, {
+            headers: {
+                "Content-Type": "image/svg+xml",
+                "Cache-Control": "public, max-age=86400",
+            },
+        });
+    });
+
+    // Serve favicon
+    app.get("/favicon.svg", () => {
+        return new Response(FAVICON_SVG, {
             headers: {
                 "Content-Type": "image/svg+xml",
                 "Cache-Control": "public, max-age=86400",
