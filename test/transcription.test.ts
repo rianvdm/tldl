@@ -159,6 +159,10 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
+            // Header fetch (bytes 0-511) for prepending to non-first chunks
+            .mockResolvedValueOnce(
+                new Response(new ArrayBuffer(512), { status: 206 })
+            )
             // First chunk fetch (Range request)
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 206 })

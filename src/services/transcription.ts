@@ -16,6 +16,13 @@ import {
 // Use centralized constant for Whisper size limit
 const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
 
+/**
+ * Size of audio header to prepend to non-first chunks.
+ * This ensures Whisper can recognize the audio format.
+ * 512 bytes is enough to contain MP3/AAC headers and metadata.
+ */
+const AUDIO_HEADER_SIZE_BYTES = 512;
+
 export interface TranscriptionResult {
     text: string;
     source: "openai";
@@ -366,6 +373,19 @@ async function transcribeWithChunking(
         })
     );
 
+    // Fetch audio header (first 512 bytes) to prepend to non-first chunks
+    // This ensures Whisper can recognize the audio format for all chunks
+    let audioHeader: ArrayBuffer | null = null;
+    if (totalChunks > 1) {
+        console.log(
+            JSON.stringify({
+                event: "fetching_audio_header",
+                headerSizeBytes: AUDIO_HEADER_SIZE_BYTES,
+            })
+        );
+        audioHeader = await fetchAudioChunk(audioUrl, 0, AUDIO_HEADER_SIZE_BYTES - 1);
+    }
+
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
 
@@ -394,9 +414,31 @@ async function transcribeWithChunking(
                 chunk.endByte
             );
 
+            // For non-first chunks, prepend the audio header so Whisper can recognize the format
+            let bufferToTranscribe: ArrayBuffer;
+            if (!chunk.isFirst && audioHeader) {
+                // Concatenate header + chunk data
+                const combined = new Uint8Array(audioHeader.byteLength + chunkBuffer.byteLength);
+                combined.set(new Uint8Array(audioHeader), 0);
+                combined.set(new Uint8Array(chunkBuffer), audioHeader.byteLength);
+                bufferToTranscribe = combined.buffer;
+
+                console.log(
+                    JSON.stringify({
+                        event: "header_prepended",
+                        chunkIndex: i + 1,
+                        headerBytes: audioHeader.byteLength,
+                        originalChunkBytes: chunkBuffer.byteLength,
+                        totalBytes: bufferToTranscribe.byteLength,
+                    })
+                );
+            } else {
+                bufferToTranscribe = chunkBuffer;
+            }
+
             // Transcribe the chunk
             const text = await withRetry(
-                () => callWhisperApi(chunkBuffer, openaiApiKey),
+                () => callWhisperApi(bufferToTranscribe, openaiApiKey),
                 {
                     maxRetries: 3,
                     baseDelayMs: 1000,
