@@ -30,7 +30,8 @@ import {
     createRegenerateSummaryMessage,
 } from "../lib/queue";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
-import { isValidTemplateId, RATE_LIMITS } from "../lib/constants";
+import { isValidTemplateId, RATE_LIMITS, getValidTags, validateTags } from "../lib/constants";
+import { updateEpisodeTags } from "../lib/kv";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { getUserEmailFromJwt, escapeHtml, isAdminUser } from "../lib/auth";
 
@@ -321,6 +322,35 @@ authenticated.get("/profile", async (c) => {
                             <span>${formatDuration(episode.episodeDuration)}</span>
                         </div>
                         ${templateBadges ? `<div class="episode-badges">${templateBadges}</div>` : ""}
+                        ${isAdmin ? `
+                        <div class="tag-editor" data-episode-id="${escapeHtml(episode.id)}">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <label class="form-label" style="margin: 0;">Tags:</label>
+                                <button type="button" class="button button-sm" onclick="saveTagsFor('${escapeHtml(episode.id)}')">
+                                    Save Tags
+                                </button>
+                            </div>
+                            <div class="tag-editor-tags">
+                                ${getValidTags().map(tag => {
+                                    const isSelected = episode.tags?.includes(tag);
+                                    return `<button
+                                        type="button"
+                                        class="tag-editor-badge ${isSelected ? 'selected' : ''}"
+                                        data-tag="${escapeHtml(tag)}"
+                                        onclick="toggleTag(this, '${escapeHtml(episode.id)}')"
+                                    >
+                                        ${escapeHtml(tag)}
+                                    </button>`;
+                                }).join('')}
+                            </div>
+                            <div class="tag-editor-message" id="tag-message-${escapeHtml(episode.id)}" style="display: none;"></div>
+                        </div>
+                        ` : episode.tags && episode.tags.length > 0 ? `
+                        <div style="margin-top: 0.75rem;">
+                            <span style="font-size: 0.75rem; color: var(--muted-foreground); margin-right: 0.5rem;">Tags:</span>
+                            ${episode.tags.map(tag => `<span class="badge">${escapeHtml(tag)}</span>`).join(' ')}
+                        </div>
+                        ` : ''}
                     </div>
                     <button type="button" class="button button-destructive button-sm" onclick="confirmDelete('${escapeHtml(episode.id)}', '${escapeHtml(episode.episodeTitle.replace(/'/g, "\\'"))}')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -469,6 +499,53 @@ authenticated.get("/profile", async (c) => {
                     }
                 } catch (err) {
                     alert('Failed to delete episode');
+                }
+            }
+
+            function toggleTag(button, episodeId) {
+                button.classList.toggle('selected');
+            }
+
+            async function saveTagsFor(episodeId) {
+                const editor = document.querySelector('[data-episode-id="' + episodeId + '"] .tag-editor');
+                const selectedButtons = editor.querySelectorAll('.tag-editor-badge.selected');
+                const tags = Array.from(selectedButtons).map(btn => btn.getAttribute('data-tag'));
+                const messageEl = document.getElementById('tag-message-' + episodeId);
+
+                // Validate count
+                if (tags.length < 1 || tags.length > 4) {
+                    messageEl.className = 'tag-editor-message alert-error';
+                    messageEl.textContent = 'Please select 1-4 tags (currently ' + tags.length + ' selected)';
+                    messageEl.style.display = 'block';
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/episode/' + episodeId + '/update-tags', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ tags }),
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        messageEl.className = 'tag-editor-message alert-success';
+                        messageEl.textContent = 'Tags updated successfully!';
+                        messageEl.style.display = 'block';
+                        setTimeout(() => {
+                            messageEl.style.display = 'none';
+                        }, 3000);
+                    } else {
+                        messageEl.className = 'tag-editor-message alert-error';
+                        messageEl.textContent = data.error || 'Failed to update tags';
+                        messageEl.style.display = 'block';
+                    }
+                } catch (err) {
+                    messageEl.className = 'tag-editor-message alert-error';
+                    messageEl.textContent = 'Failed to save tags';
+                    messageEl.style.display = 'block';
                 }
             }
 
@@ -746,6 +823,72 @@ authenticated.get("/job/:jobId", async (c, next) => {
     };
 
     return c.json(response);
+});
+
+// ============================================================================
+// POST /episode/:episodeId/update-tags - Update episode tags (admin only)
+// ============================================================================
+
+authenticated.post("/episode/:episodeId/update-tags", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    // Admin-only check
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    const episodeId = c.req.param("episodeId");
+
+    // Parse request body
+    let body: { tags: string[] };
+    try {
+        body = await c.req.json();
+    } catch {
+        return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    if (!Array.isArray(body.tags)) {
+        return c.json({ error: "tags must be an array" }, 400);
+    }
+
+    // Validate tags
+    const validation = validateTags(body.tags);
+    if (validation.invalid.length > 0) {
+        return c.json({
+            error: `Invalid tags: ${validation.invalid.join(', ')}`,
+            validTags: getValidTags(),
+        }, 400);
+    }
+
+    // Enforce 1-4 tags
+    if (validation.valid.length < 1 || validation.valid.length > 4) {
+        return c.json({
+            error: "Must provide between 1 and 4 tags",
+            provided: validation.valid.length,
+        }, 400);
+    }
+
+    // Verify episode exists
+    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (!episode) {
+        return c.json({ error: "Episode not found" }, 404);
+    }
+
+    // Update tags
+    try {
+        await updateEpisodeTags(c.env.TLDL_DATA, episodeId, validation.valid);
+        return c.json({
+            success: true,
+            tags: validation.valid,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to update tags",
+        }, 500);
+    }
 });
 
 // ============================================================================
