@@ -18,6 +18,15 @@ To run a single test file:
 npm test -- test/kv.test.ts
 ```
 
+## Helpful Commands
+
+Inspect raw data stored in KV (useful for debugging expiry dates, episode data, etc.):
+```bash
+npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "episode:<episodeId>"
+npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "summary:<episodeId>:<templateId>"
+npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "transcript:<episodeId>"
+```
+
 ## Architecture Overview
 
 TLDL is a Cloudflare Workers application that generates AI summaries from Apple Podcasts URLs. Built with Hono framework, Cloudflare Queues for background processing, and Durable Objects for job status consistency.

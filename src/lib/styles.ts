@@ -869,6 +869,15 @@ h4 {
         width: auto;
         align-self: flex-start;
     }
+
+    .episode-podcast {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .podcast-author-inline {
+        margin-left: 0 !important;
+    }
 }
 
 /* ============================================================================
