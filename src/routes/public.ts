@@ -120,12 +120,23 @@ function renderMarkdown(md: string): string {
     // Blockquotes
     html = html.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
 
-    // Unordered lists
-    html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
-    html = html.replace(/(<li>.*<\/li>\n?)+/g, "<ul>$&</ul>");
+    // Unordered lists - use placeholder to avoid conflicts with numbered lists
+    html = html.replace(/^- (.+)$/gm, "<__ul__>$1</__ul__>");
 
-    // Numbered lists
-    html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+    // Numbered lists - use placeholder
+    html = html.replace(/^\d+\. (.+)$/gm, "<__ol__>$1</__ol__>");
+
+    // Wrap unordered list placeholders in <ul> and convert to <li>
+    html = html.replace(/(<__ul__>.*?<\/__ul__>\n?)+/g, (match) => {
+        const items = match.replace(/<__ul__>(.*?)<\/__ul__>/g, "<li>$1</li>");
+        return `<ul>${items}</ul>`;
+    });
+
+    // Wrap numbered list placeholders in <ol> and convert to <li>
+    html = html.replace(/(<__ol__>.*?<\/__ol__>\n?)+/g, (match) => {
+        const items = match.replace(/<__ol__>(.*?)<\/__ol__>/g, "<li>$1</li>");
+        return `<ol>${items}</ol>`;
+    });
 
     // Paragraphs - wrap text blocks that aren't already wrapped
     // Split on single newlines to handle both single and double newline paragraph breaks
