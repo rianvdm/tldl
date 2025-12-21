@@ -74,6 +74,8 @@ interface ProcessingContext {
     episodeGuid?: string;
     expectedTitle?: string;
     expectedDate?: string;
+    // User who submitted the episode
+    submittedBy?: string;
 }
 
 // ============================================================================
@@ -163,6 +165,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         episodeGuid: msg.episodeGuid,
         expectedTitle: msg.expectedTitle,
         expectedDate: msg.expectedDate,
+        submittedBy: msg.submittedBy,
     };
 
     console.log(
@@ -207,7 +210,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
  * 6. Store all data
  */
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
-    const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate } = ctx;
+    const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate, submittedBy } = ctx;
     const kv = env.TLDL_DATA;
     const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 80;
 
@@ -359,6 +362,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             transcriptSource,
             createdAt: now.toISOString(),
             expiresAt: expiresAt.toISOString(),
+            submittedBy,
         };
         await saveEpisode(kv, episode);
     }

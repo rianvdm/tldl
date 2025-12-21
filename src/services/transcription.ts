@@ -5,7 +5,7 @@
  */
 
 import { AppError } from "../lib/errors";
-import { ERROR_CODES } from "../lib/constants";
+import { ERROR_CODES, TIMEOUTS } from "../lib/constants";
 import { withRetry, isTransientError } from "../lib/retry";
 import {
     calculateChunkRanges,
@@ -15,15 +15,6 @@ import {
 
 // OpenAI Whisper file size limit
 const MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
-
-// Timeout for audio HEAD requests
-const AUDIO_HEAD_TIMEOUT_MS = 10000; // 10 seconds
-
-// Timeout for audio fetch (generous for large files)
-const AUDIO_FETCH_TIMEOUT_MS = 120000; // 2 minutes
-
-// Timeout for chunk fetch (shorter since chunks are smaller)
-const CHUNK_FETCH_TIMEOUT_MS = 60000; // 1 minute
 
 export interface TranscriptionResult {
     text: string;
@@ -44,7 +35,7 @@ export interface AudioValidation {
  */
 export async function validateAudioUrl(audioUrl: string): Promise<AudioValidation> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AUDIO_HEAD_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.AUDIO_HEAD_MS);
 
     try {
         const response = await fetch(audioUrl, {
@@ -108,7 +99,7 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
  */
 async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AUDIO_FETCH_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.AUDIO_FETCH_MS);
 
     try {
         const response = await fetch(audioUrl, {
@@ -166,13 +157,57 @@ async function callWhisperApi(
     formData.append("model", "whisper-1");
     formData.append("response_format", "text");
 
-    const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${apiKey}`,
-        },
-        body: formData,
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.WHISPER_API_MS);
+
+    const startTime = Date.now();
+    console.log(
+        JSON.stringify({
+            event: "whisper_api_call_start",
+            audioSizeMB: Math.round(audioBuffer.byteLength / 1024 / 1024 * 100) / 100,
+        })
+    );
+
+    let response: Response;
+    try {
+        response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+            },
+            body: formData,
+            signal: controller.signal,
+        });
+    } catch (error) {
+        clearTimeout(timeoutId);
+        const elapsed = Date.now() - startTime;
+        
+        if (error instanceof Error && error.name === "AbortError") {
+            console.error(
+                JSON.stringify({
+                    event: "whisper_api_timeout",
+                    elapsedMs: elapsed,
+                    timeoutMs: TIMEOUTS.WHISPER_API_MS,
+                })
+            );
+            throw new AppError(
+                ERROR_CODES.TRANSCRIPTION_FAILED,
+                `Whisper API timed out after ${Math.round(elapsed / 1000)}s`,
+            );
+        }
+        
+        console.error(
+            JSON.stringify({
+                event: "whisper_api_network_error",
+                elapsedMs: elapsed,
+                error: error instanceof Error ? error.message : "Unknown error",
+            })
+        );
+        throw error;
+    }
+
+    clearTimeout(timeoutId);
+    const elapsed = Date.now() - startTime;
 
     if (!response.ok) {
         const status = response.status;
@@ -187,11 +222,27 @@ async function callWhisperApi(
 
         // Non-retryable error
         const errorText = await response.text().catch(() => "Unknown error");
+        console.error(
+            JSON.stringify({
+                event: "whisper_api_error",
+                status,
+                elapsedMs: elapsed,
+                error: errorText,
+            })
+        );
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
             `Whisper API error: ${errorText}`,
         );
     }
+
+    console.log(
+        JSON.stringify({
+            event: "whisper_api_call_complete",
+            elapsedMs: elapsed,
+            elapsedSeconds: Math.round(elapsed / 1000),
+        })
+    );
 
     // Response format is plain text when response_format=text
     return await response.text();
@@ -433,7 +484,7 @@ async function fetchAudioChunk(
     endByte: number,
 ): Promise<ArrayBuffer> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CHUNK_FETCH_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.CHUNK_FETCH_MS);
 
     try {
         const response = await fetch(audioUrl, {

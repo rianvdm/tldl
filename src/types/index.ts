@@ -52,6 +52,7 @@ export interface Episode {
     transcriptSource: TranscriptSource;
     createdAt: string;             // ISO timestamp
     expiresAt: string;             // ISO timestamp (createdAt + 365 days)
+    submittedBy?: string;          // Email of user who submitted (optional for backwards compat)
 }
 
 /**
@@ -104,6 +105,8 @@ export interface QueueMessage {
     episodeGuid?: string;
     expectedTitle?: string;
     expectedDate?: string;
+    // User who submitted the episode
+    submittedBy?: string;
 }
 
 /**

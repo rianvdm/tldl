@@ -93,6 +93,17 @@ a {
 .nav-tagline {
     font-size: 0.875rem;
     color: var(--muted-foreground);
+    flex: 1;
+}
+
+.nav-link {
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
+    transition: color 0.2s ease;
+}
+
+.nav-link:hover {
+    color: var(--foreground);
 }
 
 .main {
@@ -1119,6 +1130,76 @@ h4 {
 .apple-podcasts-badge img {
     height: 32px;
     width: auto;
+}
+
+/* ============================================================================
+   Destructive Button
+   ============================================================================ */
+
+.button-destructive {
+    background-color: var(--destructive);
+    color: white;
+    border-color: var(--destructive);
+}
+
+.button-destructive:hover {
+    background-color: #b91c1c;
+    border-color: #b91c1c;
+}
+
+.button-sm {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+}
+
+/* ============================================================================
+   Modal
+   ============================================================================ */
+
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+}
+
+.modal-content {
+    position: relative;
+    background-color: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    max-width: 400px;
+    width: 90%;
+}
+
+.modal-content h3 {
+    margin-bottom: 0.75rem;
+}
+
+.modal-content p {
+    color: var(--muted-foreground);
+    margin-bottom: 1.5rem;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: flex-end;
 }
 
 .job-id {

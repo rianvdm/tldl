@@ -20,7 +20,7 @@ import {
     getJobWithFallback,
     updateJobStatusDO,
 } from "../lib/job-status-do";
-import { getTemplate, TEMPLATES, isValidTemplateId } from "../lib/constants";
+import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
@@ -178,6 +178,7 @@ function Layout(props: { title: string; children: string }) {
                         <span class="nav-tagline"
                             >Too Long Didn't Listen</span
                         >
+                        <a href="/profile" class="nav-link">Profile</a>
                     </nav>
                     <main class="main">${raw(props.children)}</main>
                     <footer class="footer">
@@ -396,7 +397,7 @@ publicRoutes.get("/", async (c) => {
 publicRoutes.get("/episode/:episodeId", async (c) => {
     const episodeId = c.req.param("episodeId");
     const selectedTemplate = c.req.query("template");
-
+    
     // Fetch episode
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
@@ -815,7 +816,7 @@ publicRoutes.get("/job/:jobId", async (c) => {
     const jobId = c.req.param("jobId");
 
     // Use DO with fallback to KV for strongly consistent status
-    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
+    let job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
     if (!job) {
         const content = `
             <div class="error-page">
@@ -825,6 +826,29 @@ publicRoutes.get("/job/:jobId", async (c) => {
             </div>
         `;
         return c.html(Layout({ title: "Not Found", children: content }), 404);
+    }
+
+    // Check for job timeout - if job has been running for more than 20 minutes, mark as failed
+    const isInProgressStatus = job.status !== "completed" && job.status !== "failed";
+    if (isInProgressStatus) {
+        const jobAge = Date.now() - new Date(job.createdAt).getTime();
+        if (jobAge > TIMEOUTS.JOB_MS) {
+            console.log(
+                JSON.stringify({
+                    event: "job_timeout_detected",
+                    jobId,
+                    status: job.status,
+                    ageMinutes: Math.round(jobAge / 60000),
+                    createdAt: job.createdAt,
+                })
+            );
+            // Mark job as failed due to timeout
+            const timeoutError = `Job timed out after ${Math.round(jobAge / 60000)} minutes. The transcription may have stalled. Please try again.`;
+            await updateJobStatusDO(c.env, jobId, "failed", timeoutError);
+            await updateJobStatus(c.env.TLDL_DATA, jobId, "failed", timeoutError);
+            // Refresh job data
+            job = { ...job, status: "failed", error: timeoutError };
+        }
     }
 
     // Debug: log what status we're seeing

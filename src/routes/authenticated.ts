@@ -13,6 +13,8 @@ import {
     getTranscript,
     getSummary,
     deleteEpisode,
+    listEpisodesByUser,
+    listSummariesForEpisode,
 } from "../lib/kv";
 import {
     createJobDO,
@@ -182,6 +184,182 @@ interface RetryResponse {
 }
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+function formatDuration(seconds: number): string {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+}
+
+function formatDate(dateString: string): string {
+    const date = new Date(dateString);
+    return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    }).format(date);
+}
+
+function escapeHtml(text: string): string {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+// ============================================================================
+// GET /profile - User Profile Page (shows submitted episodes with delete)
+// ============================================================================
+
+authenticated.get("/profile", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail") || "Unknown User";
+
+    // Get episodes submitted by this user
+    const episodes = await listEpisodesByUser(c.env.TLDL_DATA, userEmail);
+
+    // Build episode cards with delete buttons
+    const episodeCards = await Promise.all(
+        episodes.map(async (episode) => {
+            const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episode.id);
+            const templateBadges = summaries
+                .map((s) => `<span class="badge">${escapeHtml(s.templateId)}</span>`)
+                .join("");
+
+            return `
+                <div class="episode-card" data-episode-id="${escapeHtml(episode.id)}">
+                    <div class="episode-card-content">
+                        <div class="episode-podcast">${escapeHtml(episode.podcastName)}</div>
+                        <h3 class="episode-title">
+                            <a href="/episode/${escapeHtml(episode.id)}">${escapeHtml(episode.episodeTitle)}</a>
+                        </h3>
+                        <div class="episode-meta">
+                            <span>${formatDate(episode.episodeDate)}</span>
+                            <span class="meta-dot">•</span>
+                            <span>${formatDuration(episode.episodeDuration)}</span>
+                        </div>
+                        ${templateBadges ? `<div class="episode-badges">${templateBadges}</div>` : ""}
+                    </div>
+                    <button type="button" class="button button-destructive button-sm" onclick="confirmDelete('${escapeHtml(episode.id)}', '${escapeHtml(episode.episodeTitle.replace(/'/g, "\\'"))}')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                        </svg>
+                        Delete
+                    </button>
+                </div>
+            `;
+        })
+    );
+
+    const content = `
+        <div class="page-header">
+            <h1>Your Profile</h1>
+            <p class="page-subtitle">${escapeHtml(userEmail)}</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <section class="section">
+            <h2>Your Submitted Episodes</h2>
+            ${episodes.length > 0 ? `
+                <div class="episode-list">
+                    ${episodeCards.join("")}
+                </div>
+            ` : `
+                <div class="empty-state">
+                    <p>You haven't submitted any episodes yet.</p>
+                    <a href="/submit" class="button button-primary">Submit Your First Episode</a>
+                </div>
+            `}
+        </section>
+
+        <div id="delete-modal" class="modal" style="display: none;">
+            <div class="modal-backdrop" onclick="hideDeleteModal()"></div>
+            <div class="modal-content">
+                <h3>Delete Episode?</h3>
+                <p id="delete-modal-message">This will permanently delete this episode, its transcript, and all summaries.</p>
+                <div class="modal-actions">
+                    <button type="button" class="button" onclick="hideDeleteModal()">Cancel</button>
+                    <button type="button" class="button button-destructive" id="confirm-delete-btn">Delete</button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let deleteEpisodeId = null;
+
+            function confirmDelete(episodeId, episodeTitle) {
+                deleteEpisodeId = episodeId;
+                document.getElementById('delete-modal-message').textContent = 
+                    'Delete "' + episodeTitle + '"? This will permanently delete the episode, its transcript, and all summaries.';
+                document.getElementById('delete-modal').style.display = 'flex';
+                document.getElementById('confirm-delete-btn').onclick = doDelete;
+            }
+
+            function hideDeleteModal() {
+                document.getElementById('delete-modal').style.display = 'none';
+                deleteEpisodeId = null;
+            }
+
+            async function doDelete() {
+                if (!deleteEpisodeId) return;
+                try {
+                    const response = await fetch('/episode/' + deleteEpisodeId, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    if (response.ok) {
+                        // Remove the card from the page
+                        const card = document.querySelector('[data-episode-id="' + deleteEpisodeId + '"]');
+                        if (card) card.remove();
+                        hideDeleteModal();
+                    } else {
+                        const data = await response.json();
+                        alert('Failed to delete: ' + (data.error || 'Unknown error'));
+                    }
+                } catch (err) {
+                    alert('Failed to delete episode');
+                }
+            }
+        </script>
+    `;
+
+    return c.html(`<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile - TLDL</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="container">
+        <nav class="nav">
+            <a href="/" class="nav-brand">TLDL</a>
+            <span class="nav-tagline">Too Long Didn't Listen</span>
+        </nav>
+        <main class="main">
+            ${content}
+        </main>
+        <footer class="footer">
+            <p>AI-powered podcast summaries</p>
+        </footer>
+    </div>
+</body>
+</html>`);
+});
+
+// ============================================================================
 // POST /submit - Submit new episode for processing (JSON API)
 // This only handles JSON requests; form submissions fall through to public routes
 // ============================================================================
@@ -305,6 +483,7 @@ authenticated.post("/submit", async (c, next) => {
         episodeGuid: episodeInfo?.episodeGuid,
         expectedTitle: episodeInfo?.trackName,
         expectedDate: episodeInfo?.releaseDate,
+        submittedBy: userEmail,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 
@@ -554,6 +733,40 @@ authenticated.post("/job/:jobId/retry", async (c, next) => {
     };
 
     return c.json(response);
+});
+
+// ============================================================================
+// POST /admin/migrate-episodes - One-time migration to set submittedBy
+// ============================================================================
+
+authenticated.post("/admin/migrate-episodes", async (c) => {
+    // Auth check
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!userEmail) {
+        return c.json({ error: "No user email found" }, 400);
+    }
+
+    // Get all episodes
+    const prefix = "episode:";
+    const keys = await c.env.TLDL_DATA.list({ prefix });
+
+    let updated = 0;
+    for (const key of keys.keys) {
+        const data = await c.env.TLDL_DATA.get(key.name);
+        if (!data) continue;
+
+        const episode = JSON.parse(data);
+        if (!episode.submittedBy) {
+            episode.submittedBy = userEmail;
+            await c.env.TLDL_DATA.put(key.name, JSON.stringify(episode));
+            updated++;
+        }
+    }
+
+    return c.json({ success: true, updated, total: keys.keys.length });
 });
 
 export default authenticated;

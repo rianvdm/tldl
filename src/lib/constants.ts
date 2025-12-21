@@ -134,3 +134,24 @@ export const KV_PREFIXES = {
     TRANSCRIPT: "transcript:",
     SUMMARY: "summary:",
 } as const;
+
+// ============================================================================
+// Timeout Constants (in milliseconds)
+// ============================================================================
+
+export const TIMEOUTS = {
+    // Audio validation HEAD request
+    AUDIO_HEAD_MS: 10 * 1000,           // 10 seconds
+    
+    // Full audio file fetch (for small files)
+    AUDIO_FETCH_MS: 2 * 60 * 1000,      // 2 minutes
+    
+    // Audio chunk fetch (for chunked transcription)
+    CHUNK_FETCH_MS: 60 * 1000,          // 1 minute
+    
+    // OpenAI Whisper API call (per chunk)
+    WHISPER_API_MS: 10 * 60 * 1000,     // 10 minutes
+    
+    // Overall job timeout (marks job as failed if exceeded)
+    JOB_MS: 20 * 60 * 1000,             // 20 minutes
+} as const;

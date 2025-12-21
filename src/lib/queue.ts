@@ -26,6 +26,7 @@ export function createProcessEpisodeMessage(params: {
     episodeGuid?: string;
     expectedTitle?: string;
     expectedDate?: string;
+    submittedBy?: string;
 }): QueueMessage {
     return {
         type: "process_episode",
@@ -36,6 +37,7 @@ export function createProcessEpisodeMessage(params: {
         ...(params.episodeGuid && { episodeGuid: params.episodeGuid }),
         ...(params.expectedTitle && { expectedTitle: params.expectedTitle }),
         ...(params.expectedDate && { expectedDate: params.expectedDate }),
+        ...(params.submittedBy && { submittedBy: params.submittedBy }),
     };
 }
 
