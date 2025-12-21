@@ -224,12 +224,6 @@ authenticated.get("/profile", async (c) => {
     if (authError) return authError;
 
     const userEmail = c.get("userEmail") || "Unknown User";
-    
-    console.log(JSON.stringify({
-        event: "profile_page",
-        userEmail,
-        hasJwt: !!c.req.header("Cf-Access-Jwt-Assertion"),
-    }));
 
     // Get episodes submitted by this user
     const episodes = await listEpisodesByUser(c.env.TLDL_DATA, userEmail);
