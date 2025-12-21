@@ -34,77 +34,76 @@ export interface ItunesEpisodeInfo {
 }
 
 /**
- * Extract episode title from Apple Podcasts URL
- * First tries to parse from the URL directly (the slug before /id),
- * then falls back to fetching the redirect for short URLs
+ * Extract episode title by fetching the Apple Podcasts page HTML
+ * The page <title> tag contains the actual episode title in format:
+ * "Episode Title - Podcast Name - Apple Podcasts"
+ * 
+ * This is more reliable than URL slugs, which sometimes contain 
+ * the podcast name instead of the episode title.
  */
-async function getEpisodeTitleFromAppleRedirect(
+async function getEpisodeTitleFromApplePage(
     appleUrl: string
 ): Promise<string | null> {
-    // First, try to extract from the URL directly
-    // Format: https://podcasts.apple.com/us/podcast/episode-title-slug/id123?i=456
-    const directMatch = appleUrl.match(/\/podcast\/([^/]+)\/id\d+/);
-    if (directMatch && directMatch[1]) {
-        const slug = directMatch[1];
-        const title = slug.replace(/-/g, " ");
-        console.log(JSON.stringify({
-            event: "apple_url_title_extracted",
-            slug,
-            title,
-        }));
-        return title;
-    }
-    
-    // Fall back to fetching redirect for short URLs (e.g., podcasts.apple.com/podcast/id123?i=456)
     try {
         console.log(JSON.stringify({
-            event: "apple_redirect_fetch_start",
+            event: "apple_page_fetch_start",
             appleUrl,
         }));
-        
+
         const response = await fetch(appleUrl, {
-            method: "HEAD",
-            redirect: "manual",
             headers: {
                 "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+                "Accept": "text/html",
             },
         });
-        
-        const location = response.headers.get("location");
-        console.log(JSON.stringify({
-            event: "apple_redirect_response",
-            status: response.status,
-            hasLocation: !!location,
-            location,
-        }));
-        
-        if (!location) {
-            return null;
-        }
-        
-        // Parse the redirect URL to extract episode title
-        const match = location.match(/\/podcast\/([^/]+)\/id\d+/);
-        if (!match) {
+
+        if (!response.ok) {
             console.log(JSON.stringify({
-                event: "apple_redirect_no_match",
-                location,
+                event: "apple_page_fetch_failed",
+                status: response.status,
             }));
             return null;
         }
-        
-        const slug = match[1];
-        const title = slug.replace(/-/g, " ");
-        
+
+        const html = await response.text();
+
+        // Extract from <title> tag
+        // Format: "Episode Title - Podcast Name - Apple Podcasts"
+        const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+        if (titleMatch) {
+            const fullTitle = titleMatch[1];
+            // Split by " - " and take first part (episode title)
+            // Handle truncated titles with "…" 
+            const parts = fullTitle.split(' - ');
+            if (parts.length >= 2) {
+                const episodeTitle = parts[0].trim();
+                console.log(JSON.stringify({
+                    event: "apple_page_title_extracted",
+                    fullTitle,
+                    episodeTitle,
+                }));
+                return episodeTitle;
+            }
+        }
+
+        // Fallback: og:title meta tag (different regex patterns for attribute order)
+        const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+        if (ogMatch) {
+            console.log(JSON.stringify({
+                event: "apple_page_og_title_extracted",
+                title: ogMatch[1],
+            }));
+            return ogMatch[1].trim();
+        }
+
         console.log(JSON.stringify({
-            event: "apple_redirect_title_extracted",
-            slug,
-            title,
+            event: "apple_page_no_title_found",
         }));
-        
-        return title;
+        return null;
     } catch (error) {
         console.log(JSON.stringify({
-            event: "apple_redirect_fetch_error",
+            event: "apple_page_fetch_error",
             error: error instanceof Error ? error.message : String(error),
         }));
         return null;
@@ -132,17 +131,17 @@ export async function prefetchEpisodeInfo(
         }));
         return itunesResult;
     }
-    
+
     console.log(JSON.stringify({
         event: "prefetch_itunes_failed",
         podcastId,
         episodeId,
     }));
-    
+
     // iTunes failed - try to get title from Apple redirect URL
     if (appleUrl && env.PODCAST_INDEX_KEY && env.PODCAST_INDEX_SECRET) {
-        const titleFromRedirect = await getEpisodeTitleFromAppleRedirect(appleUrl);
-        
+        const titleFromRedirect = await getEpisodeTitleFromApplePage(appleUrl);
+
         if (titleFromRedirect) {
             // Now match this title in Podcast Index using the same matching logic
             try {
@@ -152,7 +151,7 @@ export async function prefetchEpisodeInfo(
                     env.PODCAST_INDEX_SECRET,
                     500
                 );
-                
+
                 if (episodes.length > 0) {
                     // Use findEpisodeByAppleId with the title from redirect
                     // This uses the improved normalization (hyphens -> spaces, etc.)
@@ -162,7 +161,7 @@ export async function prefetchEpisodeInfo(
                         titleFromRedirect,
                         undefined // no date available from redirect
                     );
-                    
+
                     if (matched) {
                         console.log(JSON.stringify({
                             event: "prefetch_redirect_podcast_index_match",
@@ -178,7 +177,7 @@ export async function prefetchEpisodeInfo(
                             episodeGuid: matched.guid,
                         };
                     }
-                    
+
                     console.log(JSON.stringify({
                         event: "prefetch_redirect_no_match",
                         podcastId,
@@ -198,7 +197,7 @@ export async function prefetchEpisodeInfo(
             }
         }
     }
-    
+
     return null;
 }
 
@@ -340,11 +339,11 @@ export async function lookupEpisodeInfo(
     const url = `https://itunes.apple.com/lookup?id=${encodeURIComponent(podcastId)}&entity=podcastEpisode&limit=200`;
 
     try {
-        console.log(JSON.stringify({ 
-            event: "itunes_lookup_start", 
-            podcastId, 
+        console.log(JSON.stringify({
+            event: "itunes_lookup_start",
+            podcastId,
             episodeId,
-            url 
+            url
         }));
 
         const response = await fetch(url, {
@@ -355,8 +354,8 @@ export async function lookupEpisodeInfo(
         });
 
         if (!response.ok) {
-            console.log(JSON.stringify({ 
-                event: "itunes_lookup_failed", 
+            console.log(JSON.stringify({
+                event: "itunes_lookup_failed",
                 status: response.status,
                 statusText: response.statusText,
                 headers: Object.fromEntries(response.headers.entries())
@@ -368,7 +367,7 @@ export async function lookupEpisodeInfo(
 
         // Find the episode by trackId (the episode ID from the URL)
         const episodeIdNum = parseInt(episodeId, 10);
-        
+
         console.log(JSON.stringify({
             event: "itunes_episode_search",
             episodeId,
@@ -376,22 +375,22 @@ export async function lookupEpisodeInfo(
             resultCount: data.resultCount,
             totalResults: data.results.length,
             allTrackIds: data.results.map(r => r.trackId),
-            sampleResults: data.results.slice(0, 5).map(r => ({ 
-                trackId: r.trackId, 
+            sampleResults: data.results.slice(0, 5).map(r => ({
+                trackId: r.trackId,
                 wrapperType: r.wrapperType,
                 trackName: r.trackName,
-                episodeGuid: r.episodeGuid 
+                episodeGuid: r.episodeGuid
             })),
         }));
-        
+
         const episode = data.results.find(
             (r) => r.trackId === episodeIdNum && r.wrapperType !== "collection"
         );
 
         if (!episode || !episode.trackName) {
-            console.log(JSON.stringify({ 
-                event: "itunes_episode_not_found", 
-                episodeFound: !!episode, 
+            console.log(JSON.stringify({
+                event: "itunes_episode_not_found",
+                episodeFound: !!episode,
                 hasTrackName: !!episode?.trackName,
                 episodeDetails: episode ? {
                     trackId: episode.trackId,
@@ -417,8 +416,8 @@ export async function lookupEpisodeInfo(
             episodeGuid: episode.episodeGuid,
         };
     } catch (err) {
-        console.log(JSON.stringify({ 
-            event: "itunes_lookup_error", 
+        console.log(JSON.stringify({
+            event: "itunes_lookup_error",
             error: err instanceof Error ? err.message : String(err),
             stack: err instanceof Error ? err.stack : undefined
         }));
@@ -455,10 +454,10 @@ export async function getEpisodeMetadata(
     optionsOrMaxMinutes?: GetEpisodeMetadataOptions | number
 ): Promise<EpisodeMetadata> {
     // Handle backwards compatibility: support both number and options object
-    const options: GetEpisodeMetadataOptions = typeof optionsOrMaxMinutes === 'number' 
+    const options: GetEpisodeMetadataOptions = typeof optionsOrMaxMinutes === 'number'
         ? { maxMinutes: optionsOrMaxMinutes }
         : (optionsOrMaxMinutes || {});
-    
+
     // Try Podcast Index first (primary source - no IP blocking issues)
     if (options.env?.PODCAST_INDEX_KEY && options.env?.PODCAST_INDEX_SECRET) {
         const podcastIndexResult = await getEpisodeFromPodcastIndex(
@@ -476,7 +475,7 @@ export async function getEpisodeMetadata(
             episodeId: parsedUrl.episodeId,
         }));
     }
-    
+
     // Fall back to iTunes + RSS (existing implementation)
     // Step 1: Look up podcast via iTunes API
     const podcast = await lookupPodcast(parsedUrl.podcastId);
@@ -490,7 +489,7 @@ export async function getEpisodeMetadata(
 
     // Step 2: Get episode info - use pre-fetched if available, otherwise lookup
     let episodeInfo: ItunesEpisodeInfo | null = null;
-    
+
     if (options.episodeGuid || options.expectedTitle || options.expectedDate) {
         // Use pre-fetched metadata (avoids iTunes API 403 errors in queue context)
         console.log(JSON.stringify({
@@ -499,7 +498,7 @@ export async function getEpisodeMetadata(
             hasExpectedTitle: !!options.expectedTitle,
             hasExpectedDate: !!options.expectedDate
         }));
-        
+
         if (options.expectedTitle) {
             episodeInfo = {
                 trackId: parseInt(parsedUrl.episodeId, 10),
@@ -583,11 +582,11 @@ async function getEpisodeFromPodcastIndex(
             apiKey,
             apiSecret
         );
-        
+
         if (!podcast) {
             return null;
         }
-        
+
         // Step 2: Get episodes from Podcast Index
         const episodes = await getEpisodesByItunesId(
             parsedUrl.podcastId,
@@ -595,11 +594,11 @@ async function getEpisodeFromPodcastIndex(
             apiSecret,
             1000
         );
-        
+
         if (episodes.length === 0) {
             return null;
         }
-        
+
         // Step 3: Get title for matching - use pre-fetched or extract from Apple redirect
         let titleForMatching = options.expectedTitle;
         console.log(JSON.stringify({
@@ -609,7 +608,7 @@ async function getEpisodeFromPodcastIndex(
             appleUrl: options.appleUrl,
         }));
         if (!titleForMatching && options.appleUrl) {
-            titleForMatching = await getEpisodeTitleFromAppleRedirect(options.appleUrl) || undefined;
+            titleForMatching = await getEpisodeTitleFromApplePage(options.appleUrl) || undefined;
             if (titleForMatching) {
                 console.log(JSON.stringify({
                     event: "podcast_index_title_from_redirect",
@@ -618,7 +617,7 @@ async function getEpisodeFromPodcastIndex(
                 }));
             }
         }
-        
+
         // Step 4: Find the specific episode
         const episode = findEpisodeByAppleId(
             episodes,
@@ -626,19 +625,19 @@ async function getEpisodeFromPodcastIndex(
             titleForMatching,
             options.expectedDate
         );
-        
+
         if (!episode) {
             return null;
         }
-        
+
         // Step 4: Validate duration if limit specified
         if (options.maxMinutes !== undefined && episode.duration > 0) {
             validateDuration(episode.duration, options.maxMinutes);
         }
-        
+
         // Convert Unix timestamp to ISO date
         const episodeDate = new Date(episode.datePublished * 1000).toISOString();
-        
+
         console.log(JSON.stringify({
             event: "podcast_index_metadata_success",
             podcastId: parsedUrl.podcastId,
@@ -646,7 +645,7 @@ async function getEpisodeFromPodcastIndex(
             episodeTitle: episode.title,
             hasTranscript: !!episode.transcriptUrl,
         }));
-        
+
         return {
             podcastName: podcast.title,
             episodeTitle: episode.title,
