@@ -9,15 +9,19 @@ export const TEMPLATES: Record<string, Template> = {
         id: "key-takeaways",
         name: "Key Takeaways & Practical Steps",
         description: "For craft and professional development podcasts",
-        prompt: `Analyze this podcast transcript and provide:
+        prompt: `Analyze this podcast transcript and provide a summary using the following structure. Use ## headings (not numbered) to introduce each section.
 
-1. A brief overview of the episode's main topic (2-3 sentences)
+## Overview
+A brief overview of the episode's main topic (2-3 sentences).
 
-2. Key Takeaways: The most important insights and learnings from this conversation. Focus on novel ideas, counterintuitive points, and expert knowledge shared.
+## Key Takeaways
+The most important insights and learnings from this conversation. Focus on novel ideas, counterintuitive points, and expert knowledge shared.
 
-3. Practical Steps: Actionable advice listeners can implement. Be specific about what to do, not just what to think about.
+## Practical Steps
+Actionable advice listeners can implement. Be specific about what to do, not just what to think about.
 
-4. Notable Quotes: 2-3 standout quotes that capture essential ideas (include speaker if identifiable).
+## Notable Quotes
+2-3 standout quotes that capture essential ideas (include speaker if identifiable).
 
 Keep the tone professional but accessible. Use paragraphs for narrative sections and bullets only where they aid clarity. Total length: 400-600 words.`,
     },
@@ -26,13 +30,13 @@ Keep the tone professional but accessible. Use paragraphs for narrative sections
         id: "narrative-summary",
         name: "Narrative Summary",
         description: "For story-driven and interview podcasts",
-        prompt: `Provide a cohesive narrative summary of this podcast episode.
+        prompt: `Provide a cohesive narrative summary of this podcast episode. Use ## headings (not numbered) to introduce each section.
 
-Write in flowing paragraphs that capture:
-- The arc of the conversation or story
-- Key moments and turning points
-- The main themes explored
-- How ideas connect and build on each other
+## The Story
+Write in flowing paragraphs that capture the arc of the conversation or story, including key moments and turning points.
+
+## Main Themes
+The central ideas and themes explored throughout the episode, and how they connect and build on each other.
 
 Avoid bullet points. Write as if you're telling a friend about a fascinating conversation you overheard. Capture the essence without losing the nuance.
 
@@ -43,18 +47,21 @@ Total length: 300-400 words.`,
         id: "eli5",
         name: "ELI5 (Explain Like I'm 5)",
         description: "For technical and complex topics",
-        prompt: `Explain the main ideas from this podcast in simple, accessible language that anyone could understand.
+        prompt: `Explain the main ideas from this podcast in simple, accessible language that anyone could understand. Use ## headings (not numbered) to introduce each section.
 
-Break down complex concepts using:
-- Everyday analogies and comparisons
-- Simple vocabulary (avoid jargon, or explain it plainly)
-- Concrete examples
+Break down complex concepts using everyday analogies, simple vocabulary (avoid jargon, or explain it plainly), and concrete examples.
 
-Structure your explanation as:
-1. What's the big idea? 
-2. Why does it matter? 
-3. Key concepts explained simply 
-4. The bottom line 
+## The Big Idea
+What is this episode fundamentally about?
+
+## Why It Matters
+Why should listeners care about this topic?
+
+## Key Concepts
+The main ideas explained simply, with analogies where helpful.
+
+## The Bottom Line
+The essential takeaway in plain language.
 
 Be accurate while being accessible. Total length: 400-600 words.`,
     },
@@ -142,16 +149,16 @@ export const KV_PREFIXES = {
 export const TIMEOUTS = {
     // Audio validation HEAD request
     AUDIO_HEAD_MS: 10 * 1000,           // 10 seconds
-    
+
     // Full audio file fetch (for small files)
     AUDIO_FETCH_MS: 2 * 60 * 1000,      // 2 minutes
-    
+
     // Audio chunk fetch (for chunked transcription)
     CHUNK_FETCH_MS: 60 * 1000,          // 1 minute
-    
+
     // OpenAI Whisper API call (per chunk)
     WHISPER_API_MS: 10 * 60 * 1000,     // 10 minutes
-    
+
     // Overall job timeout (marks job as failed if exceeded)
     JOB_MS: 20 * 60 * 1000,             // 20 minutes
 } as const;

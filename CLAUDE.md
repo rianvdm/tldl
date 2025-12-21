@@ -36,10 +36,11 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
 ### Key Components
 
 - **Episode ID derivation**: `deriveEpisodeId(podcastId, episodeId)` in `src/lib/url-parser.ts`
-- **Podcast Index API**: Primary metadata source (replaces iTunes API due to 403 issues in Workers)
+- **Podcast Index API**: Primary metadata source (`src/services/podcast-index.ts`) — replaces iTunes API due to 403 errors in Workers
+- **Apple Podcasts page scraping**: `getEpisodeTitleFromApplePage()` in `src/services/apple-podcasts.ts` extracts episode titles from HTML `<title>` tags when URL slugs are unreliable
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
-- **Audio chunking**: `src/lib/audio.ts` handles MP3 frame-aware splitting for large files
-- **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency
+- **Audio chunking**: `src/lib/audio.ts` handles MP3 frame-aware splitting for large files (>25MB)
+- **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
 
 ### KV Storage Schema
 
@@ -53,7 +54,7 @@ Keys in `src/lib/kv.ts`:
 ### Routes
 
 **Public** (`src/routes/public.ts`):
-- `GET /` - Episode list
+- `GET /` - Episode list with pagination
 - `GET /episode/:id` - Episode detail with summary
 - `GET /episode/:id/pdf` - PDF download
 - `GET /submit` - Submit form
@@ -86,7 +87,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 **Bindings** (in `wrangler.toml`):
 - `TLDL_DATA` - KV namespace
 - `TLDL_QUEUE` - Queue (name: `tldl-jobs`)
-- `JOB_STATUS` - Durable Object
+- `JOB_STATUS` - Durable Object for job status consistency
 
 **Secrets** (set via `wrangler secret put`):
 - `OPENAI_API_KEY` - OpenAI API key
@@ -96,6 +97,8 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 **Environment Variables**:
 - `MAX_EPISODE_MINUTES` - Max duration (default: 80)
 - `ENVIRONMENT` - `production` or `development`
+- `CACHE_TTL_DAYS` - Content cache TTL (default: 365)
+- `DEFAULT_TEMPLATE` - Default summary template (default: `key-takeaways`)
 
 ## Testing
 
@@ -104,8 +107,41 @@ Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 214+ tests 
 - Integration tests in `test/integration/`
 - Note: Tests involving Durable Objects may show "Isolated storage" warnings (infrastructure issue, not failures)
 
+## Project Structure
+
+```
+src/
+├── index.ts              # Hono app, routes, exports
+├── types/                # TypeScript type definitions
+├── lib/                  # Core utilities
+│   ├── constants.ts      # Templates, error codes, TTLs
+│   ├── kv.ts             # KV storage helpers
+│   ├── url-parser.ts     # Apple Podcasts URL parsing
+│   ├── audio.ts          # MP3 frame-aware chunking
+│   ├── errors.ts         # Error handling
+│   ├── retry.ts          # Retry logic with backoff
+│   ├── job-status-do.ts  # Durable Object client helpers
+│   └── ...
+├── services/             # External API integrations
+│   ├── apple-podcasts.ts # iTunes API + page scraping
+│   ├── podcast-index.ts  # Podcast Index API
+│   ├── rss.ts            # RSS feed parsing + episode matching
+│   ├── transcription.ts  # OpenAI Whisper
+│   ├── summarization.ts  # OpenAI GPT-4o
+│   └── pdf.ts            # PDF generation
+├── routes/               # Hono route handlers
+│   ├── public.ts         # Public pages
+│   ├── api.ts            # JSON API
+│   └── authenticated.ts  # Protected mutations
+├── queue/                # Queue consumer
+│   └── consumer.ts       # Job processing pipeline
+└── durable-objects/      # Durable Object classes
+    └── job-status.ts     # Job status DO for consistency
+```
+
 ## Common Issues
 
 - **iTunes 403 errors**: Use Podcast Index API instead (already configured)
-- **Large audio files**: Automatically chunked at MP3 frame boundaries
-- **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback
+- **Episode title extraction**: URL slugs sometimes contain podcast name instead of episode title; `getEpisodeTitleFromApplePage()` scrapes the actual page to get reliable titles
+- **Large audio files**: Automatically chunked at MP3 frame boundaries (>25MB)
+- **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
