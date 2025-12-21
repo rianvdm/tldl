@@ -89,7 +89,7 @@ npm run deploy
 - [x] **Prompt 13**: Error handling hardening
 - [x] **Prompt 14**: Security + rate limiting
 - [x] **Prompt 15**: Integration tests + polish
-
+- [x] **Prompt 16**: Pagination
 ---
 
 ## Key Milestones

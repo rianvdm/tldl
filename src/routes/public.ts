@@ -529,6 +529,11 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
                     Expires in ${daysRemaining} days
                 </span>
             </div>
+            <div class="platform-links">
+                <a href="${escapeHtml(episode.appleUrl)}" target="_blank" rel="noopener noreferrer" class="apple-podcasts-badge" title="Listen on Apple Podcasts">
+                    <img src="/apple-podcasts-badge.svg" alt="Listen on Apple Podcasts" height="32">
+                </a>
+            </div>
         </div>
 
         <div class="divider"></div>

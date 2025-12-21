@@ -1094,6 +1094,33 @@ h4 {
     color: var(--muted-foreground);
 }
 
+/* ============================================================================
+   Platform Links
+   ============================================================================ */
+
+.platform-links {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.apple-podcasts-badge {
+    display: inline-flex;
+    opacity: 0.85;
+    transition: opacity 0.2s ease;
+}
+
+.apple-podcasts-badge:hover {
+    opacity: 1;
+}
+
+.apple-podcasts-badge img {
+    height: 32px;
+    width: auto;
+}
+
 .job-id {
     font-family: var(--font-mono);
     font-size: 0.75rem;
