@@ -29,7 +29,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI Whisper for transcription (with chunking for >25MB files)
-   - Generates summary via OpenAI GPT-4o
+   - Generates summary via OpenAI GPT-5.2
    - Generates 1-4 AI tags using GPT-5.2 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
 3. **View** (`GET /episode/:id`): Serves cached episodes with summary, transcript, and tags
@@ -177,3 +177,7 @@ src/
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
 - **Invalid tags showing**: After removing tags from EPISODE_TAGS, run "Cleanup Invalid Tags" from admin tools to remove them from existing episodes
 - **Admin endpoints 401/403**: Admin endpoints must be under `/profile/*` path to work with Cloudflare Access configuration
+
+## Important Notes
+
+- **GPT-5.2 exists**: The project uses OpenAI GPT-5.2 for both summarization and tag generation. This is a real model - do not change references to GPT-4o or other models unless explicitly instructed.

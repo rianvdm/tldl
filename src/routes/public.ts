@@ -664,7 +664,14 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
                     </svg>
                     Expires in ${daysRemaining} days
                 </span>
-                ${episode.tags && episode.tags.length > 0 ? `<span class="meta-dot">•</span><div style="display: inline-flex; gap: 0.375rem;">${[...episode.tags].sort().map(tag => `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`).join('')}</div>` : ""}
+                ${episode.tags && episode.tags.length > 0 ? `
+                <span class="meta-dot">•</span>
+                <div style="display: inline-flex; gap: 0.375rem;">
+                    ${[...episode.tags].sort().map(tag =>
+                        `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`
+                    ).join('')}
+                </div>
+                ` : ""}
             </div>
             <div class="platform-links">
                 <a href="${escapeHtml(episode.appleUrl)}" target="_blank" rel="noopener noreferrer" class="apple-podcasts-badge" title="Listen on Apple Podcasts">
