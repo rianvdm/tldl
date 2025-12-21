@@ -13,7 +13,7 @@ This document provides a detailed implementation plan for adding AI-generated, f
 ## Requirements Summary
 
 ### User Requirements
-- ✅ AI-generated tags during queue processing (2-4 tags per episode)
+- ✅ AI-generated tags during queue processing (1-4 tags per episode)
 - ✅ Predefined tag list with 10 broad categories including "psychology"
 - ✅ Tags easily editable in a central location (`src/lib/constants.ts`)
 - ✅ Single tag filtering on home page (no multi-tag)
@@ -98,7 +98,7 @@ export interface Episode {
     createdAt: string;
     expiresAt: string;
     submittedBy?: string;
-    tags?: string[]; // NEW: 2-4 tags per episode
+    tags?: string[]; // NEW: 1-4 tags per episode
 }
 
 export interface EpisodeIndexEntry {
@@ -249,7 +249,7 @@ AVAILABLE TAGS:
 ${tagList}
 
 INSTRUCTIONS:
-- Select between 2 and 4 tags
+- Select between 1 and 4 tags
 - Choose tags that best represent the episode's main topics
 - Return ONLY a comma-separated list of tags, nothing else
 - Tags must be from the list above (lowercase with hyphens)
@@ -268,7 +268,7 @@ Return the tags as a simple comma-separated list.`;
  * @param summary - The episode summary text
  * @param transcript - Optional full transcript (will use first 8000 chars if provided)
  * @param openaiApiKey - OpenAI API key
- * @returns Array of 2-4 tags
+ * @returns Array of 1-4 tags
  */
 export async function generateEpisodeTags(
     summary: string,
@@ -410,7 +410,7 @@ function extractTextFromResponse(data: ResponsesApiResponse): string | null {
 
 /**
  * Parse comma-separated tags from API response
- * Validates against allowed tags and returns 2-4 tags
+ * Validates against allowed tags and returns 1-4 tags
  */
 function parseTags(text: string): string[] {
     const validTags = getValidTags();
@@ -426,10 +426,10 @@ function parseTags(text: string): string[] {
         validTags.includes(tag as any)
     );
 
-    // Ensure 2-4 tags
-    if (validatedTags.length < 2) {
-        console.warn(`Tag generation returned fewer than 2 valid tags: ${rawTags.join(', ')}`);
-        return validatedTags; // Return what we have, even if < 2
+    // Ensure at least 1 tag (but don't fail if 0)
+    if (validatedTags.length === 0) {
+        console.warn(`Tag generation returned no valid tags: ${rawTags.join(', ')}`);
+        return validatedTags; // Return empty array
     }
 
     // Take only first 4 if more were returned
@@ -1040,10 +1040,10 @@ authenticated.post("/episode/:episodeId/update-tags", async (c) => {
         }, 400);
     }
 
-    // Enforce 2-4 tags
-    if (validation.valid.length < 2 || validation.valid.length > 4) {
+    // Enforce 1-4 tags
+    if (validation.valid.length < 1 || validation.valid.length > 4) {
         return c.json({
-            error: "Must provide between 2 and 4 tags",
+            error: "Must provide between 1 and 4 tags",
             provided: validation.valid.length,
         }, 400);
     }
@@ -1145,9 +1145,9 @@ Replace the episode card HTML with this version that includes tag editor:
                 const messageEl = document.getElementById(`tag-message-${episodeId}`);
 
                 // Validate count
-                if (tags.length < 2 || tags.length > 4) {
+                if (tags.length < 1 || tags.length > 4) {
                     messageEl.className = 'tag-editor-message alert-error';
-                    messageEl.textContent = `Please select 2-4 tags (currently ${tags.length} selected)`;
+                    messageEl.textContent = `Please select 1-4 tags (currently ${tags.length} selected)`;
                     messageEl.style.display = 'block';
                     return;
                 }
@@ -1363,9 +1363,10 @@ Add this function to the profile page `<script>` tag:
 **Why this approach:**
 - Reads existing transcripts and summaries from KV (no audio re-processing!)
 - Much faster than queue processing
-- Processes only episodes without tags
+- Processes only episodes without tags (idempotent - safe to run multiple times)
 - Continues on individual failures
 - Shows clear progress and results
+- Current dataset is small enough to process in a single request
 
 ---
 
@@ -1407,7 +1408,7 @@ Add this function to the profile page `<script>` tag:
    - [ ] Admin sees tag editor on profile page
    - [ ] Regular users see read-only tags
    - [ ] Toggle tag selection works
-   - [ ] Save validates 2-4 tags
+   - [ ] Save validates 1-4 tags
    - [ ] Success message appears
    - [ ] Tags update in KV and index
 
@@ -1514,11 +1515,12 @@ If issues occur:
 
 1. **Multi-tag filtering** - Show episodes matching ALL selected tags
 2. **Tag analytics** - Most popular tags, tag co-occurrence
-3. **User-suggested tags** - Allow users to suggest new tags
-4. **Tag descriptions** - Hover tooltips explaining each tag
-5. **Related episodes** - "More episodes like this" based on tags
-6. **RSS feed tags** - Include tags in RSS/API responses
-7. **Tag-based notifications** - Alert users when new episodes match their favorite tags
+3. **Tag count display** - Show episode count next to each tag in filter bar (e.g., "psychology (12)")
+4. **User-suggested tags** - Allow users to suggest new tags
+5. **Tag descriptions** - Hover tooltips explaining each tag
+6. **Related episodes** - "More episodes like this" based on tags
+7. **RSS feed tags** - Include tags in RSS/API responses
+8. **Tag-based notifications** - Alert users when new episodes match their favorite tags
 
 ---
 
@@ -1551,11 +1553,9 @@ Add these new test files:
 
 ## Known Limitations
 
-1. **Backfill batch size:** The backfill endpoint processes up to 1000 episodes in a single request. If you have more episodes, you'll need to run it multiple times or increase the pageSize limit.
+1. **Backfill batch size:** The backfill endpoint processes up to 1000 episodes in a single request. This is sufficient for the current dataset size. If the dataset grows significantly, pagination can be added.
 
-2. **Backfill timeout:** Processing many episodes synchronously could hit Worker timeout limits (CPU time limits). For large backlogs (>100 episodes), consider running backfill during low-traffic periods or implementing a queue-based approach.
-
-3. **Tag count in filter bar:** Currently doesn't show how many episodes have each tag. This could be added as a future enhancement.
+2. **Backfill is idempotent:** The backfill only processes episodes without tags, so it's safe to run multiple times without duplicating work or overwriting existing tags.
 
 ---
 
@@ -1566,17 +1566,12 @@ Add these new test files:
 ✅ **Where to generate tags?** - In queue consumer after summarization
 ✅ **What to use for tag generation?** - Summary + transcript excerpt
 ✅ **How to handle tag changes?** - Admin editing via profile page
-✅ **How to handle existing episodes?** - Backfill from existing transcripts/summaries
-✅ **How many tags?** - 2-4 per episode
+✅ **How to handle existing episodes?** - Backfill only untagged episodes from existing transcripts/summaries
+✅ **How many tags?** - 1-4 per episode (minimum 1, maximum 4)
 ✅ **Clickable cards?** - Use `stopPropagation()` on tag links
 ✅ **Which API/model?** - GPT-5.2 Responses API
-
-### Open Questions
-
-- Should we allow 1 tag minimum instead of 2? (Currently 2-4 required)
-- Should backfill process all episodes or only untagged ones? (Currently only untagged)
-- Should we show tag count on tag filter bar? (e.g., "psychology (12)")
-- Should backfill be queue-based for large datasets (>100 episodes)?
+✅ **Backfill scope?** - Only untagged episodes (current dataset is small, no pagination needed)
+✅ **Tag count display?** - Not needed for initial implementation
 
 ---
 
