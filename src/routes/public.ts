@@ -884,7 +884,7 @@ publicRoutes.get("/about", async (c) => {
             </section>
         </div>
     `;
-    return c.html(Layout({ title: "About", children: content }));
+    return c.html(Layout({ title: "About", children: content.toString() }));
 });
 
 // ============================================================================
