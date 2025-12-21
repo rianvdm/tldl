@@ -68,7 +68,7 @@ interface TemplateListResponse {
 // ============================================================================
 
 api.get("/episodes", async (c) => {
-    const episodes = await listEpisodes(c.env.TLDL_DATA);
+    const { episodes } = await listEpisodes(c.env.TLDL_DATA);
 
     // For each episode, get the list of available summary templates
     const episodeListItems: EpisodeListItem[] = await Promise.all(

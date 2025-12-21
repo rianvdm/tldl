@@ -253,17 +253,17 @@ describe("Episode Operations", () => {
         await saveEpisode(env.TLDL_DATA, newest);
         await saveEpisode(env.TLDL_DATA, newer);
 
-        const episodes = await listEpisodes(env.TLDL_DATA);
+        const result = await listEpisodes(env.TLDL_DATA);
 
-        expect(episodes).toHaveLength(3);
-        expect(episodes[0].id).toBe("newest-episode");
-        expect(episodes[1].id).toBe("newer-episode");
-        expect(episodes[2].id).toBe("older-episode");
+        expect(result.episodes).toHaveLength(3);
+        expect(result.episodes[0].id).toBe("newest-episode");
+        expect(result.episodes[1].id).toBe("newer-episode");
+        expect(result.episodes[2].id).toBe("older-episode");
     });
 
     it("returns empty array when no episodes exist", async () => {
-        const episodes = await listEpisodes(env.TLDL_DATA);
-        expect(episodes).toEqual([]);
+        const result = await listEpisodes(env.TLDL_DATA);
+        expect(result.episodes).toEqual([]);
     });
 });
 

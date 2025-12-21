@@ -272,11 +272,18 @@ function InProgressCard(job: Job): string {
 // ============================================================================
 
 publicRoutes.get("/", async (c) => {
+    // Parse page query param (default to 1)
+    const pageParam = c.req.query("page");
+    const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
+    const pageSize = 10;
+
     // Fetch both active jobs and completed episodes
-    const [activeJobs, episodes] = await Promise.all([
+    const [activeJobs, paginatedEpisodes] = await Promise.all([
         listActiveJobs(c.env.TLDL_DATA),
-        listEpisodes(c.env.TLDL_DATA),
+        listEpisodes(c.env.TLDL_DATA, { page, pageSize }),
     ]);
+    
+    const { episodes, totalPages } = paginatedEpisodes;
 
     // Build in-progress cards
     const inProgressCards = activeJobs.map((job) => InProgressCard(job)).join("");
@@ -324,6 +331,37 @@ publicRoutes.get("/", async (c) => {
         <div class="episode-list">
             ${episodeCards.join("")}
         </div>
+        ${totalPages > 1 ? `
+        <nav class="pagination" aria-label="Episode pagination">
+            ${page > 1 ? `
+            <a href="/?page=${page - 1}" class="pagination-link pagination-prev">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m15 18-6-6 6-6"/>
+                </svg>
+                Previous
+            </a>
+            ` : `<span class="pagination-link pagination-prev pagination-disabled">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m15 18-6-6 6-6"/>
+                </svg>
+                Previous
+            </span>`}
+            <span class="pagination-info">Page ${page} of ${totalPages}</span>
+            ${page < totalPages ? `
+            <a href="/?page=${page + 1}" class="pagination-link pagination-next">
+                Next
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m9 18 6-6-6-6"/>
+                </svg>
+            </a>
+            ` : `<span class="pagination-link pagination-next pagination-disabled">
+                Next
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m9 18 6-6-6-6"/>
+                </svg>
+            </span>`}
+        </nav>
+        ` : ""}
         ` : ""}
     `
             : `

@@ -201,7 +201,11 @@ h4 {
 
 .episode-card-arrow {
     flex-shrink: 0;
-    padding: 0.5rem;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 50%;
     background-color: var(--accent);
     color: var(--muted-foreground);
@@ -1047,6 +1051,47 @@ h4 {
 
 .section-header h2 {
     margin-bottom: 0;
+}
+
+/* ============================================================================
+   Pagination
+   ============================================================================ */
+
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+}
+
+.pagination-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    border-radius: var(--radius);
+    transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.pagination-link:hover:not(.pagination-disabled) {
+    color: var(--foreground);
+    background-color: var(--accent);
+}
+
+.pagination-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.pagination-info {
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
 }
 
 .job-id {

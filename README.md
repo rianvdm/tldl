@@ -23,7 +23,7 @@ Paste an Apple Podcasts episode URL, get an AI-generated summary. Transcripts an
 | Storage | Cloudflare Workers KV + Durable Objects |
 | Podcast Metadata | [Podcast Index API](https://podcastindex.org) |
 | Transcription | OpenAI Whisper API |
-| Summarization | OpenAI GPT-4o |
+| Summarization | OpenAI GPT-5.2 |
 | Authentication | Cloudflare Access (Email OTP) |
 
 ## Quick Start

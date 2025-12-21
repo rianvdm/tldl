@@ -163,19 +163,34 @@ export async function deleteEpisode(
     await Promise.all(summaryKeys.keys.map((key) => kv.delete(key.name)));
 }
 
+export interface PaginatedEpisodes {
+    episodes: Episode[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+}
+
 /**
  * List all episodes, sorted by createdAt descending (most recent first)
+ * Supports pagination with page number and page size
  */
-export async function listEpisodes(kv: KVNamespace): Promise<Episode[]> {
+export async function listEpisodes(
+    kv: KVNamespace,
+    options?: { page?: number; pageSize?: number }
+): Promise<PaginatedEpisodes> {
+    const page = Math.max(1, options?.page ?? 1);
+    const pageSize = options?.pageSize ?? 10;
+    
     const prefix = "episode:";
     const keys = await kv.list({ prefix });
 
     if (keys.keys.length === 0) {
-        return [];
+        return { episodes: [], total: 0, page, pageSize, totalPages: 0 };
     }
 
     // Batch fetch all episode values
-    const episodes = await Promise.all(
+    const allEpisodes = await Promise.all(
         keys.keys.map(async (key) => {
             const data = await kv.get(key.name);
             if (!data) return null;
@@ -184,12 +199,19 @@ export async function listEpisodes(kv: KVNamespace): Promise<Episode[]> {
     );
 
     // Filter out nulls and sort by createdAt descending
-    return episodes
+    const sorted = allEpisodes
         .filter((ep): ep is Episode => ep !== null)
         .sort(
             (a, b) =>
                 new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
+    
+    const total = sorted.length;
+    const totalPages = Math.ceil(total / pageSize);
+    const start = (page - 1) * pageSize;
+    const episodes = sorted.slice(start, start + pageSize);
+    
+    return { episodes, total, page, pageSize, totalPages };
 }
 
 // ============================================================================

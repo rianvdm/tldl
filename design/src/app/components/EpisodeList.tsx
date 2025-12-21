@@ -50,8 +50,8 @@ export function EpisodeList({ onViewEpisode }: EpisodeListProps) {
                   </div>
                 </div>
                 <div className="flex-shrink-0">
-                  <div className="p-2 rounded-full bg-accent group-hover:bg-accent-foreground/10 transition-colors">
-                    <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+                  <div className="size-9 rounded-full bg-accent group-hover:bg-accent-foreground/10 transition-colors flex items-center justify-center">
+                    <ArrowRight className="size-5 text-muted-foreground group-hover:text-foreground transition-colors" />
                   </div>
                 </div>
               </div>
