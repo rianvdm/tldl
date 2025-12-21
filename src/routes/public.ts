@@ -195,6 +195,7 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                         <span class="nav-tagline"
                             >Too Long Didn't Listen</span
                         >
+                        <a href="/about" class="nav-link">About</a>
                         <a href="/profile" class="nav-link">Profile</a>
                     </nav>
                     <main class="main">${raw(props.children)}</main>
@@ -345,7 +346,7 @@ publicRoutes.get("/", async (c) => {
     // Intro text for the home page
     const introSection = `
         <div class="intro-section">
-            <p>Get the key insights from your favorite podcasts. Paste an Apple Podcasts link and choose how you want it summarized—key takeaways, narrative overview, or simplified explainer. Submissions are invite-only for now—browse existing summaries below.</p>
+            <p><span class="text-accent">Get the key insights from your favorite podcasts.</span> Paste an Apple Podcasts link and choose how you want it summarized—key takeaways, narrative overview, or simplified explainer. Submissions are invite-only for now—browse existing summaries below.</p>
         </div>
     `;
 
@@ -687,6 +688,125 @@ publicRoutes.get("/episode/:episodeId/pdf", async (c) => {
 publicRoutes.get("/submit", async (c) => {
     const content = SubmitFormPage({ error: null, url: "", templateId: "key-takeaways" });
     return c.html(Layout({ title: "Submit Episode", children: content }));
+});
+
+// ============================================================================
+// GET /about — About Page
+// ============================================================================
+
+publicRoutes.get("/about", async (c) => {
+    const content = html`
+        <style>
+            .about-page p {
+                margin-bottom: 1rem;
+            }
+            .about-page p:last-child {
+                margin-bottom: 0;
+            }
+            .about-page a {
+                color: var(--accent-red);
+                text-decoration: underline;
+                transition: opacity 0.2s ease;
+            }
+            .about-page a:hover {
+                opacity: 0.8;
+            }
+            .about-page ul {
+                margin: 0.5rem 0 1rem 1.5rem;
+            }
+            .about-page li {
+                margin-bottom: 0.5rem;
+            }
+        </style>
+        <div class="intro-section">
+            <p>Submitting new episodes is currently invite-only. Browse existing summaries on the home page or contact the creator for access.</p>
+        </div>
+        <div class="card about-page">
+            <h1>About TL;DL</h1>
+
+            <section style="margin-top: 2rem;">
+                <h2>What is TL;DL?</h2>
+                <p>
+                    TL;DL (Too Long; Didn't Listen) generates AI-powered summaries of podcast episodes.
+                    Paste an Apple Podcasts URL, and get a concise summary along with the full transcript.
+                </p>
+                <p>
+                    All summaries and transcripts are cached for 365 days, so if someone has already
+                    processed an episode, you'll get instant results.
+                </p>
+            </section>
+
+            <section style="margin-top: 2rem;">
+                <h2>Summary Templates</h2>
+                <p>Choose from three different summary styles depending on the type of content:</p>
+
+                <div style="margin-top: 1rem;">
+                    <h3 style="margin-bottom: 0.5rem;">Key Takeaways & Practical Steps</h3>
+                    <p style="margin-top: 0; color: var(--muted-foreground);">
+                        Best for craft and professional development podcasts. Includes an overview,
+                        key insights, actionable steps, and notable quotes.
+                    </p>
+                </div>
+
+                <div style="margin-top: 1rem;">
+                    <h3 style="margin-bottom: 0.5rem;">Narrative Summary</h3>
+                    <p style="margin-top: 0; color: var(--muted-foreground);">
+                        Best for story-driven and interview podcasts. Captures the arc of the conversation
+                        with flowing narrative and main themes.
+                    </p>
+                </div>
+
+                <div style="margin-top: 1rem;">
+                    <h3 style="margin-bottom: 0.5rem;">ELI5 (Explain Like I'm 5)</h3>
+                    <p style="margin-top: 0; color: var(--muted-foreground);">
+                        Best for technical and complex topics. Breaks down complex concepts using everyday
+                        analogies and simple language.
+                    </p>
+                </div>
+            </section>
+
+            <section style="margin-top: 2rem;">
+                <h2>Technology</h2>
+                <p>TL;DL is built entirely on Cloudflare's edge platform:</p>
+                <ul>
+                    <li>
+                        <a href="https://developers.cloudflare.com/workers/" target="_blank" rel="noopener noreferrer">Cloudflare Workers</a>
+                        — Serverless compute at the edge
+                    </li>
+                    <li>
+                        <a href="https://developers.cloudflare.com/kv/" target="_blank" rel="noopener noreferrer">Workers KV</a>
+                        — Global key-value storage
+                    </li>
+                    <li>
+                        <a href="https://developers.cloudflare.com/queues/" target="_blank" rel="noopener noreferrer">Cloudflare Queues</a>
+                        — Background job processing
+                    </li>
+                    <li>
+                        <a href="https://developers.cloudflare.com/durable-objects/" target="_blank" rel="noopener noreferrer">Durable Objects</a>
+                        — Strongly consistent coordination
+                    </li>
+                    <li>
+                        <a href="https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/" target="_blank" rel="noopener noreferrer">Cloudflare Access</a>
+                        — Zero Trust authentication
+                    </li>
+                </ul>
+                <p>
+                    Transcription and summarization powered by
+                    <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a>
+                    (Whisper and GPT-5.2).
+                </p>
+            </section>
+
+            <section style="margin-top: 2rem;">
+                <h2>Credits</h2>
+                <p>
+                    TL;DL was created by
+                    <a href="https://elezea.com" target="_blank" rel="noopener noreferrer">Rian van der Merwe</a>.
+                </p>
+            </section>
+        </div>
+    `;
+    return c.html(Layout({ title: "About", children: content }));
 });
 
 // ============================================================================
