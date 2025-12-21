@@ -224,10 +224,10 @@ authenticated.post("/profile/rebuild-index", async (c) => {
 });
 
 // ============================================================================
-// POST /admin/backfill-tags - Generate tags for episodes without them
+// POST /profile/backfill-tags - Generate tags for episodes without them (admin only)
 // ============================================================================
 
-authenticated.post("/admin/backfill-tags", async (c) => {
+authenticated.post("/profile/backfill-tags", async (c) => {
     const authError = await requireAuth(c);
     if (authError) return authError;
 
@@ -739,7 +739,7 @@ authenticated.get("/profile", async (c) => {
                 statusEl.textContent = 'Generating tags for episodes...';
 
                 try {
-                    const response = await fetch('/admin/backfill-tags', {
+                    const response = await fetch('/profile/backfill-tags', {
                         method: 'POST',
                         credentials: 'include',
                     });
