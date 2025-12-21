@@ -21,7 +21,7 @@ import {
     listActiveJobsWithDO,
     deleteJobDO,
 } from "../lib/job-status-do";
-import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS, getValidTags, isValidTag } from "../lib/constants";
+import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS, getValidTags, isValidTag, isBlockedPodcast } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 
@@ -966,6 +966,16 @@ publicRoutes.post("/submit", async (c) => {
             templateId
         });
         return c.html(Layout({ title: "Submit Episode", children: content }), 400);
+    }
+
+    // Check if podcast is blocked
+    if (isBlockedPodcast(appleUrl)) {
+        const content = SubmitFormPage({
+            error: "This podcast has opted out of being processed on TL;DL.",
+            url: appleUrl,
+            templateId
+        });
+        return c.html(Layout({ title: "Submit Episode", children: content }), 403);
     }
 
     // Validate template

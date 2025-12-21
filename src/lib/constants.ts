@@ -13,6 +13,31 @@ export const ADMIN_EMAILS: string[] = [
 ];
 
 // ============================================================================
+// Blocked Podcasts
+// ============================================================================
+
+/**
+ * Podcasts that have opted out of being processed.
+ * Add URL patterns here (partial matches against the submitted URL).
+ * Example: "id1234567890" will block any URL containing that podcast ID.
+ */
+export const BLOCKED_PODCASTS: string[] = [
+    // Add podcast URL patterns here, e.g.:
+    // "id1234567890",
+    // "some-podcast-name",
+];
+
+/**
+ * Check if a URL is blocked from submission
+ */
+export function isBlockedPodcast(url: string): boolean {
+    const lowerUrl = url.toLowerCase();
+    return BLOCKED_PODCASTS.some(pattern =>
+        lowerUrl.includes(pattern.toLowerCase())
+    );
+}
+
+// ============================================================================
 // Episode Tags
 // ============================================================================
 
