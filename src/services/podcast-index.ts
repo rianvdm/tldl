@@ -5,6 +5,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { AppError } from "../lib/errors";
+import { ERROR_CODES } from "../lib/constants";
 
 // ============================================================================
 // Types
@@ -89,6 +91,7 @@ export async function lookupPodcastByItunesId(
         console.log(JSON.stringify({
             event: "podcast_index_lookup_start",
             itunesId,
+            apiKeyPrefix: apiKey.substring(0, 6),
         }));
 
         const response = await fetch(url, {
@@ -96,11 +99,21 @@ export async function lookupPodcastByItunesId(
         });
         
         if (!response.ok) {
+            const retryAfter = response.headers.get("Retry-After");
             console.log(JSON.stringify({
                 event: "podcast_index_lookup_failed",
                 status: response.status,
                 statusText: response.statusText,
+                retryAfter,
+                headers: Object.fromEntries(response.headers.entries()),
             }));
+            // Throw on rate limit so job retries instead of falling back to iTunes
+            if (response.status === 429) {
+                throw new AppError(
+                    ERROR_CODES.RATE_LIMITED,
+                    `Podcast Index API rate limit exceeded. Retry after: ${retryAfter || 'unknown'}`
+                );
+            }
             return null;
         }
         
@@ -128,6 +141,15 @@ export async function lookupPodcastByItunesId(
             itunesId: data.feed.itunesId
         };
     } catch (error) {
+        // Re-throw AppErrors (especially rate limit) so they cause job retries
+        if (error instanceof AppError) {
+            console.error(JSON.stringify({
+                event: "podcast_index_lookup_error",
+                itunesId,
+                error: error.message,
+            }));
+            throw error;
+        }
         console.error(JSON.stringify({
             event: "podcast_index_lookup_error",
             itunesId,
@@ -153,6 +175,7 @@ export async function getEpisodesByItunesId(
             event: "podcast_index_episodes_start",
             itunesId,
             max,
+            apiKeyPrefix: apiKey.substring(0, 6),
         }));
 
         const response = await fetch(url, {
@@ -165,6 +188,13 @@ export async function getEpisodesByItunesId(
                 status: response.status,
                 statusText: response.statusText,
             }));
+            // Throw on rate limit so job retries instead of falling back to iTunes
+            if (response.status === 429) {
+                throw new AppError(
+                    ERROR_CODES.RATE_LIMITED,
+                    "Podcast Index API rate limit exceeded. Please try again in a few minutes."
+                );
+            }
             return [];
         }
         
@@ -187,6 +217,15 @@ export async function getEpisodesByItunesId(
             transcriptUrl: ep.transcriptUrl,
         }));
     } catch (error) {
+        // Re-throw AppErrors (especially rate limit) so they cause job retries
+        if (error instanceof AppError) {
+            console.error(JSON.stringify({
+                event: "podcast_index_episodes_error",
+                itunesId,
+                error: error.message,
+            }));
+            throw error;
+        }
         console.error(JSON.stringify({
             event: "podcast_index_episodes_error",
             itunesId,

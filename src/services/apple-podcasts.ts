@@ -34,14 +34,34 @@ export interface ItunesEpisodeInfo {
 }
 
 /**
- * Extract episode title from Apple Podcasts redirect URL
- * Apple redirects to a canonical URL containing the episode title slug
+ * Extract episode title from Apple Podcasts URL
+ * First tries to parse from the URL directly (the slug before /id),
+ * then falls back to fetching the redirect for short URLs
  */
 async function getEpisodeTitleFromAppleRedirect(
     appleUrl: string
 ): Promise<string | null> {
+    // First, try to extract from the URL directly
+    // Format: https://podcasts.apple.com/us/podcast/episode-title-slug/id123?i=456
+    const directMatch = appleUrl.match(/\/podcast\/([^/]+)\/id\d+/);
+    if (directMatch && directMatch[1]) {
+        const slug = directMatch[1];
+        const title = slug.replace(/-/g, " ");
+        console.log(JSON.stringify({
+            event: "apple_url_title_extracted",
+            slug,
+            title,
+        }));
+        return title;
+    }
+    
+    // Fall back to fetching redirect for short URLs (e.g., podcasts.apple.com/podcast/id123?i=456)
     try {
-        // Fetch with redirect: "manual" to get the Location header
+        console.log(JSON.stringify({
+            event: "apple_redirect_fetch_start",
+            appleUrl,
+        }));
+        
         const response = await fetch(appleUrl, {
             method: "HEAD",
             redirect: "manual",
@@ -51,18 +71,27 @@ async function getEpisodeTitleFromAppleRedirect(
         });
         
         const location = response.headers.get("location");
+        console.log(JSON.stringify({
+            event: "apple_redirect_response",
+            status: response.status,
+            hasLocation: !!location,
+            location,
+        }));
+        
         if (!location) {
             return null;
         }
         
         // Parse the redirect URL to extract episode title
-        // Format: https://podcasts.apple.com/us/podcast/episode-title-slug/id123?i=456
-        const match = location.match(/\/podcast\/([^/]+)\/id\d+\?i=/);
+        const match = location.match(/\/podcast\/([^/]+)\/id\d+/);
         if (!match) {
+            console.log(JSON.stringify({
+                event: "apple_redirect_no_match",
+                location,
+            }));
             return null;
         }
         
-        // Convert slug to title: "the-100-person-ai-lab" -> "the 100 person ai lab"
         const slug = match[1];
         const title = slug.replace(/-/g, " ");
         
@@ -408,6 +437,8 @@ export interface GetEpisodeMetadataOptions {
     expectedDate?: string;
     // Environment for Podcast Index API access
     env?: Env;
+    // Original Apple URL for redirect-based title extraction
+    appleUrl?: string;
 }
 
 /**
@@ -569,11 +600,30 @@ async function getEpisodeFromPodcastIndex(
             return null;
         }
         
-        // Step 3: Find the specific episode
+        // Step 3: Get title for matching - use pre-fetched or extract from Apple redirect
+        let titleForMatching = options.expectedTitle;
+        console.log(JSON.stringify({
+            event: "podcast_index_title_check",
+            hasExpectedTitle: !!options.expectedTitle,
+            hasAppleUrl: !!options.appleUrl,
+            appleUrl: options.appleUrl,
+        }));
+        if (!titleForMatching && options.appleUrl) {
+            titleForMatching = await getEpisodeTitleFromAppleRedirect(options.appleUrl) || undefined;
+            if (titleForMatching) {
+                console.log(JSON.stringify({
+                    event: "podcast_index_title_from_redirect",
+                    appleUrl: options.appleUrl,
+                    extractedTitle: titleForMatching,
+                }));
+            }
+        }
+        
+        // Step 4: Find the specific episode
         const episode = findEpisodeByAppleId(
             episodes,
             parsedUrl.episodeId,
-            options.expectedTitle,
+            titleForMatching,
             options.expectedDate
         );
         
@@ -607,6 +657,10 @@ async function getEpisodeFromPodcastIndex(
             ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
         };
     } catch (error) {
+        // Re-throw AppErrors (especially rate limit) so they cause job retries
+        if (error instanceof AppError) {
+            throw error;
+        }
         console.error(JSON.stringify({
             event: "podcast_index_metadata_error",
             podcastId: parsedUrl.podcastId,

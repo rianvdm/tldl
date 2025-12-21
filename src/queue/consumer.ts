@@ -130,16 +130,21 @@ const queueHandler = {
                     }
                     message.ack(); // Don't retry anymore
                 } else {
-                    // Will retry - don't mark as failed, just log and retry
+                    // Determine retry delay - use longer delay for rate limits
+                    const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
+                    const delaySeconds = isRateLimited ? 15 : 5; // 15s for rate limit, 5s for other errors
+                    
                     console.log(
                         JSON.stringify({
                             event: "job_retry",
                             jobId: message.body.jobId,
                             attempt: message.attempts,
                             maxAttempts,
+                            delaySeconds,
+                            isRateLimited,
                         })
                     );
-                    message.retry();
+                    message.retry({ delaySeconds });
                 }
             }
         }
@@ -270,12 +275,14 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
 
     // Use pre-fetched iTunes metadata from queue message (avoids 403 errors)
     // Pass env for Podcast Index API access (primary source)
+    // Pass appleUrl for redirect-based title extraction when no pre-fetched metadata
     const metadata = await getEpisodeMetadata(parsedUrl, {
         maxMinutes,
         episodeGuid,
         expectedTitle,
         expectedDate,
         env,
+        appleUrl,
     });
 
     // Step 2: Check RSS for transcript if we don't have one
