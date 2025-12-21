@@ -8,7 +8,6 @@ import { html, raw } from "hono/html";
 import type { HonoEnv, EpisodeIndexEntry, Job, JobStatus } from "../types";
 import {
     listEpisodes,
-    listActiveJobs,
     getEpisode,
     getTranscript,
     listSummariesForEpisode,
@@ -19,6 +18,7 @@ import {
     createJobDO,
     getJobWithFallback,
     updateJobStatusDO,
+    listActiveJobsWithDO,
 } from "../lib/job-status-do";
 import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
@@ -307,8 +307,9 @@ publicRoutes.get("/", async (c) => {
     const search = c.req.query("q") || "";
 
     // Fetch both active jobs and completed episodes
+    // Use DO for active jobs (strong consistency) to show real-time status
     const [activeJobs, paginatedEpisodes] = await Promise.all([
-        listActiveJobs(c.env.TLDL_DATA),
+        listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
         listEpisodes(c.env.TLDL_DATA, { page, pageSize, search: search || undefined }),
     ]);
 

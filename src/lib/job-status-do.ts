@@ -113,6 +113,47 @@ export async function getJobWithFallback(
 }
 
 /**
+ * List all active jobs, fetching from DO for strong consistency
+ *
+ * Hybrid approach:
+ * - Use KV to discover which jobs exist (list operation)
+ * - Use DO to get actual job data (strong consistency)
+ * - Fallback to KV if DO fails
+ */
+export async function listActiveJobsWithDO(
+    env: Env,
+    kv: KVNamespace
+): Promise<import("../types").Job[]> {
+    // Get list of job keys from KV
+    const prefix = "job:";
+    const keys = await kv.list({ prefix });
+
+    if (keys.keys.length === 0) {
+        return [];
+    }
+
+    // Extract job IDs from keys (format: "job:{jobId}")
+    const jobIds = keys.keys.map(key => key.name.replace(prefix, ""));
+
+    // Fetch each job from DO (with KV fallback)
+    const jobs = await Promise.all(
+        jobIds.map(jobId => getJobWithFallback(env, kv, jobId))
+    );
+
+    // Filter to only active jobs (not completed, not failed) and sort by createdAt descending
+    return jobs
+        .filter((job): job is import("../types").Job =>
+            job !== null &&
+            job.status !== "completed" &&
+            job.status !== "failed"
+        )
+        .sort(
+            (a, b) =>
+                new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+}
+
+/**
  * Update job estimate in Durable Object
  * Non-critical operation - logs errors but doesn't throw
  */
