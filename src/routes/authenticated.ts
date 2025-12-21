@@ -314,9 +314,10 @@ authenticated.get("/profile", async (c) => {
             async function doDelete() {
                 if (!deleteEpisodeId) return;
                 try {
-                    const response = await fetch('/episode/' + deleteEpisodeId, {
-                        method: 'DELETE',
-                        headers: { 'Content-Type': 'application/json' }
+                    const response = await fetch('/profile/delete/' + deleteEpisodeId, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include'
                     });
                     if (response.ok) {
                         // Remove the card from the page
@@ -357,6 +358,35 @@ authenticated.get("/profile", async (c) => {
     </div>
 </body>
 </html>`);
+});
+
+// ============================================================================
+// POST /profile/delete/:episodeId - Delete episode from profile page
+// ============================================================================
+
+authenticated.post("/profile/delete/:episodeId", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const episodeId = c.req.param("episodeId");
+    const userEmail = c.get("userEmail");
+
+    // Verify episode exists
+    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (!episode) {
+        return c.json({ error: "Episode not found" }, 404);
+    }
+
+    // Verify user owns this episode
+    if (episode.submittedBy && episode.submittedBy !== userEmail) {
+        return c.json({ error: "You can only delete episodes you submitted" }, 403);
+    }
+
+    // Delete episode and all related data (transcript, summaries)
+    await deleteEpisode(c.env.TLDL_DATA, episodeId);
+
+    return c.json({ deleted: true });
 });
 
 // ============================================================================
