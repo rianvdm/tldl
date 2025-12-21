@@ -32,6 +32,8 @@ export interface Job {
     templateId: string;            // Template used for this job
     error?: string;                // Error message if failed
     estimatedSeconds?: number;     // Rough time estimate remaining
+    podcastName?: string;          // Podcast name (populated after metadata fetch)
+    episodeTitle?: string;         // Episode title (populated after metadata fetch)
     createdAt: string;             // ISO timestamp
     updatedAt: string;             // ISO timestamp
 }

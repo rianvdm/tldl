@@ -16,6 +16,7 @@ import { parseApplePodcastsUrl } from "../lib/url-parser";
 import {
     getJob,
     updateJobStatus,
+    updateJobMetadata,
     getEpisode,
     saveEpisode,
     getTranscript,
@@ -26,6 +27,7 @@ import {
 import {
     updateJobStatusDO,
     updateJobEstimateDO,
+    updateJobMetadataDO,
 } from "../lib/job-status-do";
 import { getEpisodeMetadata } from "../services/apple-podcasts";
 import { fetchTranscript as fetchRssTranscript } from "../services/rss";
@@ -285,6 +287,10 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         env,
         appleUrl,
     });
+
+    // Update job with metadata so it shows on the status page
+    await updateJobMetadataDO(env, jobId, metadata.podcastName, metadata.episodeTitle);
+    await updateJobMetadata(kv, jobId, metadata.podcastName, metadata.episodeTitle);
 
     // Step 2: Check RSS for transcript if we don't have one
     if (!transcript) {

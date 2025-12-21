@@ -83,6 +83,50 @@ export async function updateJobStatus(
 }
 
 /**
+ * Update a job's metadata (podcast name and episode title)
+ * Called after fetching episode metadata to display on status page
+ */
+export async function updateJobMetadata(
+    kv: KVNamespace,
+    jobId: string,
+    podcastName: string,
+    episodeTitle: string
+): Promise<void> {
+    const job = await getJob(kv, jobId);
+    if (!job) {
+        // Job not found - this is non-critical, just log and skip
+        console.log(
+            JSON.stringify({
+                event: "job_metadata_update_skipped",
+                jobId,
+                reason: "job_not_found",
+            })
+        );
+        return;
+    }
+
+    const updatedJob: Job = {
+        ...job,
+        podcastName,
+        episodeTitle,
+        updatedAt: new Date().toISOString(),
+    };
+
+    await kv.put(KV_KEYS.job(jobId), JSON.stringify(updatedJob), {
+        expirationTtl: TTL.JOB,
+    });
+
+    console.log(
+        JSON.stringify({
+            event: "job_metadata_updated",
+            jobId,
+            podcastName,
+            episodeTitle,
+        })
+    );
+}
+
+/**
  * List all active (non-completed, non-failed) jobs, sorted by createdAt descending
  */
 export async function listActiveJobs(kv: KVNamespace): Promise<Job[]> {

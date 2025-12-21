@@ -156,6 +156,13 @@ function renderMarkdown(md: string): string {
 // ============================================================================
 
 function Layout(props: { title: string; children: string }) {
+    // Use custom title for home page
+    const pageTitle = props.title === "Home"
+        ? "TL;DL - Too Long Didn't Listen"
+        : `${props.title} - TL;DL`;
+
+    const ogImage = "https://file.elezea.com/tldl-hero.png";
+
     return html`<!DOCTYPE html>
         <html lang="en" class="dark">
             <head>
@@ -164,18 +171,20 @@ function Layout(props: { title: string; children: string }) {
                     name="viewport"
                     content="width=device-width, initial-scale=1.0"
                 />
-                <title>${props.title} - TLDL</title>
+                <title>${pageTitle}</title>
                 <meta
                     name="description"
                     content="AI-powered podcast summaries from Apple Podcasts URLs"
                 />
                 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-                <meta property="og:title" content="${props.title} - TLDL" />
+                <meta property="og:title" content="${pageTitle}" />
                 <meta property="og:description" content="Get AI summaries of podcast episodes" />
                 <meta property="og:type" content="website" />
-                <meta name="twitter:card" content="summary" />
-                <meta name="twitter:title" content="${props.title} - TLDL" />
+                <meta property="og:image" content="${ogImage}" />
+                <meta name="twitter:card" content="summary_large_image" />
+                <meta name="twitter:title" content="${pageTitle}" />
                 <meta name="twitter:description" content="Get AI summaries of podcast episodes" />
+                <meta name="twitter:image" content="${ogImage}" />
                 <link rel="stylesheet" href="/styles.css" />
             </head>
             <body>
@@ -252,18 +261,29 @@ function InProgressCard(job: Job): string {
     const template = getTemplate(job.templateId);
     const templateName = template?.name || job.templateId;
 
+    // Show metadata if available, otherwise show status
+    const podcastDisplay = job.podcastName || "Processing";
+    const titleDisplay = job.episodeTitle || statusLabel;
+
+    // Build metadata line
+    const metaParts = [formatDate(job.createdAt), escapeHtml(templateName)];
+    // If we have episode title, also show status
+    if (job.episodeTitle) {
+        metaParts.push(escapeHtml(statusLabel));
+    }
+
     return `
         <a href="/job/${escapeHtml(job.id)}" class="episode-card episode-card-progress">
             <div class="episode-card-content">
                 <div class="episode-podcast">
                     <span class="status-indicator status-indicator-active"></span>
-                    Processing
+                    ${escapeHtml(podcastDisplay)}
                 </div>
-                <h3 class="episode-title">${escapeHtml(statusLabel)}</h3>
+                <h3 class="episode-title">${escapeHtml(titleDisplay)}</h3>
                 <div class="episode-meta">
-                    <span>Started ${formatDate(job.createdAt)}</span>
-                    <span class="meta-dot">•</span>
-                    <span>${escapeHtml(templateName)}</span>
+                    ${metaParts.map((part, i) =>
+                        i > 0 ? `<span class="meta-dot">•</span><span>${part}</span>` : `<span>${part}</span>`
+                    ).join('')}
                 </div>
             </div>
             <div class="episode-card-arrow">
@@ -419,7 +439,23 @@ publicRoutes.get("/", async (c) => {
         </div>
     `;
 
-    return c.html(Layout({ title: "Home", children: content }));
+    // Add auto-refresh when there are active jobs
+    const refreshMeta = activeJobs.length > 0
+        ? '<meta http-equiv="refresh" content="10">'
+        : '';
+
+    // Prevent caching when there are active jobs to ensure fresh status
+    if (activeJobs.length > 0) {
+        c.header("Cache-Control", "no-cache, no-store, must-revalidate");
+        c.header("Pragma", "no-cache");
+        c.header("Expires", "0");
+    }
+
+    return c.html(LayoutWithHead({
+        title: "Home",
+        children: content,
+        headExtra: refreshMeta
+    }));
 });
 
 // ============================================================================
@@ -1135,6 +1171,13 @@ function JobStatusPage(job: Job): string {
 // ============================================================================
 
 function LayoutWithHead(props: { title: string; children: string; headExtra?: string }) {
+    // Use custom title for home page
+    const pageTitle = props.title === "Home"
+        ? "TL;DL - Too Long Didn't Listen"
+        : `${props.title} - TL;DL`;
+
+    const ogImage = "https://file.elezea.com/tldl-hero.png";
+
     return html`<!DOCTYPE html>
         <html lang="en" class="dark">
             <head>
@@ -1143,18 +1186,20 @@ function LayoutWithHead(props: { title: string; children: string; headExtra?: st
                     name="viewport"
                     content="width=device-width, initial-scale=1.0"
                 />
-                <title>${props.title} - TLDL</title>
+                <title>${pageTitle}</title>
                 <meta
                     name="description"
                     content="AI-powered podcast summaries from Apple Podcasts URLs"
                 />
                 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-                <meta property="og:title" content="${props.title} - TLDL" />
+                <meta property="og:title" content="${pageTitle}" />
                 <meta property="og:description" content="Get AI summaries of podcast episodes" />
                 <meta property="og:type" content="website" />
-                <meta name="twitter:card" content="summary" />
-                <meta name="twitter:title" content="${props.title} - TLDL" />
+                <meta property="og:image" content="${ogImage}" />
+                <meta name="twitter:card" content="summary_large_image" />
+                <meta name="twitter:title" content="${pageTitle}" />
                 <meta name="twitter:description" content="Get AI summaries of podcast episodes" />
+                <meta name="twitter:image" content="${ogImage}" />
                 <link rel="stylesheet" href="/styles.css" />
                 ${raw(props.headExtra || "")}
             </head>

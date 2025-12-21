@@ -15,6 +15,8 @@ interface JobStatusUpdate {
     status: JobStatus;
     error?: string;
     estimatedSeconds?: number;
+    podcastName?: string;
+    episodeTitle?: string;
 }
 
 export class JobStatusDO implements DurableObject {
@@ -100,6 +102,8 @@ export class JobStatusDO implements DurableObject {
             updatedAt: new Date().toISOString(),
             ...(update.error !== undefined && { error: update.error }),
             ...(update.estimatedSeconds !== undefined && { estimatedSeconds: update.estimatedSeconds }),
+            ...(update.podcastName !== undefined && { podcastName: update.podcastName }),
+            ...(update.episodeTitle !== undefined && { episodeTitle: update.episodeTitle }),
         };
 
         await this.state.storage.put("job", this.job);

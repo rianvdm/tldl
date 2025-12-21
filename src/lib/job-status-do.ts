@@ -143,3 +143,37 @@ export async function updateJobEstimateDO(
         // Non-critical - don't fail job if estimate update fails
     }
 }
+
+/**
+ * Update job metadata (podcastName, episodeTitle) in Durable Object
+ * Called after fetching episode metadata to display on status page
+ */
+export async function updateJobMetadataDO(
+    env: Env,
+    jobId: string,
+    podcastName: string,
+    episodeTitle: string
+): Promise<void> {
+    try {
+        const stub = getJobStub(env, jobId);
+        const response = await stub.fetch("https://do/job");
+
+        if (!response.ok) {
+            return; // Job not found, skip
+        }
+
+        const job = await response.json<Job>();
+
+        await stub.fetch("https://do/job", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                status: job.status,
+                podcastName,
+                episodeTitle
+            }),
+        });
+    } catch {
+        // Non-critical - don't fail job if metadata update fails
+    }
+}
