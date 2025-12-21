@@ -12,6 +12,7 @@
 import type { Env, QueueMessage, Episode, Transcript, Summary, TranscriptSource } from "../types";
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
+import { generateEpisodeTags } from "../services/tag-generation";
 import { parseApplePodcastsUrl } from "../lib/url-parser";
 import {
     getJob,
@@ -359,6 +360,36 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     };
     await saveSummary(kv, summary);
 
+    // Step 4.5: Generate tags (non-critical - don't fail job if this fails)
+    let tags: string[] = [];
+    try {
+        const tagResult = await generateEpisodeTags(
+            summary.text,
+            transcript.text,
+            env.OPENAI_API_KEY
+        );
+        tags = tagResult.tags;
+
+        console.log(
+            JSON.stringify({
+                event: "tags_generated",
+                episodeId,
+                tags: tags,
+                model: tagResult.model,
+            })
+        );
+    } catch (error) {
+        // Log but don't fail the job
+        console.error(
+            JSON.stringify({
+                event: "tag_generation_failed",
+                episodeId,
+                error: error instanceof Error ? error.message : "Unknown error",
+            })
+        );
+        // Continue with empty tags
+    }
+
     // Step 5: Save episode metadata (only if it doesn't exist)
     if (!existingEpisode) {
         const now = new Date();
@@ -377,6 +408,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             createdAt: now.toISOString(),
             expiresAt: expiresAt.toISOString(),
             submittedBy,
+            tags: tags.length > 0 ? tags : undefined,
         };
         await saveEpisode(kv, episode);
 
@@ -389,6 +421,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             episodeDuration: episode.episodeDuration,
             createdAt: episode.createdAt,
             expiresAt: episode.expiresAt,
+            tags: episode.tags,
         });
     }
 

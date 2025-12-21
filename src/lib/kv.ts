@@ -242,6 +242,52 @@ export async function listEpisodesByUser(
         );
 }
 
+/**
+ * Update tags for an episode (admin-only operation)
+ * Updates both the episode record and the index entry
+ */
+export async function updateEpisodeTags(
+    kv: KVNamespace,
+    episodeId: string,
+    tags: string[]
+): Promise<void> {
+    // Get existing episode
+    const episode = await getEpisode(kv, episodeId);
+    if (!episode) {
+        throw new Error(`Episode not found: ${episodeId}`);
+    }
+
+    // Update episode with new tags
+    const updatedEpisode: Episode = {
+        ...episode,
+        tags: tags.length > 0 ? tags : undefined,
+    };
+    await saveEpisode(kv, updatedEpisode);
+
+    // Update episode index
+    const index = await getEpisodeIndex(kv);
+    const entryIndex = index.findIndex(e => e.id === episodeId);
+
+    if (entryIndex !== -1) {
+        index[entryIndex] = {
+            ...index[entryIndex],
+            tags: tags.length > 0 ? tags : undefined,
+        };
+
+        await kv.put(KV_KEYS.episodeIndex, JSON.stringify(index), {
+            expirationTtl: TTL.CONTENT,
+        });
+    }
+
+    console.log(
+        JSON.stringify({
+            event: "episode_tags_updated",
+            episodeId,
+            tags,
+        })
+    );
+}
+
 export interface PaginatedEpisodes {
     episodes: EpisodeIndexEntry[];
     total: number;
@@ -257,11 +303,12 @@ export interface PaginatedEpisodes {
  */
 export async function listEpisodes(
     kv: KVNamespace,
-    options?: { page?: number; pageSize?: number; search?: string }
+    options?: { page?: number; pageSize?: number; search?: string; tag?: string }
 ): Promise<PaginatedEpisodes> {
     const page = Math.max(1, options?.page ?? 1);
     const pageSize = options?.pageSize ?? 10;
     const search = options?.search?.toLowerCase().trim();
+    const tagFilter = options?.tag?.toLowerCase().trim();
 
     // Read the episode index (single KV read)
     let index = await getEpisodeIndex(kv);
@@ -284,13 +331,20 @@ export async function listEpisodes(
         return { episodes: [], total: 0, page, pageSize, totalPages: 0 };
     }
 
-    // Filter by search query if provided
+    // Filter by search query and/or tag
     let filtered = index;
+    
     if (search) {
-        filtered = index.filter(
+        filtered = filtered.filter(
             (ep) =>
                 ep.podcastName.toLowerCase().includes(search) ||
                 ep.episodeTitle.toLowerCase().includes(search)
+        );
+    }
+    
+    if (tagFilter) {
+        filtered = filtered.filter(
+            (ep) => ep.tags?.includes(tagFilter)
         );
     }
 

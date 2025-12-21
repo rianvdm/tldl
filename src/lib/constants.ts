@@ -13,6 +13,56 @@ export const ADMIN_EMAILS: string[] = [
 ];
 
 // ============================================================================
+// Episode Tags
+// ============================================================================
+
+/**
+ * Predefined episode tags for AI categorization.
+ * Easy to edit - just add/remove tags from this array.
+ * Keep between 8-12 tags total for optimal user experience.
+ */
+export const EPISODE_TAGS = [
+    "business",
+    "creativity",
+    "education",
+    "health",
+    "interview",
+    "politics",
+    "product",
+    "psychology",
+    "science",
+    "sport",
+    "technology",
+    "music",
+    "faith",
+] as const;
+
+export type EpisodeTag = (typeof EPISODE_TAGS)[number];
+
+/**
+ * Get all valid episode tags
+ */
+export function getValidTags(): readonly string[] {
+    return EPISODE_TAGS;
+}
+
+/**
+ * Check if a tag is valid
+ */
+export function isValidTag(tag: string): tag is EpisodeTag {
+    return EPISODE_TAGS.includes(tag as EpisodeTag);
+}
+
+/**
+ * Validate an array of tags
+ */
+export function validateTags(tags: string[]): { valid: string[]; invalid: string[] } {
+    const valid = tags.filter(tag => isValidTag(tag));
+    const invalid = tags.filter(tag => !isValidTag(tag));
+    return { valid, invalid };
+}
+
+// ============================================================================
 // Summary Templates
 // ============================================================================
 
