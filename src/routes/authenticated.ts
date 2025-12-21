@@ -33,6 +33,7 @@ import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId, RATE_LIMITS, getValidTags, validateTags } from "../lib/constants";
 import { updateEpisodeTags } from "../lib/kv";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
+import { generateEpisodeTags } from "../services/tag-generation";
 import { getUserEmailFromJwt, escapeHtml, isAdminUser } from "../lib/auth";
 
 const authenticated = new Hono<HonoEnv>();
@@ -219,6 +220,107 @@ authenticated.post("/profile/rebuild-index", async (c) => {
             success: false,
             error: error instanceof Error ? error.message : "Unknown error",
         }, 500);
+    }
+});
+
+// ============================================================================
+// POST /admin/backfill-tags - Generate tags for episodes without them
+// ============================================================================
+
+authenticated.post("/admin/backfill-tags", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    try {
+        // Get all episodes from index
+        // Note: This processes up to 1000 episodes. If you have more,
+        // consider implementing pagination or increasing the limit.
+        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, {
+            pageSize: 1000
+        });
+
+        // Filter to episodes without tags
+        const episodesNeedingTags = allEpisodes.episodes.filter(
+            ep => !ep.tags || ep.tags.length === 0
+        );
+
+        let processed = 0;
+        let tagged = 0;
+        let failed = 0;
+
+        // Process in batches
+        for (const ep of episodesNeedingTags) {
+            try {
+                processed++;
+
+                // Read existing data from KV
+                const [transcript, summary] = await Promise.all([
+                    getTranscript(c.env.TLDL_DATA, ep.id),
+                    getSummary(c.env.TLDL_DATA, ep.id, "key-takeaways"), // Use default template
+                ]);
+
+                if (!transcript || !summary) {
+                    console.log(`Skipping ${ep.id}: missing transcript or summary`);
+                    failed++;
+                    continue;
+                }
+
+                // Generate tags
+                const tagResult = await generateEpisodeTags(
+                    summary.text,
+                    transcript.text,
+                    c.env.OPENAI_API_KEY
+                );
+
+                if (tagResult.tags.length === 0) {
+                    console.log(`Warning: No tags generated for ${ep.id}`);
+                    failed++;
+                    continue;
+                }
+
+                // Update episode with tags
+                await updateEpisodeTags(c.env.TLDL_DATA, ep.id, tagResult.tags);
+                tagged++;
+
+                console.log(
+                    JSON.stringify({
+                        event: "episode_tagged",
+                        episodeId: ep.id,
+                        tags: tagResult.tags,
+                    })
+                );
+            } catch (error) {
+                console.error(
+                    JSON.stringify({
+                        event: "backfill_failed",
+                        episodeId: ep.id,
+                        error: error instanceof Error ? error.message : "Unknown error",
+                    })
+                );
+                failed++;
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed} episodes: ${tagged} tagged, ${failed} failed`,
+            processed,
+            tagged,
+            failed,
+            totalEpisodes: allEpisodes.episodes.length,
+        });
+    } catch (error) {
+        return c.json(
+            {
+                error: error instanceof Error ? error.message : "Failed to backfill tags",
+            },
+            500
+        );
     }
 });
 
@@ -448,6 +550,16 @@ authenticated.get("/profile", async (c) => {
                     </button>
                     <div id="cleanup-result" class="alert alert-success" style="display: none; margin-top: 1rem;"></div>
                 </div>
+                <div class="admin-tool-item" style="margin-top: 1.5rem;">
+                    <p class="text-muted">Generate tags for all episodes without tags using existing transcripts and summaries</p>
+                    <button type="button" class="button" id="backfill-tags-btn" onclick="backfillTags()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+                        </svg>
+                        Backfill Tags for All Episodes
+                    </button>
+                    <div id="backfill-status" style="display: none; margin-top: 1rem;"></div>
+                </div>
             </div>
         </section>
         ` : ""}
@@ -609,6 +721,51 @@ authenticated.get("/profile", async (c) => {
                 result.style.display = 'block';
                 btn.disabled = false;
                 btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg> Clean Up Failed Jobs';
+            }
+
+            async function backfillTags() {
+                if (!confirm('Generate tags for all episodes without tags? This may take a few minutes and will use OpenAI API credits.')) {
+                    return;
+                }
+
+                const button = document.getElementById('backfill-tags-btn');
+                const statusEl = document.getElementById('backfill-status');
+
+                // Show loading state
+                button.disabled = true;
+                button.textContent = 'Processing...';
+                statusEl.style.display = 'block';
+                statusEl.className = 'alert alert-info';
+                statusEl.textContent = 'Generating tags for episodes...';
+
+                try {
+                    const response = await fetch('/admin/backfill-tags', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        statusEl.className = 'alert alert-success';
+                        statusEl.textContent = 'Success! ' + data.message;
+
+                        // Reload page after 2 seconds to show new tags
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        statusEl.className = 'alert alert-error';
+                        statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+                        button.disabled = false;
+                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
+                    }
+                } catch (err) {
+                    statusEl.className = 'alert alert-error';
+                    statusEl.textContent = 'Failed to backfill tags';
+                    button.disabled = false;
+                    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
+                }
             }
         </script>
     `;
