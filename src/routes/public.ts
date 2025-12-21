@@ -313,8 +313,8 @@ function InProgressCard(job: Job): string {
                 <h3 class="episode-title">${escapeHtml(titleDisplay)}</h3>
                 <div class="episode-meta">
                     ${metaParts.map((part, i) =>
-                        i > 0 ? `<span class="meta-dot">•</span><span>${part}</span>` : `<span>${part}</span>`
-                    ).join('')}
+        i > 0 ? `<span class="meta-dot">•</span><span>${part}</span>` : `<span>${part}</span>`
+    ).join('')}
                 </div>
             </div>
             <div class="episode-card-arrow">
@@ -386,7 +386,7 @@ publicRoutes.get("/", async (c) => {
     // Intro text for the home page
     const introSection = `
         <div class="intro-section">
-            <p><span class="text-accent">Get the key insights from your favorite podcasts.</span> Paste an Apple Podcasts link and choose how you want it summarized—key takeaways, narrative overview, or simplified explainer. Submissions are invite-only for now—browse existing summaries below.</p>
+            <p><span class="text-accent">Get key insights from your favorite podcasts.</span> Paste an Apple Podcasts link and choose how you want it summarized—key takeaways, narrative overview, or simplified explainer. Submissions are invite-only for now—browse existing summaries below.</p>
         </div>
     `;
 

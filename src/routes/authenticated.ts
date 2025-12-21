@@ -325,6 +325,72 @@ authenticated.post("/profile/backfill-tags", async (c) => {
 });
 
 // ============================================================================
+// POST /profile/cleanup-invalid-tags - Remove tags that are no longer in EPISODE_TAGS
+// ============================================================================
+
+authenticated.post("/profile/cleanup-invalid-tags", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    try {
+        const validTags = getValidTags();
+        
+        // Get all episodes from index
+        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, {
+            pageSize: 1000
+        });
+
+        let processed = 0;
+        let cleaned = 0;
+
+        // Process each episode that has tags
+        for (const ep of allEpisodes.episodes) {
+            if (!ep.tags || ep.tags.length === 0) continue;
+
+            processed++;
+
+            // Filter to only valid tags
+            const cleanedTags = ep.tags.filter(tag => validTags.includes(tag));
+
+            // Only update if tags changed
+            if (cleanedTags.length !== ep.tags.length) {
+                await updateEpisodeTags(c.env.TLDL_DATA, ep.id, cleanedTags);
+                cleaned++;
+                
+                console.log(
+                    JSON.stringify({
+                        event: "tags_cleaned",
+                        episodeId: ep.id,
+                        before: ep.tags,
+                        after: cleanedTags,
+                    })
+                );
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed} episodes with tags: ${cleaned} cleaned`,
+            processed,
+            cleaned,
+            totalEpisodes: allEpisodes.episodes.length,
+        });
+    } catch (error) {
+        return c.json(
+            {
+                error: error instanceof Error ? error.message : "Failed to cleanup tags",
+            },
+            500
+        );
+    }
+});
+
+// ============================================================================
 // POST /profile/cleanup-failed-jobs - Admin-only: Clean up all failed jobs
 // ============================================================================
 
@@ -560,6 +626,16 @@ authenticated.get("/profile", async (c) => {
                     </button>
                     <div id="backfill-status" style="display: none; margin-top: 1rem;"></div>
                 </div>
+                <div class="admin-tool-item" style="margin-top: 1.5rem;">
+                    <p class="text-muted">Remove tags that are no longer in the predefined tag list (cleanup after removing tags from constants)</p>
+                    <button type="button" class="button" id="cleanup-tags-btn" onclick="cleanupInvalidTags()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>
+                        </svg>
+                        Cleanup Invalid Tags
+                    </button>
+                    <div id="cleanup-tags-status" style="display: none; margin-top: 1rem;"></div>
+                </div>
             </div>
         </section>
         ` : ""}
@@ -765,6 +841,51 @@ authenticated.get("/profile", async (c) => {
                     statusEl.textContent = 'Failed to backfill tags';
                     button.disabled = false;
                     button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
+                }
+            }
+
+            async function cleanupInvalidTags() {
+                if (!confirm('Remove invalid tags from all episodes? This will remove any tags that are no longer in the predefined tag list.')) {
+                    return;
+                }
+
+                const button = document.getElementById('cleanup-tags-btn');
+                const statusEl = document.getElementById('cleanup-tags-status');
+
+                // Show loading state
+                button.disabled = true;
+                button.textContent = 'Processing...';
+                statusEl.style.display = 'block';
+                statusEl.className = 'alert alert-info';
+                statusEl.textContent = 'Cleaning up invalid tags...';
+
+                try {
+                    const response = await fetch('/profile/cleanup-invalid-tags', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        statusEl.className = 'alert alert-success';
+                        statusEl.textContent = 'Success! ' + data.message;
+
+                        // Reload page after 2 seconds to show updated tags
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        statusEl.className = 'alert alert-error';
+                        statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+                        button.disabled = false;
+                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
+                    }
+                } catch (err) {
+                    statusEl.className = 'alert alert-error';
+                    statusEl.textContent = 'Failed to cleanup tags';
+                    button.disabled = false;
+                    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
                 }
             }
         </script>
