@@ -111,22 +111,34 @@ async function getEpisodeTitleFromApplePage(
 }
 
 /**
- * Check if a URL appears to be an RSS feed URL rather than a website
- * Some podcasts have their RSS feed URL in the link field instead of their website
+ * Clean a podcast link URL that might be an RSS feed URL
+ * Extracts the base website URL from RSS feed URLs
+ * e.g., https://www.thisamericanlife.org/podcast/rss.xml -> https://www.thisamericanlife.org
  */
-function isRssFeedUrl(url: string): boolean {
-    const lowerUrl = url.toLowerCase();
-    // Check for common RSS feed URL patterns
-    return (
-        lowerUrl.endsWith('.xml') ||
-        lowerUrl.endsWith('.rss') ||
-        lowerUrl.endsWith('/feed') ||
-        lowerUrl.endsWith('/feed/') ||
-        lowerUrl.includes('/rss.') ||
-        lowerUrl.includes('/feed.') ||
-        lowerUrl.includes('/rss/') ||
-        lowerUrl.includes('/feed/')
-    );
+function cleanPodcastWebsiteUrl(url: string): string {
+    try {
+        const parsed = new URL(url);
+        const lowerPath = parsed.pathname.toLowerCase();
+
+        // Check if the path looks like an RSS feed path
+        if (
+            lowerPath.endsWith('.xml') ||
+            lowerPath.endsWith('.rss') ||
+            lowerPath.endsWith('/feed') ||
+            lowerPath.endsWith('/feed/') ||
+            lowerPath.includes('/rss') ||
+            lowerPath.includes('/feed')
+        ) {
+            // Return just the origin (protocol + host)
+            return parsed.origin;
+        }
+
+        // Not an RSS URL, return as-is
+        return url;
+    } catch {
+        // If URL parsing fails, return as-is
+        return url;
+    }
 }
 
 /**
@@ -676,7 +688,7 @@ async function getEpisodeFromPodcastIndex(
             feedUrl: podcast.url,
             ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
             ...(podcast.author && { podcastAuthor: podcast.author }),
-            ...(podcast.link && !isRssFeedUrl(podcast.link) && { podcastWebsiteUrl: podcast.link }),
+            ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
         };
     } catch (error) {
         // Re-throw AppErrors (especially rate limit) so they cause job retries

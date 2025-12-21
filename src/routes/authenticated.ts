@@ -432,8 +432,23 @@ authenticated.post("/profile/backfill-podcast-info", async (c) => {
                     continue;
                 }
 
-                // Skip if already has info
-                if (episode.podcastAuthor || episode.podcastWebsiteUrl) {
+                // Helper to detect RSS-like URLs that need cleaning
+                const needsUrlCleaning = (url: string) => {
+                    const lowerPath = new URL(url).pathname.toLowerCase();
+                    return (
+                        lowerPath.endsWith('.xml') ||
+                        lowerPath.endsWith('.rss') ||
+                        lowerPath.endsWith('/feed') ||
+                        lowerPath.endsWith('/feed/') ||
+                        lowerPath.includes('/rss') ||
+                        lowerPath.includes('/feed')
+                    );
+                };
+
+                // Skip if already has both author AND a clean website URL
+                const hasCleanWebsiteUrl = episode.podcastWebsiteUrl &&
+                    !needsUrlCleaning(episode.podcastWebsiteUrl);
+                if (episode.podcastAuthor && hasCleanWebsiteUrl) {
                     alreadyHasInfo++;
                     continue;
                 }
@@ -463,10 +478,31 @@ authenticated.post("/profile/backfill-podcast-info", async (c) => {
                     podcastCache.set(parsed.podcastId, podcastInfo);
                 }
 
+                // Helper to clean RSS feed URLs to base website
+                const cleanUrl = (url: string) => {
+                    try {
+                        const parsed = new URL(url);
+                        const lowerPath = parsed.pathname.toLowerCase();
+                        if (
+                            lowerPath.endsWith('.xml') ||
+                            lowerPath.endsWith('.rss') ||
+                            lowerPath.endsWith('/feed') ||
+                            lowerPath.endsWith('/feed/') ||
+                            lowerPath.includes('/rss') ||
+                            lowerPath.includes('/feed')
+                        ) {
+                            return parsed.origin;
+                        }
+                        return url;
+                    } catch {
+                        return url;
+                    }
+                };
+
                 // Update episode if we got info
                 if (podcastInfo && (podcastInfo.author || podcastInfo.link)) {
                     episode.podcastAuthor = podcastInfo.author;
-                    episode.podcastWebsiteUrl = podcastInfo.link;
+                    episode.podcastWebsiteUrl = podcastInfo.link ? cleanUrl(podcastInfo.link) : undefined;
                     await saveEpisode(c.env.TLDL_DATA, episode);
                     updated++;
 
