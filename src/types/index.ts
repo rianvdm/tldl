@@ -55,6 +55,7 @@ export interface Episode {
     createdAt: string;             // ISO timestamp
     expiresAt: string;             // ISO timestamp (createdAt + 365 days)
     submittedBy?: string;          // Email of user who submitted (optional for backwards compat)
+    tags?: string[];               // AI-generated episode tags (1-4 tags)
 }
 
 /**
@@ -70,6 +71,7 @@ export interface EpisodeIndexEntry {
     episodeDuration: number;
     createdAt: string;
     expiresAt: string;
+    tags?: string[];               // AI-generated episode tags (included for filtering)
 }
 
 /**
