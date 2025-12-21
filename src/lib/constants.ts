@@ -168,6 +168,9 @@ export const TIMEOUTS = {
     // Audio chunk fetch (for chunked transcription)
     CHUNK_FETCH_MS: 60 * 1000,          // 1 minute
 
+    // Delay between audio chunk fetches (avoid CDN rate limits)
+    CHUNK_FETCH_DELAY_MS: 500,          // 500ms between chunks
+
     // OpenAI Whisper API call (per chunk)
     WHISPER_API_MS: 10 * 60 * 1000,     // 10 minutes
 

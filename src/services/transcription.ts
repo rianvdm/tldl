@@ -6,7 +6,7 @@
 
 import { AppError } from "../lib/errors";
 import { ERROR_CODES, TIMEOUTS, AUDIO_LIMITS } from "../lib/constants";
-import { withRetry, isTransientError } from "../lib/retry";
+import { withRetry, isTransientError, isRateLimitError, sleep } from "../lib/retry";
 import {
     calculateChunkRanges,
     requiresChunking,
@@ -407,6 +407,11 @@ async function transcribeWithChunking(
         );
 
         try {
+            // Add delay between chunks to avoid CDN rate limits (skip first chunk)
+            if (i > 0) {
+                await sleep(TIMEOUTS.CHUNK_FETCH_DELAY_MS);
+            }
+
             // Fetch this chunk via Range request
             const chunkBuffer = await fetchAudioChunk(
                 audioUrl,
@@ -525,6 +530,26 @@ async function fetchAudioChunk(
     startByte: number,
     endByte: number,
 ): Promise<ArrayBuffer> {
+    // Wrap with retry logic for rate limit handling
+    return withRetry(
+        () => fetchAudioChunkOnce(audioUrl, startByte, endByte),
+        {
+            maxRetries: 3,
+            baseDelayMs: 2000, // Longer delay for CDN rate limits
+            shouldRetry: isRateLimitError,
+        }
+    );
+}
+
+/**
+ * Single attempt to fetch an audio chunk.
+ * Separated to enable retry wrapping.
+ */
+async function fetchAudioChunkOnce(
+    audioUrl: string,
+    startByte: number,
+    endByte: number,
+): Promise<ArrayBuffer> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.CHUNK_FETCH_MS);
 
@@ -537,6 +562,11 @@ async function fetchAudioChunk(
         });
 
         clearTimeout(timeoutId);
+
+        // Check for rate limiting (429) specifically
+        if (response.status === 429) {
+            throw new Error(`CDN rate limited: HTTP 429`);
+        }
 
         // Accept both 200 (full content) and 206 (partial content)
         if (!response.ok && response.status !== 206) {
@@ -551,6 +581,11 @@ async function fetchAudioChunk(
         clearTimeout(timeoutId);
 
         if (error instanceof AppError) {
+            throw error;
+        }
+
+        // Re-throw rate limit errors for retry handling
+        if (error instanceof Error && error.message.includes("429")) {
             throw error;
         }
 
