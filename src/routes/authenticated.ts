@@ -450,7 +450,7 @@ authenticated.get("/profile", async (c) => {
                         ` : episode.tags && episode.tags.length > 0 ? `
                         <div style="margin-top: 0.75rem;">
                             <span style="font-size: 0.75rem; color: var(--muted-foreground); margin-right: 0.5rem;">Tags:</span>
-                            ${episode.tags.map(tag => `<span class="badge">${escapeHtml(tag)}</span>`).join(' ')}
+                            ${[...episode.tags].sort().map(tag => `<span class="badge">${escapeHtml(tag)}</span>`).join(' ')}
                         </div>
                         ` : ''}
                     </div>

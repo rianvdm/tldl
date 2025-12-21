@@ -225,9 +225,9 @@ function EpisodeCard(
         })
         .join("");
 
-    // Render tag badges
+    // Render tag badges (sorted alphabetically)
     const tagBadges = episode.tags && episode.tags.length > 0
-        ? episode.tags
+        ? [...episode.tags].sort()
             .map((tag) => {
                 const isSelected = currentTag === tag;
                 const badgeClass = isSelected ? "tag-badge tag-badge-selected" : "tag-badge";
@@ -238,7 +238,7 @@ function EpisodeCard(
         : "";
 
     return `
-        <a href="/episode/${escapeHtml(episode.id)}" class="episode-card">
+        <div class="episode-card" onclick="window.location.href='/episode/${escapeHtml(episode.id)}'" style="cursor: pointer;">
             <div class="episode-card-content">
                 <div class="episode-podcast">${escapeHtml(episode.podcastName)}</div>
                 <h3 class="episode-title">${escapeHtml(episode.episodeTitle)}</h3>
@@ -247,18 +247,14 @@ function EpisodeCard(
                     <span class="meta-dot">•</span>
                     <span>${formatDuration(episode.episodeDuration)}</span>
                 </div>
-                ${tagBadges || templateBadges ? `<div class="episode-badges">
-                    ${tagBadges}
-                    ${tagBadges && templateBadges ? '<span class="meta-dot" style="margin: 0 0.25rem;">•</span>' : ''}
-                    ${templateBadges}
-                </div>` : ""}
+                ${tagBadges || templateBadges ? `<div class="episode-badges">${tagBadges}${tagBadges && templateBadges ? '<span class="meta-dot" style="margin: 0 0.25rem;">•</span>' : ''}${templateBadges}</div>` : ""}
             </div>
             <div class="episode-card-arrow">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>
                 </svg>
             </div>
-        </a>
+        </div>
     `;
 }
 
@@ -666,14 +662,7 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
                     </svg>
                     Expires in ${daysRemaining} days
                 </span>
-                ${episode.tags && episode.tags.length > 0 ? `
-                <span class="meta-dot">•</span>
-                <div style="display: inline-flex; gap: 0.375rem;">
-                    ${episode.tags.map(tag =>
-                        `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`
-                    ).join('')}
-                </div>
-                ` : ""}
+                ${episode.tags && episode.tags.length > 0 ? `<span class="meta-dot">•</span><div style="display: inline-flex; gap: 0.375rem;">${[...episode.tags].sort().map(tag => `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`).join('')}</div>` : ""}
             </div>
             <div class="platform-links">
                 <a href="${escapeHtml(episode.appleUrl)}" target="_blank" rel="noopener noreferrer" class="apple-podcasts-badge" title="Listen on Apple Podcasts">

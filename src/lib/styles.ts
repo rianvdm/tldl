@@ -288,6 +288,7 @@ h4 {
 .episode-badges {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 0.5rem;
 }
 

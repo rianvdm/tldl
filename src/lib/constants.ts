@@ -22,17 +22,19 @@ export const ADMIN_EMAILS: string[] = [
  * Keep between 8-12 tags total for optimal user experience.
  */
 export const EPISODE_TAGS = [
-    "psychology",
     "business",
-    "technology",
-    "health",
-    "education",
     "creativity",
-    "science",
-    "personal-development",
-    "storytelling",
+    "education",
+    "health",
     "interview",
-    "product-management"
+    "politics",
+    "product",
+    "psychology",
+    "science",
+    "sport",
+    "technology",
+    "music",
+    "faith",
 ] as const;
 
 export type EpisodeTag = (typeof EPISODE_TAGS)[number];
