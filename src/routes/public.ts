@@ -181,7 +181,7 @@ function Layout(props: { title: string; children: string }) {
             <body>
                 <div class="container">
                     <nav class="nav">
-                        <a href="/" class="nav-brand">TLDL</a>
+                        <a href="/" class="nav-brand">TL;DL</a>
                         <span class="nav-tagline"
                             >Too Long Didn't Listen</span
                         >
@@ -189,7 +189,7 @@ function Layout(props: { title: string; children: string }) {
                     </nav>
                     <main class="main">${raw(props.children)}</main>
                     <footer class="footer">
-                        <p>AI-powered podcast summaries</p>
+                        <p>TL;DL uses AI to generate summaries from podcast transcripts.</p>
                     </footer>
                 </div>
             </body>
@@ -784,7 +784,7 @@ function SubmitFormPage(props: SubmitFormProps): string {
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
                     </svg>
-                    <span>Episodes are limited to 80 minutes. Transcripts and summaries are cached for 365 days.</span>
+                    <span>Episodes are limited to 1h45m. Transcripts and summaries are cached for 365 days.</span>
                 </div>
 
                 <div class="form-actions">
@@ -1136,14 +1136,14 @@ function LayoutWithHead(props: { title: string; children: string; headExtra?: st
             <body>
                 <div class="container">
                     <nav class="nav">
-                        <a href="/" class="nav-brand">TLDL</a>
+                        <a href="/" class="nav-brand">TL;DL</a>
                         <span class="nav-tagline"
                             >Too Long Didn't Listen</span
                         >
                     </nav>
                     <main class="main">${raw(props.children)}</main>
                     <footer class="footer">
-                        <p>AI-powered podcast summaries</p>
+                        <p>TL;DL uses AI to generate summaries from podcast transcripts.</p>
                     </footer>
                 </div>
             </body>

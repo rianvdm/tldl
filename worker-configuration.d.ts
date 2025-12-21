@@ -7,7 +7,7 @@ declare namespace Cloudflare {
 	}
 	interface Env {
 		TLDL_DATA: KVNamespace;
-		MAX_EPISODE_MINUTES: "80";
+		MAX_EPISODE_MINUTES: "105";
 		CACHE_TTL_DAYS: "365";
 		DEFAULT_TEMPLATE: "key-takeaways";
 		TLDL_QUEUE: Queue;

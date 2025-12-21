@@ -19,7 +19,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
     [ERROR_CODES.EPISODE_NOT_FOUND]:
         "Couldn't find this episode. Please check the URL and try again.",
     [ERROR_CODES.EPISODE_TOO_LONG]:
-        "This episode is too long (over 80 minutes). Try a shorter episode.",
+        "This episode is too long (over 1h45m). Try a shorter episode.",
     [ERROR_CODES.AUDIO_UNAVAILABLE]:
         "Unable to access the episode audio. It may be geo-restricted or no longer available.",
     [ERROR_CODES.AUDIO_TOO_LARGE]:

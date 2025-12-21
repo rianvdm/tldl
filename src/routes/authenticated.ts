@@ -321,14 +321,14 @@ authenticated.get("/profile", async (c) => {
 <body>
     <div class="container">
         <nav class="nav">
-            <a href="/" class="nav-brand">TLDL</a>
+            <a href="/" class="nav-brand">TL;DL</a>
             <span class="nav-tagline">Too Long Didn't Listen</span>
         </nav>
         <main class="main">
             ${content}
         </main>
         <footer class="footer">
-            <p>AI-powered podcast summaries</p>
+            <p>TL;DL uses AI to generate summaries from podcast transcripts.</p>
         </footer>
     </div>
 </body>
