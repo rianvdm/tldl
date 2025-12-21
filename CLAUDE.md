@@ -41,6 +41,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
 - **Audio chunking**: `src/lib/audio.ts` handles MP3 frame-aware splitting for large files (>25MB)
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
+- **Styling**: All CSS is in `src/lib/styles.ts` (not a `.css` file) — Cloudflare Workers can't read from the filesystem, so styles are embedded in TypeScript
 
 ### KV Storage Schema
 

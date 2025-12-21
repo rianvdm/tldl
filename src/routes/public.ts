@@ -319,9 +319,17 @@ publicRoutes.get("/", async (c) => {
         <div class="divider"></div>
     ` : "";
 
+    // Intro text for the home page
+    const introSection = `
+        <div class="intro-section">
+            <p>Get the key insights from your favorite podcasts. Paste an Apple Podcasts link, receive an AI-generated summary. Submitting new episodes is invite-only for now—browse existing summaries below.</p>
+        </div>
+    `;
+
     const content =
         episodes.length > 0 || activeJobs.length > 0
             ? `
+        ${introSection}
         <div class="page-header-with-action">
             <div class="page-header">
                 <h1>Recent Episodes</h1>

@@ -154,6 +154,26 @@ h4 {
 }
 
 /* ============================================================================
+   Intro Section
+   ============================================================================ */
+
+.intro-section {
+    margin-bottom: 2rem;
+    padding: 1.25rem 1.5rem;
+    background: linear-gradient(135deg, rgba(38, 38, 38, 0.5) 0%, rgba(23, 23, 23, 0.8) 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--muted-foreground);
+}
+
+.intro-section p {
+    font-size: 1.0625rem;
+    line-height: 1.7;
+    color: var(--muted-foreground);
+    margin: 0;
+}
+
+/* ============================================================================
    Page Header
    ============================================================================ */
 
