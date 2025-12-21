@@ -280,7 +280,7 @@ function EpisodeCard(
     return `
         <div class="episode-card" onclick="window.location.href='/episode/${escapeHtml(episode.id)}'" style="cursor: pointer;">
             <div class="episode-card-content">
-                <div class="episode-podcast">${escapeHtml(episode.podcastName)}</div>
+                <div class="episode-podcast">${escapeHtml(episode.podcastName)}${episode.podcastAuthor ? ` <span class="podcast-author podcast-author-inline">by ${escapeHtml(episode.podcastAuthor)}</span>` : ''}</div>
                 <h3 class="episode-title">${escapeHtml(episode.episodeTitle)}</h3>
                 <div class="episode-meta">
                     <span>${formatDate(episode.episodeDate)}</span>
@@ -696,6 +696,7 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
 
         <div class="episode-header">
             <div class="episode-podcast">${escapeHtml(episode.podcastName)}</div>
+            ${episode.podcastAuthor ? `<div class="podcast-author podcast-author-block">by ${escapeHtml(episode.podcastAuthor)}</div>` : ''}
             <h1 class="episode-detail-title">${escapeHtml(episode.episodeTitle)}</h1>
             <div class="episode-meta">
                 <span>${formatDate(episode.episodeDate)}</span>
@@ -721,6 +722,14 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
                 <a href="${escapeHtml(episode.appleUrl)}" target="_blank" rel="noopener noreferrer" class="apple-podcasts-badge" title="Listen on Apple Podcasts">
                     <img src="/apple-podcasts-badge.svg" alt="Listen on Apple Podcasts" height="32">
                 </a>
+                ${episode.podcastWebsiteUrl ? `
+                <a href="${escapeHtml(episode.podcastWebsiteUrl)}" target="_blank" rel="noopener noreferrer" class="website-link" title="Visit podcast website">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                    Visit Website
+                </a>
+                ` : ''}
             </div>
         </div>
 

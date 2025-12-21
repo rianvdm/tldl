@@ -409,6 +409,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             expiresAt: expiresAt.toISOString(),
             submittedBy,
             tags: tags.length > 0 ? tags : undefined,
+            podcastAuthor: metadata.podcastAuthor,
+            podcastWebsiteUrl: metadata.podcastWebsiteUrl,
         };
         await saveEpisode(kv, episode);
 
@@ -422,6 +424,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             createdAt: episode.createdAt,
             expiresAt: episode.expiresAt,
             tags: episode.tags,
+            podcastAuthor: episode.podcastAuthor,
         });
     }
 

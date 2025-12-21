@@ -255,15 +255,17 @@ h4 {
 }
 
 .episode-podcast {
-    font-size: 0.875rem;
-    color: var(--muted-foreground);
-    margin-bottom: 0.25rem;
+    font-size: 1.125rem;
+    font-weight: 500;
+    color: var(--foreground);
+    margin-bottom: 0.125rem;
     display: flex;
     align-items: center;
 }
 
 .episode-title {
     margin-bottom: 0.5rem;
+    font-weight: 600;
     transition: color 0.2s ease;
 }
 
@@ -1392,6 +1394,37 @@ h4 {
 .apple-podcasts-badge img {
     height: 32px;
     width: auto;
+}
+
+.podcast-author {
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
+}
+
+.podcast-author-inline {
+    margin-left: 0.375rem;
+}
+
+.podcast-author-block {
+    margin-top: 0.25rem;
+}
+
+.website-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    background-color: var(--muted);
+    border-radius: var(--radius);
+    transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.website-link:hover {
+    color: var(--foreground);
+    background-color: var(--accent);
 }
 
 /* ============================================================================

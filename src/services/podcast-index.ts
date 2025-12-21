@@ -17,6 +17,8 @@ export interface PodcastIndexPodcast {
     url: string;           // RSS feed URL
     title: string;
     itunesId: number;
+    author?: string;       // Podcast author/host name
+    link?: string;         // Podcast website URL
 }
 
 export interface PodcastIndexEpisode {
@@ -36,6 +38,8 @@ interface PodcastIndexPodcastResponse {
         url: string;
         title: string;
         itunesId: number;
+        author?: string;
+        link?: string;
     };
 }
 
@@ -64,7 +68,7 @@ function getAuthHeaders(apiKey: string, apiSecret: string): HeadersInit {
     const data = apiKey + apiSecret + apiHeaderTime;
     // Podcast Index requires plain SHA-1 hash, not HMAC
     const hash = createHash('sha1').update(data).digest('hex');
-    
+
     return {
         "X-Auth-Date": apiHeaderTime.toString(),
         "X-Auth-Key": apiKey,
@@ -86,7 +90,7 @@ export async function lookupPodcastByItunesId(
     apiSecret: string
 ): Promise<PodcastIndexPodcast | null> {
     const url = `https://api.podcastindex.org/api/1.0/podcasts/byitunesid?id=${itunesId}`;
-    
+
     try {
         console.log(JSON.stringify({
             event: "podcast_index_lookup_start",
@@ -97,7 +101,7 @@ export async function lookupPodcastByItunesId(
         const response = await fetch(url, {
             headers: getAuthHeaders(apiKey, apiSecret)
         });
-        
+
         if (!response.ok) {
             const retryAfter = response.headers.get("Retry-After");
             console.log(JSON.stringify({
@@ -116,9 +120,9 @@ export async function lookupPodcastByItunesId(
             }
             return null;
         }
-        
+
         const data = await response.json() as PodcastIndexPodcastResponse;
-        
+
         if (!data.feed) {
             console.log(JSON.stringify({
                 event: "podcast_index_no_feed",
@@ -126,19 +130,21 @@ export async function lookupPodcastByItunesId(
             }));
             return null;
         }
-        
+
         console.log(JSON.stringify({
             event: "podcast_index_lookup_success",
             itunesId,
             feedId: data.feed.id,
             title: data.feed.title,
         }));
-        
+
         return {
             id: data.feed.id,
             url: data.feed.url,
             title: data.feed.title,
-            itunesId: data.feed.itunesId
+            itunesId: data.feed.itunesId,
+            author: data.feed.author,
+            link: data.feed.link,
         };
     } catch (error) {
         // Re-throw AppErrors (especially rate limit) so they cause job retries
@@ -169,7 +175,7 @@ export async function getEpisodesByItunesId(
     max: number = 1000
 ): Promise<PodcastIndexEpisode[]> {
     const url = `https://api.podcastindex.org/api/1.0/episodes/byitunesid?id=${itunesId}&max=${max}`;
-    
+
     try {
         console.log(JSON.stringify({
             event: "podcast_index_episodes_start",
@@ -181,7 +187,7 @@ export async function getEpisodesByItunesId(
         const response = await fetch(url, {
             headers: getAuthHeaders(apiKey, apiSecret)
         });
-        
+
         if (!response.ok) {
             console.log(JSON.stringify({
                 event: "podcast_index_episodes_failed",
@@ -197,16 +203,16 @@ export async function getEpisodesByItunesId(
             }
             return [];
         }
-        
+
         const data = await response.json() as PodcastIndexEpisodesResponse;
         const episodes = data.items || [];
-        
+
         console.log(JSON.stringify({
             event: "podcast_index_episodes_success",
             itunesId,
             episodeCount: episodes.length,
         }));
-        
+
         return episodes.map(ep => ({
             id: ep.id,
             title: ep.title,
@@ -262,16 +268,16 @@ function normalizeForMatching(text: string): string {
 function titlesMatch(title1: string, title2: string): boolean {
     const norm1 = normalizeForMatching(title1);
     const norm2 = normalizeForMatching(title2);
-    
+
     // Exact match
     if (norm1 === norm2) return true;
-    
+
     // One contains the other
     if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
-    
+
     // One starts with the other (for truncated URL slugs)
     if (norm1.startsWith(norm2) || norm2.startsWith(norm1)) return true;
-    
+
     return false;
 }
 
@@ -298,7 +304,7 @@ export function findEpisodeByAppleId(
     }));
 
     // Strategy 1: Check if GUID contains the Apple episode ID
-    const byGuid = episodes.find(ep => 
+    const byGuid = episodes.find(ep =>
         ep.guid?.includes(appleEpisodeId)
     );
     if (byGuid) {
@@ -309,7 +315,7 @@ export function findEpisodeByAppleId(
         }));
         return byGuid;
     }
-    
+
     // Strategy 2: Match by title (fuzzy with normalization)
     if (expectedTitle) {
         const byTitle = episodes.find(ep => titlesMatch(ep.title, expectedTitle));
@@ -325,7 +331,7 @@ export function findEpisodeByAppleId(
             return byTitle;
         }
     }
-    
+
     // Strategy 3: Match by date
     if (expectedDate) {
         const expectedTimestamp = new Date(expectedDate).getTime() / 1000;
@@ -343,7 +349,7 @@ export function findEpisodeByAppleId(
             return byDate;
         }
     }
-    
+
     console.log(JSON.stringify({
         event: "podcast_index_no_match",
         appleEpisodeId,
@@ -351,6 +357,6 @@ export function findEpisodeByAppleId(
         expectedDate,
         normalizedExpected: expectedTitle ? normalizeForMatching(expectedTitle) : undefined,
     }));
-    
+
     return null;
 }

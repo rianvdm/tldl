@@ -56,6 +56,8 @@ export interface Episode {
     expiresAt: string;             // ISO timestamp (createdAt + 365 days)
     submittedBy?: string;          // Email of user who submitted (optional for backwards compat)
     tags?: string[];               // AI-generated episode tags (1-4 tags)
+    podcastAuthor?: string;        // Podcast author/host name
+    podcastWebsiteUrl?: string;    // Podcast website URL
 }
 
 /**
@@ -72,6 +74,7 @@ export interface EpisodeIndexEntry {
     createdAt: string;
     expiresAt: string;
     tags?: string[];               // AI-generated episode tags (included for filtering)
+    podcastAuthor?: string;        // Podcast author/host name
 }
 
 /**

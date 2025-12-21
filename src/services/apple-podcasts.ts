@@ -213,6 +213,8 @@ export interface EpisodeMetadata {
     feedUrl: string;
     transcriptUrl?: string;
     transcriptType?: string;
+    podcastAuthor?: string;      // Podcast author/host name
+    podcastWebsiteUrl?: string;  // Podcast website URL
 }
 
 /**
@@ -654,6 +656,8 @@ async function getEpisodeFromPodcastIndex(
             audioUrl: episode.enclosureUrl,
             feedUrl: podcast.url,
             ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
+            ...(podcast.author && { podcastAuthor: podcast.author }),
+            ...(podcast.link && { podcastWebsiteUrl: podcast.link }),
         };
     } catch (error) {
         // Re-throw AppErrors (especially rate limit) so they cause job retries

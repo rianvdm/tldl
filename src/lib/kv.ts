@@ -333,7 +333,7 @@ export async function listEpisodes(
 
     // Filter by search query and/or tag
     let filtered = index;
-    
+
     if (search) {
         filtered = filtered.filter(
             (ep) =>
@@ -341,7 +341,7 @@ export async function listEpisodes(
                 ep.episodeTitle.toLowerCase().includes(search)
         );
     }
-    
+
     if (tagFilter) {
         filtered = filtered.filter(
             (ep) => ep.tags?.includes(tagFilter)
@@ -451,6 +451,8 @@ export async function rebuildEpisodeIndex(kv: KVNamespace): Promise<number> {
             episodeDuration: ep.episodeDuration,
             createdAt: ep.createdAt,
             expiresAt: ep.expiresAt,
+            tags: ep.tags,
+            podcastAuthor: ep.podcastAuthor,
         }))
         .sort(
             (a, b) =>

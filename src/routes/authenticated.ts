@@ -339,7 +339,7 @@ authenticated.post("/profile/cleanup-invalid-tags", async (c) => {
 
     try {
         const validTags = getValidTags();
-        
+
         // Get all episodes from index
         const allEpisodes = await listEpisodes(c.env.TLDL_DATA, {
             pageSize: 1000
@@ -361,7 +361,7 @@ authenticated.post("/profile/cleanup-invalid-tags", async (c) => {
             if (cleanedTags.length !== ep.tags.length) {
                 await updateEpisodeTags(c.env.TLDL_DATA, ep.id, cleanedTags);
                 cleaned++;
-                
+
                 console.log(
                     JSON.stringify({
                         event: "tags_cleaned",
@@ -384,6 +384,126 @@ authenticated.post("/profile/cleanup-invalid-tags", async (c) => {
         return c.json(
             {
                 error: error instanceof Error ? error.message : "Failed to cleanup tags",
+            },
+            500
+        );
+    }
+});
+
+// ============================================================================
+// POST /profile/backfill-podcast-info - Backfill podcast author and website for all episodes
+// ============================================================================
+
+authenticated.post("/profile/backfill-podcast-info", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    try {
+        const { lookupPodcastByItunesId } = await import("../services/podcast-index");
+        const { parseApplePodcastsUrl } = await import("../lib/url-parser");
+        const { getEpisode, saveEpisode } = await import("../lib/kv");
+
+        // Get all episodes from index
+        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, {
+            pageSize: 1000
+        });
+
+        let processed = 0;
+        let updated = 0;
+        let failed = 0;
+        let alreadyHasInfo = 0;
+
+        // Track podcasts we've already looked up (by podcastId)
+        const podcastCache: Map<string, { author?: string; link?: string } | null> = new Map();
+
+        for (const ep of allEpisodes.episodes) {
+            processed++;
+
+            try {
+                // Get full episode data
+                const episode = await getEpisode(c.env.TLDL_DATA, ep.id);
+                if (!episode) {
+                    failed++;
+                    continue;
+                }
+
+                // Skip if already has info
+                if (episode.podcastAuthor || episode.podcastWebsiteUrl) {
+                    alreadyHasInfo++;
+                    continue;
+                }
+
+                // Parse the Apple URL to get podcast ID
+                const parsed = parseApplePodcastsUrl(episode.appleUrl);
+                if (!parsed) {
+                    failed++;
+                    continue;
+                }
+
+                // Check cache first
+                let podcastInfo = podcastCache.get(parsed.podcastId);
+                if (podcastInfo === undefined) {
+                    // Not in cache - look up podcast
+                    const podcast = await lookupPodcastByItunesId(
+                        parsed.podcastId,
+                        c.env.PODCAST_INDEX_KEY,
+                        c.env.PODCAST_INDEX_SECRET
+                    );
+
+                    if (podcast) {
+                        podcastInfo = { author: podcast.author, link: podcast.link };
+                    } else {
+                        podcastInfo = null;
+                    }
+                    podcastCache.set(parsed.podcastId, podcastInfo);
+                }
+
+                // Update episode if we got info
+                if (podcastInfo && (podcastInfo.author || podcastInfo.link)) {
+                    episode.podcastAuthor = podcastInfo.author;
+                    episode.podcastWebsiteUrl = podcastInfo.link;
+                    await saveEpisode(c.env.TLDL_DATA, episode);
+                    updated++;
+
+                    console.log(
+                        JSON.stringify({
+                            event: "podcast_info_backfilled",
+                            episodeId: ep.id,
+                            podcastAuthor: podcastInfo.author,
+                            podcastWebsiteUrl: podcastInfo.link,
+                        })
+                    );
+                }
+            } catch (error) {
+                console.error(
+                    JSON.stringify({
+                        event: "backfill_podcast_info_failed",
+                        episodeId: ep.id,
+                        error: error instanceof Error ? error.message : "Unknown error",
+                    })
+                );
+                failed++;
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed} episodes: ${updated} updated, ${alreadyHasInfo} already had info, ${failed} failed`,
+            processed,
+            updated,
+            alreadyHasInfo,
+            failed,
+            totalEpisodes: allEpisodes.episodes.length,
+        });
+    } catch (error) {
+        return c.json(
+            {
+                error: error instanceof Error ? error.message : "Failed to backfill podcast info",
             },
             500
         );
@@ -500,8 +620,8 @@ authenticated.get("/profile", async (c) => {
                             </div>
                             <div class="tag-editor-tags">
                                 ${getValidTags().map(tag => {
-                                    const isSelected = episode.tags?.includes(tag);
-                                    return `<button
+                const isSelected = episode.tags?.includes(tag);
+                return `<button
                                         type="button"
                                         class="tag-editor-badge ${isSelected ? 'selected' : ''}"
                                         data-tag="${escapeHtml(tag)}"
@@ -509,7 +629,7 @@ authenticated.get("/profile", async (c) => {
                                     >
                                         ${escapeHtml(tag)}
                                     </button>`;
-                                }).join('')}
+            }).join('')}
                             </div>
                             <div class="tag-editor-message" id="tag-message-${escapeHtml(episode.id)}" style="display: none;"></div>
                         </div>
@@ -635,6 +755,16 @@ authenticated.get("/profile", async (c) => {
                         Cleanup Invalid Tags
                     </button>
                     <div id="cleanup-tags-status" style="display: none; margin-top: 1rem;"></div>
+                </div>
+                <div class="admin-tool-item" style="margin-top: 1.5rem;">
+                    <p class="text-muted">Fetch podcast author and website info from Podcast Index API for all episodes</p>
+                    <button type="button" class="button" id="backfill-podcast-info-btn" onclick="backfillPodcastInfo()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        </svg>
+                        Backfill Podcast Info
+                    </button>
+                    <div id="backfill-podcast-info-status" style="display: none; margin-top: 1rem;"></div>
                 </div>
             </div>
         </section>
@@ -886,6 +1016,48 @@ authenticated.get("/profile", async (c) => {
                     statusEl.textContent = 'Failed to cleanup tags';
                     button.disabled = false;
                     button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
+                }
+            }
+
+            async function backfillPodcastInfo() {
+                if (!confirm('Fetch podcast author and website info from Podcast Index API for all episodes? This may take a while for many episodes.')) {
+                    return;
+                }
+
+                const button = document.getElementById('backfill-podcast-info-btn');
+                const statusEl = document.getElementById('backfill-podcast-info-status');
+
+                // Show loading state
+                button.disabled = true;
+                button.textContent = 'Fetching...';
+                statusEl.style.display = 'block';
+                statusEl.className = 'alert alert-info';
+                statusEl.textContent = 'Fetching podcast info from Podcast Index API...';
+
+                try {
+                    const response = await fetch('/profile/backfill-podcast-info', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        statusEl.className = 'alert alert-success';
+                        statusEl.textContent = 'Success! ' + data.message;
+                        button.disabled = false;
+                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
+                    } else {
+                        statusEl.className = 'alert alert-error';
+                        statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+                        button.disabled = false;
+                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
+                    }
+                } catch (err) {
+                    statusEl.className = 'alert alert-error';
+                    statusEl.textContent = 'Failed to backfill podcast info';
+                    button.disabled = false;
+                    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
                 }
             }
         </script>
