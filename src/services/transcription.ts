@@ -5,7 +5,7 @@
  */
 
 import { AppError } from "../lib/errors";
-import { ERROR_CODES, TIMEOUTS } from "../lib/constants";
+import { ERROR_CODES, TIMEOUTS, AUDIO_LIMITS } from "../lib/constants";
 import { withRetry, isTransientError } from "../lib/retry";
 import {
     calculateChunkRanges,
@@ -13,8 +13,8 @@ import {
     estimateTranscriptionTime,
 } from "../lib/audio";
 
-// OpenAI Whisper file size limit
-const MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
+// Use centralized constant for Whisper size limit
+const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
 
 export interface TranscriptionResult {
     text: string;
@@ -56,9 +56,9 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
         const contentType = response.headers.get("content-type") || "unknown";
 
         // Validate content type is audio (also accept binary/octet-stream and application/octet-stream)
-        const isAudio = contentType.startsWith("audio/") || 
-                        contentType === "binary/octet-stream" ||
-                        contentType === "application/octet-stream";
+        const isAudio = contentType.startsWith("audio/") ||
+            contentType === "binary/octet-stream" ||
+            contentType === "application/octet-stream";
         if (!isAudio) {
             throw new AppError(
                 ERROR_CODES.AUDIO_UNAVAILABLE,
@@ -181,7 +181,7 @@ async function callWhisperApi(
     } catch (error) {
         clearTimeout(timeoutId);
         const elapsed = Date.now() - startTime;
-        
+
         if (error instanceof Error && error.name === "AbortError") {
             console.error(
                 JSON.stringify({
@@ -195,7 +195,7 @@ async function callWhisperApi(
                 `Whisper API timed out after ${Math.round(elapsed / 1000)}s`,
             );
         }
-        
+
         console.error(
             JSON.stringify({
                 event: "whisper_api_network_error",

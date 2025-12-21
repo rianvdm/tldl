@@ -27,18 +27,11 @@ import {
     createRegenerateSummaryMessage,
 } from "../lib/queue";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
-import { isValidTemplateId } from "../lib/constants";
+import { isValidTemplateId, RATE_LIMITS } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
 
 const authenticated = new Hono<HonoEnv>();
-
-// ============================================================================
-// Rate Limiting Constants
-// ============================================================================
-
-const RATE_LIMIT_MAX_REQUESTS = 10;  // Max submissions per hour
-const RATE_LIMIT_WINDOW_SECONDS = 3600;  // 1 hour
 
 // ============================================================================
 // Rate Limiting Helper
@@ -56,7 +49,7 @@ async function checkRateLimit(
     kv: KVNamespace,
     userEmail: string
 ): Promise<{ count: number; exceeded: boolean }> {
-    const hour = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
+    const hour = Math.floor(Date.now() / (RATE_LIMITS.WINDOW_SECONDS * 1000));
     const key = `ratelimit:${userEmail}:${hour}`;
 
     const current = await kv.get<RateLimitData>(key, "json");
@@ -64,12 +57,12 @@ async function checkRateLimit(
 
     // Update the count
     await kv.put(key, JSON.stringify({ count }), {
-        expirationTtl: RATE_LIMIT_WINDOW_SECONDS,
+        expirationTtl: RATE_LIMITS.WINDOW_SECONDS,
     });
 
     return {
         count,
-        exceeded: count > RATE_LIMIT_MAX_REQUESTS,
+        exceeded: count > RATE_LIMITS.MAX_SUBMISSIONS_PER_HOUR,
     };
 }
 
@@ -80,10 +73,10 @@ function setRateLimitHeaders(
     c: { res: { headers: Headers } },
     count: number
 ): void {
-    const hour = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
-    c.res.headers.set("X-RateLimit-Limit", String(RATE_LIMIT_MAX_REQUESTS));
-    c.res.headers.set("X-RateLimit-Remaining", String(Math.max(0, RATE_LIMIT_MAX_REQUESTS - count)));
-    c.res.headers.set("X-RateLimit-Reset", String((hour + 1) * RATE_LIMIT_WINDOW_SECONDS));
+    const hour = Math.floor(Date.now() / (RATE_LIMITS.WINDOW_SECONDS * 1000));
+    c.res.headers.set("X-RateLimit-Limit", String(RATE_LIMITS.MAX_SUBMISSIONS_PER_HOUR));
+    c.res.headers.set("X-RateLimit-Remaining", String(Math.max(0, RATE_LIMITS.MAX_SUBMISSIONS_PER_HOUR - count)));
+    c.res.headers.set("X-RateLimit-Reset", String((hour + 1) * RATE_LIMITS.WINDOW_SECONDS));
 }
 
 // ============================================================================

@@ -162,3 +162,23 @@ export const TIMEOUTS = {
     // Overall job timeout (marks job as failed if exceeded)
     JOB_MS: 20 * 60 * 1000,             // 20 minutes
 } as const;
+
+// ============================================================================
+// Rate Limiting Constants
+// ============================================================================
+
+export const RATE_LIMITS = {
+    MAX_SUBMISSIONS_PER_HOUR: 10,       // Max episode submissions per hour per user
+    WINDOW_SECONDS: 3600,               // 1 hour window
+} as const;
+
+// ============================================================================
+// Audio Processing Limits
+// ============================================================================
+
+export const AUDIO_LIMITS = {
+    MAX_SIZE_BYTES: 25 * 1024 * 1024,   // 25MB (OpenAI Whisper limit)
+    CHUNK_SIZE_BYTES: 20 * 1024 * 1024, // 20MB chunks for large files
+    CHUNK_OVERLAP_BYTES: 32 * 1024,     // 32KB overlap for transcript stitching
+} as const;
+
