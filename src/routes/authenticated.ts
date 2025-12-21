@@ -6,6 +6,7 @@
 
 import { Hono } from "hono";
 import type { HonoEnv, Job, EpisodeIndexEntry } from "../types";
+import { Layout } from "./public";
 import {
     createJob,
     updateJobStatus,
@@ -446,29 +447,10 @@ authenticated.get("/profile", async (c) => {
         </script>
     `;
 
-    return c.html(`<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Profile - TLDL</title>
-    <link rel="stylesheet" href="/styles.css">
-</head>
-<body>
-    <div class="container">
-        <nav class="nav">
-            <a href="/" class="nav-brand">TL;D<span class="text-accent">L</span></a>
-            <span class="nav-tagline">Too Long Didn't Listen</span>
-        </nav>
-        <main class="main">
-            ${content}
-        </main>
-        <footer class="footer">
-            <p>TL;DL uses AI to generate summaries from podcast transcripts.</p>
-        </footer>
-    </div>
-</body>
-</html>`);
+    return c.html(Layout({
+        title: "Profile",
+        children: content
+    }));
 });
 
 // ============================================================================

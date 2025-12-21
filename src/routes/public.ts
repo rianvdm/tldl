@@ -155,7 +155,7 @@ function renderMarkdown(md: string): string {
 // Layout Component
 // ============================================================================
 
-function Layout(props: { title: string; children: string }) {
+export function Layout(props: { title: string; children: string; headExtra?: string }) {
     // Use custom title for home page
     const pageTitle = props.title === "Home"
         ? "TL;DL - Too Long Didn't Listen"
@@ -186,6 +186,7 @@ function Layout(props: { title: string; children: string }) {
                 <meta name="twitter:description" content="Get AI summaries of podcast episodes" />
                 <meta name="twitter:image" content="${ogImage}" />
                 <link rel="stylesheet" href="/styles.css" />
+                ${raw(props.headExtra || "")}
             </head>
             <body>
                 <div class="container">
@@ -452,7 +453,7 @@ publicRoutes.get("/", async (c) => {
         c.header("Expires", "0");
     }
 
-    return c.html(LayoutWithHead({
+    return c.html(Layout({
         title: "Home",
         children: content,
         headExtra: refreshMeta
@@ -935,7 +936,7 @@ publicRoutes.get("/job/:jobId", async (c) => {
     c.header("Pragma", "no-cache");
     c.header("Expires", "0");
 
-    return c.html(LayoutWithHead({
+    return c.html(Layout({
         title: job.status === "completed" ? "Episode Ready" : "Processing Episode",
         children: content,
         headExtra: refreshMeta
@@ -1165,60 +1166,6 @@ function JobStatusPage(job: Job): string {
         </div>
         ` : ""}
     `;
-}
-
-// ============================================================================
-// Layout with Extra Head Content
-// ============================================================================
-
-function LayoutWithHead(props: { title: string; children: string; headExtra?: string }) {
-    // Use custom title for home page
-    const pageTitle = props.title === "Home"
-        ? "TL;DL - Too Long Didn't Listen"
-        : `${props.title} - TL;DL`;
-
-    const ogImage = "https://file.elezea.com/tldl-hero.png";
-
-    return html`<!DOCTYPE html>
-        <html lang="en" class="dark">
-            <head>
-                <meta charset="UTF-8" />
-                <meta
-                    name="viewport"
-                    content="width=device-width, initial-scale=1.0"
-                />
-                <title>${pageTitle}</title>
-                <meta
-                    name="description"
-                    content="AI-powered podcast summaries from Apple Podcasts URLs"
-                />
-                <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-                <meta property="og:title" content="${pageTitle}" />
-                <meta property="og:description" content="Get AI summaries of podcast episodes" />
-                <meta property="og:type" content="website" />
-                <meta property="og:image" content="${ogImage}" />
-                <meta name="twitter:card" content="summary_large_image" />
-                <meta name="twitter:title" content="${pageTitle}" />
-                <meta name="twitter:description" content="Get AI summaries of podcast episodes" />
-                <meta name="twitter:image" content="${ogImage}" />
-                <link rel="stylesheet" href="/styles.css" />
-                ${raw(props.headExtra || "")}
-            </head>
-            <body>
-                <div class="container">
-                    <nav class="nav">
-                        <a href="/" class="nav-brand">TL;D<span class="text-accent">L</span></a>
-                        <span class="nav-tagline"
-                            >Too Long Didn't Listen</span
-                        >
-                    </nav>
-                    <main class="main">${raw(props.children)}</main>
-                    <footer class="footer">
-                        <p>TL;DL uses AI to generate summaries from podcast transcripts.</p>
-                    </footer>
-                </div>
-            </body>
-        </html>`;
 }
 
 export default publicRoutes;

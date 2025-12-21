@@ -41,6 +41,9 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
 - **Audio chunking**: `src/lib/audio.ts` handles MP3 frame-aware splitting for large files (>25MB)
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
+  - Home page uses `listActiveJobsWithDO()` to fetch active jobs from DO for real-time updates
+  - Job status page uses `getJobWithFallback()` for immediate status visibility
+  - Both auto-refresh when jobs are active (home: 10s, job page: 5s)
 - **Styling**: All CSS is in `src/lib/styles.ts` (not a `.css` file) — Cloudflare Workers can't read from the filesystem, so styles are embedded in TypeScript
 
 ### KV Storage Schema
@@ -67,10 +70,13 @@ Keys in `src/lib/kv.ts`:
 - `GET /api/templates` - Available summary templates
 
 **Authenticated** (`src/routes/authenticated.ts`):
+- `GET /profile` - User profile page (shows submitted episodes; public but intended for authenticated users)
 - `POST /submit` - Create new job
 - `POST /episode/:id/regenerate` - Regenerate with different template
 - `DELETE /episode/:id` - Delete episode
 - `POST /job/:id/retry` - Retry failed job
+- `POST /profile/delete/:episodeId` - Delete episode from profile page
+- `POST /profile/rebuild-index` - Admin only: Rebuild episode index
 
 ### Summary Templates
 
