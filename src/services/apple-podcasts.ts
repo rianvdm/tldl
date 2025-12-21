@@ -111,6 +111,25 @@ async function getEpisodeTitleFromApplePage(
 }
 
 /**
+ * Check if a URL appears to be an RSS feed URL rather than a website
+ * Some podcasts have their RSS feed URL in the link field instead of their website
+ */
+function isRssFeedUrl(url: string): boolean {
+    const lowerUrl = url.toLowerCase();
+    // Check for common RSS feed URL patterns
+    return (
+        lowerUrl.endsWith('.xml') ||
+        lowerUrl.endsWith('.rss') ||
+        lowerUrl.endsWith('/feed') ||
+        lowerUrl.endsWith('/feed/') ||
+        lowerUrl.includes('/rss.') ||
+        lowerUrl.includes('/feed.') ||
+        lowerUrl.includes('/rss/') ||
+        lowerUrl.includes('/feed/')
+    );
+}
+
+/**
  * Pre-fetch episode info for queue message
  * Tries iTunes first, then Apple redirect + Podcast Index matching
  */
@@ -657,7 +676,7 @@ async function getEpisodeFromPodcastIndex(
             feedUrl: podcast.url,
             ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
             ...(podcast.author && { podcastAuthor: podcast.author }),
-            ...(podcast.link && { podcastWebsiteUrl: podcast.link }),
+            ...(podcast.link && !isRssFeedUrl(podcast.link) && { podcastWebsiteUrl: podcast.link }),
         };
     } catch (error) {
         // Re-throw AppErrors (especially rate limit) so they cause job retries

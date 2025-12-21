@@ -121,6 +121,16 @@ a {
     font-size: 0.875rem;
 }
 
+.footer a {
+    color: var(--muted-foreground);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.footer a:hover {
+    color: var(--accent-red);
+}
+
 /* ============================================================================
    Typography
    ============================================================================ */

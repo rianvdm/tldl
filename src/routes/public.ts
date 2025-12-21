@@ -241,7 +241,7 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                     </nav>
                     <main class="main">${raw(props.children)}</main>
                     <footer class="footer">
-                        <p>TL;DL uses AI to generate summaries from podcast transcripts.</p>
+                        <p><a href="https://github.com/rianvdm/tldl/issues" target="_blank" rel="noopener noreferrer">Submit a Bug</a> | <a href="/about#creator-opt-out">Creator Opt-out</a></p>
                     </footer>
                 </div>
             </body>
@@ -849,13 +849,12 @@ publicRoutes.get("/about", async (c) => {
             }
         </style>
         <div class="intro-section">
-            <p>Submitting new episodes is currently invite-only. Browse existing summaries on the home page or contact the creator for access.</p>
+            <p>Submitting new episodes is currently invite-only. For now you can browse existing summaries on the home page.</p>
         </div>
         <div class="card about-page">
             <h1>About TL;DL</h1>
 
             <section style="margin-top: 2rem;">
-                <h2>What is TL;DL?</h2>
                 <p>
                     TL;DL (Too Long; Didn't Listen) generates AI-powered summaries of podcast episodes.
                     Paste an Apple Podcasts URL, and get a concise summary along with the full transcript.
@@ -893,6 +892,17 @@ publicRoutes.get("/about", async (c) => {
                         analogies and simple language.
                     </p>
                 </div>
+            </section>
+
+            <section id="creator-opt-out" style="margin-top: 2rem;">
+                <h2>A Note for Podcast Creators</h2>
+                <p>
+                    My hope is that TL;DL helps expand your audience by making your content more discoverable
+                    and accessible. Attribution matters to me, which is why your name and podcast website is displayed
+                    prominently on every episode page. That said, if you'd prefer to opt out, please reach out at
+                    <a href="https://elezea.com/contact" target="_blank" rel="noopener noreferrer">elezea.com/contact</a>
+                    and I'll add your podcast to the blocklist.
+                </p>
             </section>
 
             <section style="margin-top: 2rem;">
@@ -1120,12 +1130,6 @@ function SubmitFormPage(props: SubmitFormProps): string {
                     <a href="/" class="button">Cancel</a>
                 </div>
             </form>
-        </div>
-
-        <div class="text-center mt-4">
-            <button type="button" onclick="document.getElementById('appleUrl').value='https://podcasts.apple.com/us/podcast/the-knowledge-project/id990149481?i=1000638000000'" class="link-button">
-                Try an example URL
-            </button>
         </div>
     `;
 }

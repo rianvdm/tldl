@@ -364,7 +364,7 @@ function ErrorPage(props: { title: string; message: string; showRetry: boolean }
                         </div>
                     </main>
                     <footer class="footer">
-                        <p>TL;DL uses AI to generate summaries from podcast transcripts.</p>
+                        <p><a href="https://github.com/rianvdm/tldl/issues" target="_blank" rel="noopener noreferrer">Submit a Bug</a> | <a href="/about#creator-opt-out">Creator Opt-out</a></p>
                     </footer>
                 </div>
             </body>
