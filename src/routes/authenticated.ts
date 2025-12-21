@@ -633,7 +633,7 @@ authenticated.get("/profile", async (c) => {
                 }
 
                 try {
-                    const response = await fetch('/episode/' + episodeId + '/update-tags', {
+                    const response = await fetch('/profile/update-tags/' + episodeId, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
@@ -983,10 +983,10 @@ authenticated.get("/job/:jobId", async (c, next) => {
 });
 
 // ============================================================================
-// POST /episode/:episodeId/update-tags - Update episode tags (admin only)
+// POST /profile/update-tags/:episodeId - Update episode tags (admin only)
 // ============================================================================
 
-authenticated.post("/episode/:episodeId/update-tags", async (c) => {
+authenticated.post("/profile/update-tags/:episodeId", async (c) => {
     // Auth check - reject unauthorized requests in production
     const authError = await requireAuth(c);
     if (authError) return authError;
