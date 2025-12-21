@@ -258,6 +258,8 @@ h4 {
     font-size: 0.875rem;
     color: var(--muted-foreground);
     margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
 }
 
 .episode-title {
@@ -1166,6 +1168,19 @@ h4 {
 .status-indicator-active {
     background-color: #3b82f6;
     animation: pulse 2s infinite;
+}
+
+.episode-card-failed {
+    border-color: var(--destructive);
+    border-style: dashed;
+}
+
+.episode-card-failed:hover {
+    border-color: #ef4444;
+}
+
+.status-indicator-failed {
+    background-color: var(--destructive);
 }
 
 @keyframes pulse {

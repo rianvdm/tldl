@@ -140,12 +140,11 @@ export async function listActiveJobsWithDO(
         jobIds.map(jobId => getJobWithFallback(env, kv, jobId))
     );
 
-    // Filter to only active jobs (not completed, not failed) and sort by createdAt descending
+    // Filter to only active jobs and failed jobs (not completed) and sort by createdAt descending
     return jobs
         .filter((job): job is import("../types").Job =>
             job !== null &&
-            job.status !== "completed" &&
-            job.status !== "failed"
+            job.status !== "completed"
         )
         .sort(
             (a, b) =>

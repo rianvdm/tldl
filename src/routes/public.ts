@@ -19,6 +19,7 @@ import {
     getJobWithFallback,
     updateJobStatusDO,
     listActiveJobsWithDO,
+    deleteJobDO,
 } from "../lib/job-status-do";
 import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
@@ -262,9 +263,10 @@ function InProgressCard(job: Job): string {
     const statusLabel = STATUS_LABELS_SHORT[job.status] || job.status;
     const template = getTemplate(job.templateId);
     const templateName = template?.name || job.templateId;
+    const isFailed = job.status === "failed";
 
     // Show metadata if available, otherwise show status
-    const podcastDisplay = job.podcastName || "Processing";
+    const podcastDisplay = job.podcastName || (isFailed ? "Failed" : "Processing");
     const titleDisplay = job.episodeTitle || statusLabel;
 
     // Build metadata line
@@ -274,11 +276,23 @@ function InProgressCard(job: Job): string {
         metaParts.push(escapeHtml(statusLabel));
     }
 
+    // For failed jobs, show error icon; for in-progress, show spinner
+    const iconHtml = isFailed
+        ? `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>`
+        : `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spinner">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>`;
+
+    const cardClass = isFailed ? "episode-card episode-card-failed" : "episode-card episode-card-progress";
+    const indicatorClass = isFailed ? "status-indicator status-indicator-failed" : "status-indicator status-indicator-active";
+
     return `
-        <a href="/job/${escapeHtml(job.id)}" class="episode-card episode-card-progress">
+        <a href="/job/${escapeHtml(job.id)}" class="${cardClass}">
             <div class="episode-card-content">
                 <div class="episode-podcast">
-                    <span class="status-indicator status-indicator-active"></span>
+                    <span class="${indicatorClass}"></span>
                     ${escapeHtml(podcastDisplay)}
                 </div>
                 <h3 class="episode-title">${escapeHtml(titleDisplay)}</h3>
@@ -289,9 +303,7 @@ function InProgressCard(job: Job): string {
                 </div>
             </div>
             <div class="episode-card-arrow">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spinner">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                </svg>
+                ${iconHtml}
             </div>
         </a>
     `;
@@ -442,12 +454,13 @@ publicRoutes.get("/", async (c) => {
         </div>
     `;
 
-    // Add auto-refresh when there are active jobs
-    const refreshMeta = activeJobs.length > 0
+    // Add auto-refresh only when there are truly in-progress jobs (not failed)
+    const hasInProgressJobs = activeJobs.some(job => job.status !== "failed");
+    const refreshMeta = hasInProgressJobs
         ? '<meta http-equiv="refresh" content="10">'
         : '';
 
-    // Prevent caching when there are active jobs to ensure fresh status
+    // Prevent caching when there are active or failed jobs to ensure fresh status
     if (activeJobs.length > 0) {
         c.header("Cache-Control", "no-cache, no-store, must-revalidate");
         c.header("Pragma", "no-cache");
@@ -1099,6 +1112,31 @@ publicRoutes.post("/job/:jobId/retry", async (c) => {
 });
 
 // ============================================================================
+// POST /job/:jobId/delete — Remove Failed Job (HTML)
+// ============================================================================
+
+publicRoutes.post("/job/:jobId/delete", async (c) => {
+    const jobId = c.req.param("jobId");
+
+    // Use DO with fallback for job lookup
+    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
+    if (!job) {
+        return c.redirect("/");
+    }
+
+    // Only allow deletion of failed jobs
+    if (job.status !== "failed") {
+        return c.redirect(`/job/${jobId}`);
+    }
+
+    // Delete from both DO and KV
+    await deleteJobDO(c.env, jobId);
+    await c.env.TLDL_DATA.delete(`job:${jobId}`);
+
+    return c.redirect("/");
+});
+
+// ============================================================================
 // Job Status Component
 // ============================================================================
 
@@ -1243,6 +1281,14 @@ function JobStatusPage(job: Job): string {
                             <path d="M16 21h5v-5"/>
                         </svg>
                         Retry
+                    </button>
+                </form>
+                <form method="POST" action="/job/${escapeHtml(job.id)}/delete" style="display: contents;">
+                    <button type="submit" class="button" onclick="return confirm('Are you sure you want to remove this failed job?')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                        </svg>
+                        Remove Job
                     </button>
                 </form>
                 <a href="/" class="button">Back to Episodes</a>

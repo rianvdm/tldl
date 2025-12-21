@@ -222,6 +222,54 @@ authenticated.post("/profile/rebuild-index", async (c) => {
 });
 
 // ============================================================================
+// POST /profile/cleanup-failed-jobs - Admin-only: Clean up all failed jobs
+// ============================================================================
+
+authenticated.post("/profile/cleanup-failed-jobs", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    // Admin-only check
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    try {
+        const { listActiveJobsWithDO, deleteJobDO } = await import("../lib/job-status-do");
+
+        const jobs = await listActiveJobsWithDO(c.env, c.env.TLDL_DATA);
+        const failedJobs = jobs.filter(job => job.status === "failed");
+
+        const deletedJobs = [];
+        for (const job of failedJobs) {
+            // Delete from both DO and KV
+            await deleteJobDO(c.env, job.id);
+            await c.env.TLDL_DATA.delete(`job:${job.id}`);
+            deletedJobs.push({
+                id: job.id,
+                podcastName: job.podcastName,
+                episodeTitle: job.episodeTitle,
+                error: job.error
+            });
+        }
+
+        return c.json({
+            success: true,
+            message: `Cleaned up ${deletedJobs.length} failed job${deletedJobs.length !== 1 ? 's' : ''}`,
+            deletedCount: deletedJobs.length,
+            deletedJobs
+        });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
+});
+
+// ============================================================================
 // GET /profile - User Profile Page (shows submitted episodes with delete)
 // ============================================================================
 
@@ -360,6 +408,16 @@ authenticated.get("/profile", async (c) => {
                     </button>
                     <div id="rebuild-result" class="alert alert-success" style="display: none; margin-top: 1rem;"></div>
                 </div>
+                <div class="admin-tool-item" style="margin-top: 1.5rem;">
+                    <p class="text-muted">Remove all failed jobs from the home page (use to clean up orphaned jobs)</p>
+                    <button type="button" class="button" id="cleanup-jobs-btn" onclick="cleanupFailedJobs()">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                        </svg>
+                        Clean Up Failed Jobs
+                    </button>
+                    <div id="cleanup-result" class="alert alert-success" style="display: none; margin-top: 1rem;"></div>
+                </div>
             </div>
         </section>
         ` : ""}
@@ -420,7 +478,7 @@ authenticated.get("/profile", async (c) => {
                 btn.disabled = true;
                 btn.textContent = 'Rebuilding...';
                 result.style.display = 'none';
-                
+
                 try {
                     const response = await fetch('/profile/rebuild-index', {
                         method: 'POST',
@@ -439,10 +497,41 @@ authenticated.get("/profile", async (c) => {
                     result.className = 'alert alert-error';
                     result.textContent = 'Failed to rebuild index';
                 }
-                
+
                 result.style.display = 'block';
                 btn.disabled = false;
                 btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg> Rebuild Episode Index';
+            }
+
+            async function cleanupFailedJobs() {
+                const btn = document.getElementById('cleanup-jobs-btn');
+                const result = document.getElementById('cleanup-result');
+                btn.disabled = true;
+                btn.textContent = 'Cleaning up...';
+                result.style.display = 'none';
+
+                try {
+                    const response = await fetch('/profile/cleanup-failed-jobs', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include'
+                    });
+                    const data = await response.json();
+                    if (response.ok) {
+                        result.className = 'alert alert-success';
+                        result.textContent = 'Cleanup successful! ' + data.deletedCount + ' failed job' + (data.deletedCount !== 1 ? 's' : '') + ' removed.';
+                    } else {
+                        result.className = 'alert alert-error';
+                        result.textContent = 'Failed: ' + (data.error || 'Unknown error');
+                    }
+                } catch (err) {
+                    result.className = 'alert alert-error';
+                    result.textContent = 'Failed to clean up jobs';
+                }
+
+                result.style.display = 'block';
+                btn.disabled = false;
+                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg> Clean Up Failed Jobs';
             }
         </script>
     `;
