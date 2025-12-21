@@ -88,7 +88,7 @@ npm run deploy
 - [x] **Prompt 12**: PDF generation (button hidden, route functional)
 - [x] **Prompt 13**: Error handling hardening
 - [x] **Prompt 14**: Security + rate limiting
-- [ ] **Prompt 15**: Integration tests + polish
+- [x] **Prompt 15**: Integration tests + polish
 
 ---
 

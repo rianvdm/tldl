@@ -162,6 +162,13 @@ function Layout(props: { title: string; children: string }) {
                     name="description"
                     content="AI-powered podcast summaries from Apple Podcasts URLs"
                 />
+                <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+                <meta property="og:title" content="${props.title} - TLDL" />
+                <meta property="og:description" content="Get AI summaries of podcast episodes" />
+                <meta property="og:type" content="website" />
+                <meta name="twitter:card" content="summary" />
+                <meta name="twitter:title" content="${props.title} - TLDL" />
+                <meta name="twitter:description" content="Get AI summaries of podcast episodes" />
                 <link rel="stylesheet" href="/styles.css" />
             </head>
             <body>
@@ -1048,6 +1055,13 @@ function LayoutWithHead(props: { title: string; children: string; headExtra?: st
                     name="description"
                     content="AI-powered podcast summaries from Apple Podcasts URLs"
                 />
+                <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+                <meta property="og:title" content="${props.title} - TLDL" />
+                <meta property="og:description" content="Get AI summaries of podcast episodes" />
+                <meta property="og:type" content="website" />
+                <meta name="twitter:card" content="summary" />
+                <meta name="twitter:title" content="${props.title} - TLDL" />
+                <meta name="twitter:description" content="Get AI summaries of podcast episodes" />
                 <link rel="stylesheet" href="/styles.css" />
                 ${raw(props.headExtra || "")}
             </head>

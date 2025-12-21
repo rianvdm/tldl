@@ -205,18 +205,19 @@ describe("GET /job/:jobId (HTML page)", () => {
         expect(html).toContain('content="5"');
     });
 
-    it("redirects to episode page when job is completed", async () => {
+    it("shows completed status with view episode button when job is completed", async () => {
         const job = createSampleJob({ status: "completed" });
         await createJob(env.TLDL_DATA, job);
 
-        const response = await SELF.fetch(`http://localhost/job/${job.id}`, {
-            redirect: "manual",
-        });
+        const response = await SELF.fetch(`http://localhost/job/${job.id}`);
 
-        expect(response.status).toBe(302);
-        const location = response.headers.get("location");
-        expect(location).toContain(`/episode/${job.episodeId}`);
-        expect(location).toContain(`template=${job.templateId}`);
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("Episode Ready");
+        expect(html).toContain("View Episode Summary");
+        expect(html).toContain(`/episode/${job.episodeId}`);
+        // Should NOT have auto-refresh for completed jobs
+        expect(html).not.toContain('http-equiv="refresh"');
     });
 
     it("shows error and retry button for failed job", async () => {

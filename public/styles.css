@@ -547,6 +547,63 @@ h4 {
    Responsive
    ============================================================================ */
 
+/* ============================================================================
+   Loading Spinner Animation
+   ============================================================================ */
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.step-icon-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--muted);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* ============================================================================
+   Card Hover Effects (Enhanced)
+   ============================================================================ */
+
+.episode-card {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.episode-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* ============================================================================
+   Focus States (Accessibility)
+   ============================================================================ */
+
+.button:focus,
+.tab:focus,
+a:focus {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.button:focus:not(:focus-visible),
+.tab:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+    outline: none;
+}
+
+/* ============================================================================
+   Responsive (Mobile Improvements)
+   ============================================================================ */
+
 @media (max-width: 640px) {
     h1 {
         font-size: 1.5rem;
@@ -574,6 +631,10 @@ h4 {
     .tab {
         width: 100%;
         text-align: center;
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
 
     .actions {
@@ -582,5 +643,20 @@ h4 {
 
     .button {
         width: 100%;
+        min-height: 48px;
+    }
+
+    .episode-card {
+        padding: 1rem;
+    }
+
+    .episode-card:hover {
+        transform: none;
+    }
+
+    .breadcrumb-link {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
     }
 }
