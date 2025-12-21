@@ -30,8 +30,9 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI Whisper for transcription (with chunking for >25MB files)
    - Generates summary via OpenAI GPT-4o
+   - Generates 1-4 AI tags using GPT-5.2 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
-3. **View** (`GET /episode/:id`): Serves cached episodes with summary and transcript
+3. **View** (`GET /episode/:id`): Serves cached episodes with summary, transcript, and tags
 
 ### Key Components
 
@@ -45,21 +46,27 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
   - Job status page uses `getJobWithFallback()` for immediate status visibility
   - Both auto-refresh when jobs are active (home: 10s, job page: 5s)
 - **Styling**: All CSS is in `src/lib/styles.ts` (not a `.css` file) — Cloudflare Workers can't read from the filesystem, so styles are embedded in TypeScript
+- **Episode Tags**: AI-generated using GPT-5.2 Responses API during queue processing (1-4 tags per episode)
+  - Tags stored inline in both Episode and EpisodeIndexEntry for efficient filtering
+  - Predefined tag list in `src/lib/constants.ts` (EPISODE_TAGS)
+  - Tag generation is non-critical: empty tags don't fail jobs
+  - Home page supports single-tag filtering with `/?tag=tagname`
 
 ### KV Storage Schema
 
 Keys in `src/lib/kv.ts`:
 - `job:{jobId}` - Job state (TTL: 7 days)
-- `episode:{episodeId}` - Episode metadata (TTL: 365 days)
+- `episode:{episodeId}` - Episode metadata with optional tags (TTL: 365 days)
 - `transcript:{episodeId}` - Full transcript (TTL: 365 days)
 - `summary:{episodeId}:{templateId}` - Generated summary (TTL: 365 days)
 - `ratelimit:{email}:{hour}` - Rate limiting (TTL: 1 hour)
+- `episodes:index` - Lightweight episode list with tags for home page (TTL: 365 days)
 
 ### Routes
 
 **Public** (`src/routes/public.ts`):
-- `GET /` - Episode list with pagination
-- `GET /episode/:id` - Episode detail with summary
+- `GET /` - Episode list with pagination and tag filtering (`?tag=tagname`)
+- `GET /episode/:id` - Episode detail with summary, transcript, and tags
 - `GET /episode/:id/pdf` - PDF download
 - `GET /submit` - Submit form
 - `GET /job/:id` - Job status page
@@ -77,6 +84,11 @@ Keys in `src/lib/kv.ts`:
 - `POST /job/:id/retry` - Retry failed job
 - `POST /profile/delete/:episodeId` - Delete episode from profile page
 - `POST /profile/rebuild-index` - Admin only: Rebuild episode index
+- `POST /profile/update-tags/:episodeId` - Admin only: Update episode tags
+- `POST /profile/backfill-tags` - Admin only: Generate tags for episodes without them
+- `POST /profile/cleanup-invalid-tags` - Admin only: Remove tags no longer in EPISODE_TAGS
+
+**Important**: Admin endpoints must be under `/profile/*` path to be protected by Cloudflare Access. Do not create admin endpoints under `/admin/*` or other paths - they won't be properly authenticated in production.
 
 ### Summary Templates
 
@@ -84,6 +96,16 @@ Defined in `src/lib/constants.ts`:
 - `key-takeaways` - Professional/craft podcasts (default)
 - `narrative-summary` - Story-driven content
 - `eli5` - Technical topics explained simply
+
+### Episode Tags
+
+Defined in `src/lib/constants.ts` (EPISODE_TAGS array):
+- 12 predefined tags: business, creativity, education, faith, health, music, politics, product, psychology, science, sport, technology
+- Tags are alphabetically sorted for consistency
+- Easy to add/remove tags - just edit the EPISODE_TAGS array
+- After removing tags, use "Cleanup Invalid Tags" admin tool to remove them from existing episodes
+- Tags generated automatically during episode processing (1-4 tags per episode)
+- Admin can manually edit tags via profile page
 
 ### Maintenance Mode
 
@@ -135,6 +157,7 @@ src/
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI Whisper
 │   ├── summarization.ts  # OpenAI GPT-4o
+│   ├── tag-generation.ts # OpenAI GPT-5.2 for episode tags
 │   └── pdf.ts            # PDF generation
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages
@@ -152,3 +175,5 @@ src/
 - **Episode title extraction**: URL slugs sometimes contain podcast name instead of episode title; `getEpisodeTitleFromApplePage()` scrapes the actual page to get reliable titles
 - **Large audio files**: Automatically chunked at MP3 frame boundaries (>25MB)
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
+- **Invalid tags showing**: After removing tags from EPISODE_TAGS, run "Cleanup Invalid Tags" from admin tools to remove them from existing episodes
+- **Admin endpoints 401/403**: Admin endpoints must be under `/profile/*` path to work with Cloudflare Access configuration
