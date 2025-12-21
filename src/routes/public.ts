@@ -145,8 +145,8 @@ function renderMarkdown(md: string): string {
         })
         .join("\n");
 
-    // Clean up extra line breaks
-    html = html.replace(/\n/g, " ").replace(/\s+/g, " ");
+    // Clean up excessive whitespace between tags while preserving structure
+    html = html.replace(/>\s+</g, "><").replace(/\s+/g, " ").trim();
 
     return html;
 }
