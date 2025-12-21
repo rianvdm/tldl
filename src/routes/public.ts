@@ -21,7 +21,7 @@ import {
     listActiveJobsWithDO,
     deleteJobDO,
 } from "../lib/job-status-do";
-import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS } from "../lib/constants";
+import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS, getValidTags, isValidTag } from "../lib/constants";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 
@@ -214,7 +214,8 @@ export function Layout(props: { title: string; children: string; headExtra?: str
 
 function EpisodeCard(
     episode: EpisodeIndexEntry,
-    summaryTemplates: string[]
+    summaryTemplates: string[],
+    currentTag?: string
 ): string {
     const templateBadges = summaryTemplates
         .map((templateId) => {
@@ -223,6 +224,18 @@ function EpisodeCard(
             return `<span class="badge">${escapeHtml(name)}</span>`;
         })
         .join("");
+
+    // Render tag badges
+    const tagBadges = episode.tags && episode.tags.length > 0
+        ? episode.tags
+            .map((tag) => {
+                const isSelected = currentTag === tag;
+                const badgeClass = isSelected ? "tag-badge tag-badge-selected" : "tag-badge";
+                // stopPropagation prevents card click when clicking tag
+                return `<a href="/?tag=${encodeURIComponent(tag)}" class="${badgeClass}" onclick="event.stopPropagation()">${escapeHtml(tag)}</a>`;
+            })
+            .join("")
+        : "";
 
     return `
         <a href="/episode/${escapeHtml(episode.id)}" class="episode-card">
@@ -234,7 +247,11 @@ function EpisodeCard(
                     <span class="meta-dot">•</span>
                     <span>${formatDuration(episode.episodeDuration)}</span>
                 </div>
-                ${templateBadges ? `<div class="episode-badges">${templateBadges}</div>` : ""}
+                ${tagBadges || templateBadges ? `<div class="episode-badges">
+                    ${tagBadges}
+                    ${tagBadges && templateBadges ? '<span class="meta-dot" style="margin: 0 0.25rem;">•</span>' : ''}
+                    ${templateBadges}
+                </div>` : ""}
             </div>
             <div class="episode-card-arrow">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -319,12 +336,25 @@ publicRoutes.get("/", async (c) => {
     const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
     const pageSize = 10;
     const search = c.req.query("q") || "";
+    const tagFilter = c.req.query("tag") || "";
+
+    // Validate tag if provided
+    const isValidTagFilter = tagFilter ? isValidTag(tagFilter) : true;
+    if (tagFilter && !isValidTagFilter) {
+        // Invalid tag - redirect to home without tag filter
+        return c.redirect("/");
+    }
 
     // Fetch both active jobs and completed episodes
     // Use DO for active jobs (strong consistency) to show real-time status
     const [activeJobs, paginatedEpisodes] = await Promise.all([
         listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
-        listEpisodes(c.env.TLDL_DATA, { page, pageSize, search: search || undefined }),
+        listEpisodes(c.env.TLDL_DATA, {
+            page,
+            pageSize,
+            search: search || undefined,
+            tag: tagFilter || undefined,
+        }),
     ]);
 
     const { episodes, totalPages } = paginatedEpisodes;
@@ -340,7 +370,7 @@ publicRoutes.get("/", async (c) => {
                 episode.id
             );
             const templateIds = summaries.map((s) => s.templateId);
-            return EpisodeCard(episode, templateIds);
+            return EpisodeCard(episode, templateIds, tagFilter || undefined);
         })
     );
 
@@ -388,10 +418,33 @@ publicRoutes.get("/", async (c) => {
             </div>
             <button type="submit" class="button">Search</button>
         </form>
+        <div class="tag-filter-bar">
+            <span class="tag-filter-label">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.375rem;">
+                    <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+                </svg>
+                Filter by topic:
+            </span>
+            ${tagFilter ? `<a href="/" class="tag-badge tag-badge-selected">
+                ${escapeHtml(tagFilter)}
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 0.25rem;">
+                    <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+                </svg>
+            </a>` : ""}
+            ${getValidTags().map(tag => {
+                if (tag === tagFilter) return ""; // Already shown as selected
+                return `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge">${escapeHtml(tag)}</a>`;
+            }).join("")}
+        </div>
         ${search && episodes.length === 0 ? `
         <div class="empty-state">
-            <p>No episodes found matching "${escapeHtml(search)}"</p>
-            <a href="/" class="button">Clear Search</a>
+            <p>No episodes found matching "${escapeHtml(search)}"${tagFilter ? ` with tag "${escapeHtml(tagFilter)}"` : ""}</p>
+            <a href="/" class="button">Clear Filters</a>
+        </div>
+        ` : tagFilter && episodes.length === 0 ? `
+        <div class="empty-state">
+            <p>No episodes found with tag "${escapeHtml(tagFilter)}"</p>
+            <a href="/" class="button">Clear Filter</a>
         </div>
         ` : ""}
         ${inProgressSection}
@@ -402,7 +455,7 @@ publicRoutes.get("/", async (c) => {
         ${totalPages > 1 ? `
         <nav class="pagination" aria-label="Episode pagination">
             ${page > 1 ? `
-            <a href="/?page=${page - 1}${search ? `&q=${encodeURIComponent(search)}` : ""}" class="pagination-link pagination-prev">
+            <a href="/?page=${page - 1}${search ? `&q=${encodeURIComponent(search)}` : ""}${tagFilter ? `&tag=${encodeURIComponent(tagFilter)}` : ""}" class="pagination-link pagination-prev">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m15 18-6-6 6-6"/>
                 </svg>
@@ -416,7 +469,7 @@ publicRoutes.get("/", async (c) => {
             </span>`}
             <span class="pagination-info">Page ${page} of ${totalPages}</span>
             ${page < totalPages ? `
-            <a href="/?page=${page + 1}${search ? `&q=${encodeURIComponent(search)}` : ""}" class="pagination-link pagination-next">
+            <a href="/?page=${page + 1}${search ? `&q=${encodeURIComponent(search)}` : ""}${tagFilter ? `&tag=${encodeURIComponent(tagFilter)}` : ""}" class="pagination-link pagination-next">
                 Next
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m9 18 6-6-6-6"/>
@@ -613,6 +666,14 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
                     </svg>
                     Expires in ${daysRemaining} days
                 </span>
+                ${episode.tags && episode.tags.length > 0 ? `
+                <span class="meta-dot">•</span>
+                <div style="display: inline-flex; gap: 0.375rem;">
+                    ${episode.tags.map(tag =>
+                        `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`
+                    ).join('')}
+                </div>
+                ` : ""}
             </div>
             <div class="platform-links">
                 <a href="${escapeHtml(episode.appleUrl)}" target="_blank" rel="noopener noreferrer" class="apple-podcasts-badge" title="Listen on Apple Podcasts">
