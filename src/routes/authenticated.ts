@@ -14,6 +14,7 @@ import {
     getSummary,
     deleteEpisode,
     listEpisodesByUser,
+    listEpisodes,
     listSummariesForEpisode,
 } from "../lib/kv";
 import {
@@ -29,7 +30,7 @@ import {
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId, RATE_LIMITS } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
-import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
+import { getUserEmailFromJwt, escapeHtml, isAdminUser } from "../lib/auth";
 
 const authenticated = new Hono<HonoEnv>();
 
@@ -198,9 +199,24 @@ authenticated.get("/profile", async (c) => {
     if (authError) return authError;
 
     const userEmail = c.get("userEmail") || "Unknown User";
+    const isAdmin = isAdminUser(userEmail === "Unknown User" ? undefined : userEmail);
 
-    // Get episodes submitted by this user
-    const episodes = await listEpisodesByUser(c.env.TLDL_DATA, userEmail);
+    // Parse pagination for admin view
+    const pageParam = c.req.query("page");
+    const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
+    const pageSize = 10;
+
+    // Get episodes - admin sees all (paginated), regular users see only their own
+    let episodes: import("../types").Episode[];
+    let totalPages = 1;
+
+    if (isAdmin) {
+        const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
+        episodes = result.episodes;
+        totalPages = result.totalPages;
+    } else {
+        episodes = await listEpisodesByUser(c.env.TLDL_DATA, userEmail);
+    }
 
     // Build episode cards with delete buttons
     const episodeCards = await Promise.all(
@@ -235,21 +251,55 @@ authenticated.get("/profile", async (c) => {
         })
     );
 
+    // Build pagination controls (only for admin with multiple pages)
+    const paginationHtml = isAdmin && totalPages > 1 ? `
+        <nav class="pagination" aria-label="Episode pagination">
+            ${page > 1 ? `
+            <a href="/profile?page=${page - 1}" class="pagination-link pagination-prev">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m15 18-6-6 6-6"/>
+                </svg>
+                Previous
+            </a>
+            ` : `<span class="pagination-link pagination-prev pagination-disabled">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m15 18-6-6 6-6"/>
+                </svg>
+                Previous
+            </span>`}
+            <span class="pagination-info">Page ${page} of ${totalPages}</span>
+            ${page < totalPages ? `
+            <a href="/profile?page=${page + 1}" class="pagination-link pagination-next">
+                Next
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m9 18 6-6-6-6"/>
+                </svg>
+            </a>
+            ` : `<span class="pagination-link pagination-next pagination-disabled">
+                Next
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m9 18 6-6-6-6"/>
+                </svg>
+            </span>`}
+        </nav>
+    ` : "";
+
     const content = `
         <div class="page-header">
             <h1>Your Profile</h1>
-            <p class="page-subtitle">${escapeHtml(userEmail)}</p>
+            <p class="page-subtitle">${escapeHtml(userEmail)}${isAdmin ? ' <span class="badge">Admin</span>' : ''}</p>
             <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout" class="button button-secondary">Log Out</a>
         </div>
 
         <div class="divider"></div>
 
         <section class="section">
-            <h2>Your Submitted Episodes</h2>
+            <h2>${isAdmin ? 'All Episodes (Admin View)' : 'Your Submitted Episodes'}</h2>
             ${episodes.length > 0 ? `
                 <div class="episode-list">
                     ${episodeCards.join("")}
                 </div>
+                ${paginationHtml}
             ` : `
                 <div class="empty-state">
                     <p>You haven't submitted any episodes yet.</p>
@@ -353,8 +403,9 @@ authenticated.post("/profile/delete/:episodeId", async (c) => {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Verify user owns this episode
-    if (episode.submittedBy && episode.submittedBy !== userEmail) {
+    // Check authorization: admin can delete any, regular users only their own
+    const isAdmin = isAdminUser(userEmail);
+    if (!isAdmin && episode.submittedBy && episode.submittedBy !== userEmail) {
         return c.json({ error: "You can only delete episodes you submitted" }, 403);
     }
 
@@ -665,9 +716,10 @@ authenticated.delete("/episode/:episodeId", async (c) => {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Verify user owns this episode (authorization check)
+    // Check authorization: admin can delete any, regular users only their own
     const userEmail = c.get("userEmail");
-    if (episode.submittedBy && episode.submittedBy !== userEmail) {
+    const isAdmin = isAdminUser(userEmail);
+    if (!isAdmin && episode.submittedBy && episode.submittedBy !== userEmail) {
         return c.json({ error: "You can only delete episodes you submitted" }, 403);
     }
 

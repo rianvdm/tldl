@@ -3,7 +3,34 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { getUserEmailFromJwt, escapeHtml } from "../src/lib/auth";
+import { getUserEmailFromJwt, escapeHtml, isAdminUser } from "../src/lib/auth";
+import { ADMIN_EMAILS } from "../src/lib/constants";
+
+describe("isAdminUser", () => {
+    it("should return true for admin emails", () => {
+        // Test with the first admin email from the config
+        expect(isAdminUser("rianvdm@gmail.com")).toBe(true);
+    });
+
+    it("should return true for all emails in ADMIN_EMAILS", () => {
+        for (const email of ADMIN_EMAILS) {
+            expect(isAdminUser(email)).toBe(true);
+        }
+    });
+
+    it("should return false for non-admin emails", () => {
+        expect(isAdminUser("random@example.com")).toBe(false);
+        expect(isAdminUser("notadmin@gmail.com")).toBe(false);
+    });
+
+    it("should return false for undefined", () => {
+        expect(isAdminUser(undefined)).toBe(false);
+    });
+
+    it("should return false for empty string", () => {
+        expect(isAdminUser("")).toBe(false);
+    });
+});
 
 describe("getUserEmailFromJwt", () => {
     // Helper to create a mock JWT with a given payload

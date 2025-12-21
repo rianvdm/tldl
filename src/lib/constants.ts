@@ -1,6 +1,18 @@
 import type { Template } from "../types";
 
 // ============================================================================
+// Admin Users
+// ============================================================================
+
+/**
+ * Admin users can view and delete ALL episodes on the profile page.
+ * Add email addresses to this array to grant admin access.
+ */
+export const ADMIN_EMAILS: string[] = [
+    "rianvdm@gmail.com",
+];
+
+// ============================================================================
 // Summary Templates
 // ============================================================================
 

@@ -2,6 +2,20 @@
  * Authentication utilities for Cloudflare Access JWT handling
  */
 
+import { ADMIN_EMAILS } from "./constants";
+
+/**
+ * Check if the given email belongs to an admin user.
+ * Admin users can view and delete all episodes.
+ *
+ * @param email - User email to check
+ * @returns true if the email is in ADMIN_EMAILS
+ */
+export function isAdminUser(email: string | undefined): boolean {
+    if (!email) return false;
+    return ADMIN_EMAILS.includes(email);
+}
+
 /**
  * Extract user email from Cloudflare Access JWT.
  * CF Access validates the signature, we just decode and validate the payload structure.
