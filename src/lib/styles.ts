@@ -265,10 +265,10 @@ h4 {
 }
 
 .episode-podcast {
-    font-size: 1.125rem;
+    font-size: 0.875rem;
     font-weight: 500;
-    color: var(--foreground);
-    margin-bottom: 0.125rem;
+    color: var(-foreground);
+    margin-bottom: 0.25rem;
     display: flex;
     align-items: center;
 }
