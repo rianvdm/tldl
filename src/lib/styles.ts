@@ -830,8 +830,16 @@ h4 {
     }
 
     .nav {
-        flex-direction: column;
-        gap: 0.25rem;
+        flex-direction: row;
+    }
+
+    .nav-tagline {
+        display: none;
+    }
+
+    /* Push About link (and Profile after it) to the right */
+    .nav-tagline + .nav-link {
+        margin-left: auto;
     }
 
     .page-header-with-action {
