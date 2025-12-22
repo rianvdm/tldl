@@ -4,13 +4,13 @@ compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-MAX_EPISODE_MINUTES = "105"
+MAX_EPISODE_MINUTES = "106"
 CACHE_TTL_DAYS = "365"
 DEFAULT_TEMPLATE = "key-takeaways"
 ENVIRONMENT = "production"
 
 [env.dev.vars]
-MAX_EPISODE_MINUTES = "105"
+MAX_EPISODE_MINUTES = "106"
 CACHE_TTL_DAYS = "365"
 DEFAULT_TEMPLATE = "key-takeaways"
 ENVIRONMENT = "development"
