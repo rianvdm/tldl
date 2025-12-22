@@ -59,6 +59,7 @@ export const EPISODE_TAGS = [
     "technology",
     "music",
     "faith",
+    "entertainment",
 ] as const;
 
 export type EpisodeTag = (typeof EPISODE_TAGS)[number];
