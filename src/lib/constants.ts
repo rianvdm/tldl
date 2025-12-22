@@ -214,7 +214,7 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 // ============================================================================
 
 export const TTL = {
-    JOB: 7 * 24 * 60 * 60,         // 7 days
+    JOB: 1 * 24 * 60 * 60,         // 1 day
     CONTENT: 365 * 24 * 60 * 60,    // 365 days
 } as const;
 
