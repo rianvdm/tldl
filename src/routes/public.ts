@@ -27,6 +27,7 @@ import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 
 import { generateEpisodePdf } from "../services/pdf";
 import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
+import { marked } from "marked";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -89,80 +90,19 @@ function calculateDaysRemaining(expiresAt: string): number {
 // escapeHtml imported from ../lib/auth
 
 /**
- * Simple markdown to HTML converter
- * Handles: headers, bold, italic, lists, code blocks, paragraphs, blockquotes
+ * Render markdown to HTML using the marked library
+ * Configured for security (no raw HTML passthrough)
  */
 function renderMarkdown(md: string): string {
     if (!md) return "";
 
-    let html = escapeHtml(md);
-
-    // Headers (h1-h4)
-    html = html.replace(/^#### (.+)$/gm, "<h4>$1</h4>");
-    html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
-    html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
-    html = html.replace(/^# (.+)$/gm, "<h1>$1</h1>");
-
-    // Bold and italic
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-
-    // Code blocks
-    html = html.replace(/```[\s\S]*?```/g, (match) => {
-        const code = match.slice(3, -3).trim();
-        return `<pre><code>${code}</code></pre>`;
+    // Configure marked for safe output
+    marked.setOptions({
+        gfm: true,        // GitHub Flavored Markdown
+        breaks: false,    // Don't convert single newlines to <br>
     });
 
-    // Inline code
-    html = html.replace(/`(.+?)`/g, "<code>$1</code>");
-
-    // Blockquotes
-    html = html.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
-
-    // Unordered lists - use placeholder to avoid conflicts with numbered lists
-    html = html.replace(/^- (.+)$/gm, "<__ul__>$1</__ul__>");
-
-    // Numbered lists - use placeholder
-    html = html.replace(/^\d+\. (.+)$/gm, "<__ol__>$1</__ol__>");
-
-    // Wrap unordered list placeholders in <ul> and convert to <li>
-    html = html.replace(/(<__ul__>.*?<\/__ul__>\n?)+/g, (match) => {
-        const items = match.replace(/<__ul__>(.*?)<\/__ul__>/g, "<li>$1</li>");
-        return `<ul>${items}</ul>`;
-    });
-
-    // Wrap numbered list placeholders in <ol> and convert to <li>
-    html = html.replace(/(<__ol__>.*?<\/__ol__>\n?)+/g, (match) => {
-        const items = match.replace(/<__ol__>(.*?)<\/__ol__>/g, "<li>$1</li>");
-        return `<ol>${items}</ol>`;
-    });
-
-    // Paragraphs - wrap text blocks that aren't already wrapped
-    // Split on single newlines to handle both single and double newline paragraph breaks
-    const lines = html.split("\n");
-    html = lines
-        .map((line) => {
-            const trimmed = line.trim();
-            if (!trimmed) return "";
-            if (
-                trimmed.startsWith("<h") ||
-                trimmed.startsWith("<ul") ||
-                trimmed.startsWith("<ol") ||
-                trimmed.startsWith("<pre") ||
-                trimmed.startsWith("<blockquote") ||
-                trimmed.startsWith("<li")
-            ) {
-                return trimmed;
-            }
-            return `<p>${trimmed}</p>`;
-        })
-        .join("\n");
-
-    // Clean up excessive whitespace between tags only (don't collapse content)
-    html = html.replace(/>\s+</g, "><").trim();
-
-    return html;
+    return marked.parse(md) as string;
 }
 
 /**
