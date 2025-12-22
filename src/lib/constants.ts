@@ -126,7 +126,7 @@ The central ideas and themes explored throughout the episode, and how they conne
 
 Avoid bullet points. Write as if you're telling a friend about a fascinating conversation you overheard. Capture the essence without losing the nuance.
 
-Total length: 300-400 words.`,
+Total length: 400-500 words.`,
     },
 
     eli5: {
