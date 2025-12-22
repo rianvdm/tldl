@@ -49,17 +49,17 @@ function buildTagPrompt(): string {
     const validTags = getValidTags();
     const tagList = validTags.map(tag => `- ${tag}`).join('\n');
 
-    return `Analyze the following podcast episode content and select 1-4 most relevant tags from the list below. Choose tags that best describe the primary themes and subject matter of the episode.
+    return `Analyze the following podcast episode content and select 1-2 most relevant tags from the list below. Choose tags that best describe the primary themes and subject matter of the episode.
 
 AVAILABLE TAGS:
 ${tagList}
 
 INSTRUCTIONS:
-- Select between 1 and 4 tags
+- Select between 1 and 2 tags
 - Choose tags that best represent the episode's main topics
 - Return ONLY a comma-separated list of tags, nothing else
 - Tags must be from the list above (lowercase with hyphens)
-- Example output: "psychology, personal-development, health"
+- Example output: "product, technology"
 
 Return the tags as a simple comma-separated list.`;
 }
@@ -74,7 +74,7 @@ Return the tags as a simple comma-separated list.`;
  * @param summary - The episode summary text
  * @param transcript - Optional full transcript (will use first 8000 chars if provided)
  * @param openaiApiKey - OpenAI API key
- * @returns Array of 1-4 tags
+ * @returns Array of 1-2 tags
  */
 export async function generateEpisodeTags(
     summary: string,
