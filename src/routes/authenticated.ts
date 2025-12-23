@@ -729,23 +729,7 @@ authenticated.get("/profile", async (c) => {
 
         <div class="divider"></div>
 
-        <section class="section">
-            <h2>${isAdmin ? 'All Episodes (Admin View)' : 'Your Submitted Episodes'}</h2>
-            ${episodes.length > 0 ? `
-                <div class="episode-list">
-                    ${episodeCards.join("")}
-                </div>
-                ${paginationHtml}
-            ` : `
-                <div class="empty-state">
-                    <p>You haven't submitted any episodes yet.</p>
-                    <a href="/submit" class="button button-primary">Submit Your First Episode</a>
-                </div>
-            `}
-        </section>
-
         ${isAdmin ? `
-        <div class="divider"></div>
         <section class="section">
             <h2>Admin Tools</h2>
             <div class="admin-tools">
@@ -804,7 +788,23 @@ authenticated.get("/profile", async (c) => {
                 </div>
             </div>
         </section>
+        <div class="divider"></div>
         ` : ""}
+
+        <section class="section">
+            <h2>${isAdmin ? 'All Episodes (Admin View)' : 'Your Submitted Episodes'}</h2>
+            ${episodes.length > 0 ? `
+                <div class="episode-list">
+                    ${episodeCards.join("")}
+                </div>
+                ${paginationHtml}
+            ` : `
+                <div class="empty-state">
+                    <p>You haven't submitted any episodes yet.</p>
+                    <a href="/submit" class="button button-primary">Submit Your First Episode</a>
+                </div>
+            `}
+        </section>
 
         <div id="delete-modal" class="modal" style="display: none;">
             <div class="modal-backdrop" onclick="hideDeleteModal()"></div>
@@ -818,285 +818,285 @@ authenticated.get("/profile", async (c) => {
             </div>
         </div>
 
-        <script>
+<script>
             let deleteEpisodeId = null;
 
-            function confirmDelete(episodeId, episodeTitle) {
-                deleteEpisodeId = episodeId;
-                document.getElementById('delete-modal-message').textContent = 
-                    'Delete "' + episodeTitle + '"? This will permanently delete the episode, its transcript, and all summaries.';
-                document.getElementById('delete-modal').style.display = 'flex';
-                document.getElementById('confirm-delete-btn').onclick = doDelete;
-            }
+function confirmDelete(episodeId, episodeTitle) {
+    deleteEpisodeId = episodeId;
+    document.getElementById('delete-modal-message').textContent =
+        'Delete "' + episodeTitle + '"? This will permanently delete the episode, its transcript, and all summaries.';
+    document.getElementById('delete-modal').style.display = 'flex';
+    document.getElementById('confirm-delete-btn').onclick = doDelete;
+}
 
-            function hideDeleteModal() {
-                document.getElementById('delete-modal').style.display = 'none';
-                deleteEpisodeId = null;
-            }
+function hideDeleteModal() {
+    document.getElementById('delete-modal').style.display = 'none';
+    deleteEpisodeId = null;
+}
 
-            async function doDelete() {
-                if (!deleteEpisodeId) return;
-                try {
-                    const response = await fetch('/profile/delete/' + deleteEpisodeId, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include'
-                    });
-                    if (response.ok) {
-                        // Remove the card from the page
-                        const card = document.querySelector('[data-episode-id="' + deleteEpisodeId + '"]');
-                        if (card) card.remove();
-                        hideDeleteModal();
-                    } else {
-                        const data = await response.json();
-                        alert('Failed to delete: ' + (data.error || 'Unknown error'));
-                    }
-                } catch (err) {
-                    alert('Failed to delete episode');
-                }
-            }
+async function doDelete() {
+    if (!deleteEpisodeId) return;
+    try {
+        const response = await fetch('/profile/delete/' + deleteEpisodeId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+        });
+        if (response.ok) {
+            // Remove the card from the page
+            const card = document.querySelector('[data-episode-id="' + deleteEpisodeId + '"]');
+            if (card) card.remove();
+            hideDeleteModal();
+        } else {
+            const data = await response.json();
+            alert('Failed to delete: ' + (data.error || 'Unknown error'));
+        }
+    } catch (err) {
+        alert('Failed to delete episode');
+    }
+}
 
-            function toggleTag(button, episodeId) {
-                button.classList.toggle('selected');
-            }
+function toggleTag(button, episodeId) {
+    button.classList.toggle('selected');
+}
 
-            async function saveTagsFor(episodeId) {
-                const editor = document.querySelector('[data-episode-id="' + episodeId + '"] .tag-editor');
-                const selectedButtons = editor.querySelectorAll('.tag-editor-badge.selected');
-                const tags = Array.from(selectedButtons).map(btn => btn.getAttribute('data-tag'));
-                const messageEl = document.getElementById('tag-message-' + episodeId);
+async function saveTagsFor(episodeId) {
+    const editor = document.querySelector('[data-episode-id="' + episodeId + '"] .tag-editor');
+    const selectedButtons = editor.querySelectorAll('.tag-editor-badge.selected');
+    const tags = Array.from(selectedButtons).map(btn => btn.getAttribute('data-tag'));
+    const messageEl = document.getElementById('tag-message-' + episodeId);
 
-                // Validate count
-                if (tags.length < 1 || tags.length > 4) {
-                    messageEl.className = 'tag-editor-message alert-error';
-                    messageEl.textContent = 'Please select 1-4 tags (currently ' + tags.length + ' selected)';
-                    messageEl.style.display = 'block';
-                    return;
-                }
+    // Validate count
+    if (tags.length < 1 || tags.length > 4) {
+        messageEl.className = 'tag-editor-message alert-error';
+        messageEl.textContent = 'Please select 1-4 tags (currently ' + tags.length + ' selected)';
+        messageEl.style.display = 'block';
+        return;
+    }
 
-                try {
-                    const response = await fetch('/profile/update-tags/' + episodeId, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include',
-                        body: JSON.stringify({ tags }),
-                    });
+    try {
+        const response = await fetch('/profile/update-tags/' + episodeId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ tags }),
+        });
 
-                    const data = await response.json();
+        const data = await response.json();
 
-                    if (response.ok) {
-                        messageEl.className = 'tag-editor-message alert-success';
-                        messageEl.textContent = 'Tags updated successfully!';
-                        messageEl.style.display = 'block';
-                        setTimeout(() => {
-                            messageEl.style.display = 'none';
-                        }, 3000);
-                    } else {
-                        messageEl.className = 'tag-editor-message alert-error';
-                        messageEl.textContent = data.error || 'Failed to update tags';
-                        messageEl.style.display = 'block';
-                    }
-                } catch (err) {
-                    messageEl.className = 'tag-editor-message alert-error';
-                    messageEl.textContent = 'Failed to save tags';
-                    messageEl.style.display = 'block';
-                }
-            }
+        if (response.ok) {
+            messageEl.className = 'tag-editor-message alert-success';
+            messageEl.textContent = 'Tags updated successfully!';
+            messageEl.style.display = 'block';
+            setTimeout(() => {
+                messageEl.style.display = 'none';
+            }, 3000);
+        } else {
+            messageEl.className = 'tag-editor-message alert-error';
+            messageEl.textContent = data.error || 'Failed to update tags';
+            messageEl.style.display = 'block';
+        }
+    } catch (err) {
+        messageEl.className = 'tag-editor-message alert-error';
+        messageEl.textContent = 'Failed to save tags';
+        messageEl.style.display = 'block';
+    }
+}
 
-            async function rebuildIndex() {
-                const btn = document.getElementById('rebuild-index-btn');
-                const result = document.getElementById('rebuild-result');
-                btn.disabled = true;
-                btn.textContent = 'Rebuilding...';
-                result.style.display = 'none';
+async function rebuildIndex() {
+    const btn = document.getElementById('rebuild-index-btn');
+    const result = document.getElementById('rebuild-result');
+    btn.disabled = true;
+    btn.textContent = 'Rebuilding...';
+    result.style.display = 'none';
 
-                try {
-                    const response = await fetch('/profile/rebuild-index', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include'
-                    });
-                    const data = await response.json();
-                    if (response.ok) {
-                        result.className = 'alert alert-success';
-                        result.textContent = 'Index rebuilt successfully! ' + data.episodeCount + ' episodes indexed.';
-                    } else {
-                        result.className = 'alert alert-error';
-                        result.textContent = 'Failed: ' + (data.error || 'Unknown error');
-                    }
-                } catch (err) {
-                    result.className = 'alert alert-error';
-                    result.textContent = 'Failed to rebuild index';
-                }
+    try {
+        const response = await fetch('/profile/rebuild-index', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+        });
+        const data = await response.json();
+        if (response.ok) {
+            result.className = 'alert alert-success';
+            result.textContent = 'Index rebuilt successfully! ' + data.episodeCount + ' episodes indexed.';
+        } else {
+            result.className = 'alert alert-error';
+            result.textContent = 'Failed: ' + (data.error || 'Unknown error');
+        }
+    } catch (err) {
+        result.className = 'alert alert-error';
+        result.textContent = 'Failed to rebuild index';
+    }
 
-                result.style.display = 'block';
-                btn.disabled = false;
-                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg> Rebuild Episode Index';
-            }
+    result.style.display = 'block';
+    btn.disabled = false;
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg> Rebuild Episode Index';
+}
 
-            async function cleanupFailedJobs() {
-                const btn = document.getElementById('cleanup-jobs-btn');
-                const result = document.getElementById('cleanup-result');
-                btn.disabled = true;
-                btn.textContent = 'Cleaning up...';
-                result.style.display = 'none';
+async function cleanupFailedJobs() {
+    const btn = document.getElementById('cleanup-jobs-btn');
+    const result = document.getElementById('cleanup-result');
+    btn.disabled = true;
+    btn.textContent = 'Cleaning up...';
+    result.style.display = 'none';
 
-                try {
-                    const response = await fetch('/profile/cleanup-failed-jobs', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include'
-                    });
-                    const data = await response.json();
-                    if (response.ok) {
-                        result.className = 'alert alert-success';
-                        result.textContent = 'Cleanup successful! ' + data.deletedCount + ' failed job' + (data.deletedCount !== 1 ? 's' : '') + ' removed.';
-                    } else {
-                        result.className = 'alert alert-error';
-                        result.textContent = 'Failed: ' + (data.error || 'Unknown error');
-                    }
-                } catch (err) {
-                    result.className = 'alert alert-error';
-                    result.textContent = 'Failed to clean up jobs';
-                }
+    try {
+        const response = await fetch('/profile/cleanup-failed-jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+        });
+        const data = await response.json();
+        if (response.ok) {
+            result.className = 'alert alert-success';
+            result.textContent = 'Cleanup successful! ' + data.deletedCount + ' failed job' + (data.deletedCount !== 1 ? 's' : '') + ' removed.';
+        } else {
+            result.className = 'alert alert-error';
+            result.textContent = 'Failed: ' + (data.error || 'Unknown error');
+        }
+    } catch (err) {
+        result.className = 'alert alert-error';
+        result.textContent = 'Failed to clean up jobs';
+    }
 
-                result.style.display = 'block';
-                btn.disabled = false;
-                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg> Clean Up Failed Jobs';
-            }
+    result.style.display = 'block';
+    btn.disabled = false;
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg> Clean Up Failed Jobs';
+}
 
-            async function backfillTags() {
-                if (!confirm('Generate tags for all episodes without tags? This may take a few minutes and will use OpenAI API credits.')) {
-                    return;
-                }
+async function backfillTags() {
+    if (!confirm('Generate tags for all episodes without tags? This may take a few minutes and will use OpenAI API credits.')) {
+        return;
+    }
 
-                const button = document.getElementById('backfill-tags-btn');
-                const statusEl = document.getElementById('backfill-status');
+    const button = document.getElementById('backfill-tags-btn');
+    const statusEl = document.getElementById('backfill-status');
 
-                // Show loading state
-                button.disabled = true;
-                button.textContent = 'Processing...';
-                statusEl.style.display = 'block';
-                statusEl.className = 'alert alert-info';
-                statusEl.textContent = 'Generating tags for episodes...';
+    // Show loading state
+    button.disabled = true;
+    button.textContent = 'Processing...';
+    statusEl.style.display = 'block';
+    statusEl.className = 'alert alert-info';
+    statusEl.textContent = 'Generating tags for episodes...';
 
-                try {
-                    const response = await fetch('/profile/backfill-tags', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
+    try {
+        const response = await fetch('/profile/backfill-tags', {
+            method: 'POST',
+            credentials: 'include',
+        });
 
-                    const data = await response.json();
+        const data = await response.json();
 
-                    if (response.ok) {
-                        statusEl.className = 'alert alert-success';
-                        statusEl.textContent = 'Success! ' + data.message;
+        if (response.ok) {
+            statusEl.className = 'alert alert-success';
+            statusEl.textContent = 'Success! ' + data.message;
 
-                        // Reload page after 2 seconds to show new tags
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 2000);
-                    } else {
-                        statusEl.className = 'alert alert-error';
-                        statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
-                        button.disabled = false;
-                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
-                    }
-                } catch (err) {
-                    statusEl.className = 'alert alert-error';
-                    statusEl.textContent = 'Failed to backfill tags';
-                    button.disabled = false;
-                    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
-                }
-            }
+            // Reload page after 2 seconds to show new tags
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            statusEl.className = 'alert alert-error';
+            statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+            button.disabled = false;
+            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
+        }
+    } catch (err) {
+        statusEl.className = 'alert alert-error';
+        statusEl.textContent = 'Failed to backfill tags';
+        button.disabled = false;
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
+    }
+}
 
-            async function cleanupInvalidTags() {
-                if (!confirm('Remove invalid tags from all episodes? This will remove any tags that are no longer in the predefined tag list.')) {
-                    return;
-                }
+async function cleanupInvalidTags() {
+    if (!confirm('Remove invalid tags from all episodes? This will remove any tags that are no longer in the predefined tag list.')) {
+        return;
+    }
 
-                const button = document.getElementById('cleanup-tags-btn');
-                const statusEl = document.getElementById('cleanup-tags-status');
+    const button = document.getElementById('cleanup-tags-btn');
+    const statusEl = document.getElementById('cleanup-tags-status');
 
-                // Show loading state
-                button.disabled = true;
-                button.textContent = 'Processing...';
-                statusEl.style.display = 'block';
-                statusEl.className = 'alert alert-info';
-                statusEl.textContent = 'Cleaning up invalid tags...';
+    // Show loading state
+    button.disabled = true;
+    button.textContent = 'Processing...';
+    statusEl.style.display = 'block';
+    statusEl.className = 'alert alert-info';
+    statusEl.textContent = 'Cleaning up invalid tags...';
 
-                try {
-                    const response = await fetch('/profile/cleanup-invalid-tags', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
+    try {
+        const response = await fetch('/profile/cleanup-invalid-tags', {
+            method: 'POST',
+            credentials: 'include',
+        });
 
-                    const data = await response.json();
+        const data = await response.json();
 
-                    if (response.ok) {
-                        statusEl.className = 'alert alert-success';
-                        statusEl.textContent = 'Success! ' + data.message;
+        if (response.ok) {
+            statusEl.className = 'alert alert-success';
+            statusEl.textContent = 'Success! ' + data.message;
 
-                        // Reload page after 2 seconds to show updated tags
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 2000);
-                    } else {
-                        statusEl.className = 'alert alert-error';
-                        statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
-                        button.disabled = false;
-                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
-                    }
-                } catch (err) {
-                    statusEl.className = 'alert alert-error';
-                    statusEl.textContent = 'Failed to cleanup tags';
-                    button.disabled = false;
-                    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
-                }
-            }
+            // Reload page after 2 seconds to show updated tags
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            statusEl.className = 'alert alert-error';
+            statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+            button.disabled = false;
+            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
+        }
+    } catch (err) {
+        statusEl.className = 'alert alert-error';
+        statusEl.textContent = 'Failed to cleanup tags';
+        button.disabled = false;
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
+    }
+}
 
-            async function backfillPodcastInfo() {
-                if (!confirm('Fetch podcast author and website info from Podcast Index API for all episodes? This may take a while for many episodes.')) {
-                    return;
-                }
+async function backfillPodcastInfo() {
+    if (!confirm('Fetch podcast author and website info from Podcast Index API for all episodes? This may take a while for many episodes.')) {
+        return;
+    }
 
-                const button = document.getElementById('backfill-podcast-info-btn');
-                const statusEl = document.getElementById('backfill-podcast-info-status');
+    const button = document.getElementById('backfill-podcast-info-btn');
+    const statusEl = document.getElementById('backfill-podcast-info-status');
 
-                // Show loading state
-                button.disabled = true;
-                button.textContent = 'Fetching...';
-                statusEl.style.display = 'block';
-                statusEl.className = 'alert alert-info';
-                statusEl.textContent = 'Fetching podcast info from Podcast Index API...';
+    // Show loading state
+    button.disabled = true;
+    button.textContent = 'Fetching...';
+    statusEl.style.display = 'block';
+    statusEl.className = 'alert alert-info';
+    statusEl.textContent = 'Fetching podcast info from Podcast Index API...';
 
-                try {
-                    const response = await fetch('/profile/backfill-podcast-info', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
+    try {
+        const response = await fetch('/profile/backfill-podcast-info', {
+            method: 'POST',
+            credentials: 'include',
+        });
 
-                    const data = await response.json();
+        const data = await response.json();
 
-                    if (response.ok) {
-                        statusEl.className = 'alert alert-success';
-                        statusEl.textContent = 'Success! ' + data.message;
-                        button.disabled = false;
-                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
-                    } else {
-                        statusEl.className = 'alert alert-error';
-                        statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
-                        button.disabled = false;
-                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
-                    }
-                } catch (err) {
-                    statusEl.className = 'alert alert-error';
-                    statusEl.textContent = 'Failed to backfill podcast info';
-                    button.disabled = false;
-                    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
-                }
-            }
-        </script>
+        if (response.ok) {
+            statusEl.className = 'alert alert-success';
+            statusEl.textContent = 'Success! ' + data.message;
+            button.disabled = false;
+            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
+        } else {
+            statusEl.className = 'alert alert-error';
+            statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+            button.disabled = false;
+            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
+        }
+    } catch (err) {
+        statusEl.className = 'alert alert-error';
+        statusEl.textContent = 'Failed to backfill podcast info';
+        button.disabled = false;
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
+    }
+}
+</script>
     `;
 
     return c.html(Layout({
@@ -1194,7 +1194,7 @@ authenticated.post("/submit", async (c, next) => {
     // Validate template
     const effectiveTemplateId = templateId || c.env.DEFAULT_TEMPLATE;
     if (!isValidTemplateId(effectiveTemplateId)) {
-        return c.json({ error: `Invalid template ID: ${templateId}` }, 400);
+        return c.json({ error: `Invalid template ID: ${templateId} ` }, 400);
     }
 
     // Derive episode ID
@@ -1344,7 +1344,7 @@ authenticated.post("/profile/update-tags/:episodeId", async (c) => {
     const validation = validateTags(body.tags);
     if (validation.invalid.length > 0) {
         return c.json({
-            error: `Invalid tags: ${validation.invalid.join(', ')}`,
+            error: `Invalid tags: ${validation.invalid.join(', ')} `,
             validTags: getValidTags(),
         }, 400);
     }
@@ -1416,7 +1416,7 @@ authenticated.post("/episode/:episodeId/regenerate", async (c) => {
         return c.json({ error: "Missing templateId field" }, 400);
     }
     if (!isValidTemplateId(templateId)) {
-        return c.json({ error: `Invalid template ID: ${templateId}` }, 400);
+        return c.json({ error: `Invalid template ID: ${templateId} ` }, 400);
     }
 
     // Verify episode exists
