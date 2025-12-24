@@ -994,6 +994,63 @@ publicRoutes.get("/about", async (c) => {
             .about-page li {
                 margin-bottom: 0.5rem;
             }
+            
+            /* Templates table - responsive design */
+            .templates-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 1rem;
+            }
+            .templates-table th,
+            .templates-table td {
+                padding: 0.875rem 1rem;
+                text-align: left;
+                border-bottom: 1px solid var(--border);
+            }
+            .templates-table th {
+                font-weight: 600;
+                color: var(--muted-foreground);
+                font-size: 0.875rem;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+            }
+            .templates-table td {
+                color: var(--foreground);
+            }
+            .templates-table td:first-child {
+                white-space: nowrap;
+            }
+            .templates-table tbody tr:last-child td {
+                border-bottom: none;
+            }
+            
+            /* Mobile: stack rows as cards */
+            @media (max-width: 640px) {
+                .templates-table thead {
+                    display: none;
+                }
+                .templates-table tbody tr {
+                    display: block;
+                    padding: 1rem 0;
+                    border-bottom: 1px solid var(--border);
+                }
+                .templates-table tbody tr:last-child {
+                    border-bottom: none;
+                }
+                .templates-table td {
+                    display: block;
+                    padding: 0.25rem 0;
+                    border-bottom: none;
+                }
+                .templates-table td:first-child {
+                    white-space: normal;
+                    padding-bottom: 0.5rem;
+                }
+                .templates-table td:last-child {
+                    color: var(--muted-foreground);
+                    font-size: 0.9375rem;
+                }
+            }
         </style>
         <div class="intro-section">
             <p>Submitting new episodes is currently invite-only. For now you can browse existing summaries on the home page.</p>
@@ -1014,42 +1071,40 @@ publicRoutes.get("/about", async (c) => {
 
             <section style="margin-top: 2rem;">
                 <h2>Summary Templates</h2>
-                <p>Choose from three different summary styles depending on the type of content:</p>
+                <p>On submission users can select from three different summary styles depending on the type of content:</p>
 
-                <div style="margin-top: 1rem;">
-                    <h3 style="margin-bottom: 0.5rem;">Key Takeaways & Practical Steps</h3>
-                    <p style="margin-top: 0; color: var(--muted-foreground);">
-                        Best for craft and professional development podcasts. Includes an overview,
-                        key insights, actionable steps, and notable quotes.
-                    </p>
-                </div>
-
-                <div style="margin-top: 1rem;">
-                    <h3 style="margin-bottom: 0.5rem;">Narrative Summary</h3>
-                    <p style="margin-top: 0; color: var(--muted-foreground);">
-                        Best for story-driven and interview podcasts. Captures the arc of the conversation
-                        with flowing narrative and main themes.
-                    </p>
-                </div>
-
-                <div style="margin-top: 1rem;">
-                    <h3 style="margin-bottom: 0.5rem;">ELI5 (Explain Like I'm 5)</h3>
-                    <p style="margin-top: 0; color: var(--muted-foreground);">
-                        Best for technical and complex topics. Breaks down complex concepts using everyday
-                        analogies and simple language.
-                    </p>
-                </div>
+                <table class="templates-table">
+                    <thead>
+                        <tr>
+                            <th>Template</th>
+                            <th>Best For</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td data-label="Template"><strong>Key Takeaways & Practical Steps</strong></td>
+                            <td data-label="Best For">Craft and professional development podcasts. Includes an overview, key insights, actionable steps, and notable quotes.</td>
+                        </tr>
+                        <tr>
+                            <td data-label="Template"><strong>Narrative Summary</strong></td>
+                            <td data-label="Best For">Story-driven and interview podcasts. Captures the arc of the conversation with flowing narrative and main themes.</td>
+                        </tr>
+                        <tr>
+                            <td data-label="Template"><strong>ELI5 (Explain Like I'm 5)</strong></td>
+                            <td data-label="Best For">Technical and complex topics. Breaks down complex concepts using everyday analogies and simple language.</td>
+                        </tr>
+                    </tbody>
+                </table>
             </section>
 
             <section id="creator-opt-out" style="margin-top: 2rem;">
                 <h2>A Note for Podcast Creators</h2>
                 <p>
-                    My hope is that TL;DL helps expand your audience by making your content more discoverable
-                    and accessible. Attribution matters to me, which is why your name and podcast website is displayed
-                    prominently on every episode page. That said, if you'd prefer to opt out, please reach out at
-                    <a href="https://elezea.com/contact" target="_blank" rel="noopener noreferrer">elezea.com/contact</a>
-                    and I'll add your podcast to the blocklist.
+                    Attribution matters. Every episode page prominently displays the podcast name, creator names, and both a “Listen on Apple Podcasts” link and a “Website” link to the official podcast website. My hope is that TL;DL helps expand a podcast's audience by making the content more accessible. Summaries should bring people <em>to</em> a podcast, not replace the experience of listening—most podcasts have transcripts available already, after all.
                 </p>
+                <p>That said, if you'd prefer to opt out, please reach out at
+                    <a href="https://elezea.com/contact" target="_blank" rel="noopener noreferrer">elezea.com/contact</a>
+                    and I'll add your podcast to the blocklist.</p>
             </section>
 
             <section style="margin-top: 2rem;">
