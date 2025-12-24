@@ -22,9 +22,29 @@ Use JavaScript to probe a protected endpoint on page load. This is the cleanest 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Default state | Logged-out | Avoids showing "Profile" to logged-out users; no false positives |
-| FOUC handling | Accept brief flash for logged-in users | ~100-200ms is acceptable; logged-out users (majority) see correct state immediately |
-| After logout | Skip auth check when `?loggedOut=1` | Prevents unnecessary request; shows correct state immediately |
-| No JavaScript | Show logged-out state | Safe fallback; protected routes still work via Cloudflare Access redirects |v
+| Flash minimization | Early fetch + localStorage cache | Returning users get instant UI; first-time users have minimal delay |
+| After logout | Skip auth check + clear cache | Prevents unnecessary request; shows correct state immediately |
+| No JavaScript | Show logged-out state | Safe fallback; protected routes still work via Cloudflare Access redirects |
+
+### Flash Minimization Strategy
+
+Two techniques combined for best UX:
+
+1. **Early fetch (in `<head>`)**: Start the auth check request immediately, in parallel with HTML parsing. By the time the body renders, the fetch is likely complete or nearly complete.
+
+2. **localStorage cache**: Cache auth state locally. Returning logged-in users see "Profile" instantly on page load. The fetch still runs in the background to validate, but the UI shows immediately from cache.
+
+```
+First visit (logged in):
+[HTML + fetch in parallel] → [Body renders with "Log in"] → [Fetch completes ~50ms] → [Update to "Profile"]
+                                                            ^^^^^^^^^^^^^^^^^^^^^^^^
+                                                            Minimal flash
+
+Returning visit (logged in):
+[HTML loads] → [Cache hit: show "Profile" instantly] → [Fetch validates in background]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               Zero flash
+```
 
 ---
 
@@ -109,34 +129,81 @@ Replace the single Submit button with two versions:
 </a>
 ```
 
-### Step 5: Add Auth Check Script to Layout
+### Step 5: Add Auth Check Scripts to Layout
 
-**File**: `src/routes/public.ts` (Layout component, before `</body>`)
+**File**: `src/routes/public.ts` (Layout component)
+
+Two scripts: one in `<head>` to start early, one before `</body>` to update DOM.
+
+#### Part A: Early fetch in `<head>`
 
 ```javascript
 <script>
 (function() {
-    // Skip auth check if user just logged out
-    if (new URLSearchParams(location.search).get('loggedOut') === '1') return;
+    var CACHE_KEY = 'tldl-auth';
+    var loggedOut = new URLSearchParams(location.search).get('loggedOut') === '1';
 
-    // Probe protected endpoint to check auth state
-    fetch('/profile/auth-check', { credentials: 'include' })
-        .then(function(r) { return r.ok ? r.json() : Promise.reject(); })
-        .then(function() {
-            // User is authenticated - upgrade UI
-            var nav = document.getElementById('nav-auth-link');
-            if (nav) nav.textContent = 'Profile';
+    // Clear cache and skip fetch if just logged out
+    if (loggedOut) {
+        localStorage.removeItem(CACHE_KEY);
+        window.__authCheck = Promise.resolve(false);
+        return;
+    }
 
-            document.querySelectorAll('.auth-logged-out').forEach(function(el) {
-                el.classList.add('hidden');
-            });
-            document.querySelectorAll('.auth-logged-in').forEach(function(el) {
-                el.classList.remove('hidden');
-            });
+    // Start fetch early (runs in parallel with HTML parsing)
+    window.__authCheck = fetch('/profile/auth-check', { credentials: 'include' })
+        .then(function(r) {
+            if (r.ok) {
+                localStorage.setItem(CACHE_KEY, '1');
+                return true;
+            }
+            localStorage.removeItem(CACHE_KEY);
+            return false;
         })
         .catch(function() {
-            // Not authenticated or error - keep default logged-out state
+            localStorage.removeItem(CACHE_KEY);
+            return false;
         });
+
+    // Check cache for instant UI (will be applied in body script)
+    window.__authCached = localStorage.getItem(CACHE_KEY) === '1';
+})();
+</script>
+```
+
+#### Part B: DOM update before `</body>`
+
+```javascript
+<script>
+(function() {
+    function showLoggedIn() {
+        var nav = document.getElementById('nav-auth-link');
+        if (nav) nav.textContent = 'Profile';
+        document.querySelectorAll('.auth-logged-out').forEach(function(el) {
+            el.classList.add('hidden');
+        });
+        document.querySelectorAll('.auth-logged-in').forEach(function(el) {
+            el.classList.remove('hidden');
+        });
+    }
+
+    // If cached as logged in, show immediately (zero flash for returning users)
+    if (window.__authCached) {
+        showLoggedIn();
+    }
+
+    // Then validate with actual fetch result (updates if cache was wrong)
+    if (window.__authCheck) {
+        window.__authCheck.then(function(isLoggedIn) {
+            if (isLoggedIn && !window.__authCached) {
+                // Fetch confirmed login, but wasn't cached - update now
+                showLoggedIn();
+            } else if (!isLoggedIn && window.__authCached) {
+                // Cache was wrong (session expired) - reload to show logged-out state
+                location.reload();
+            }
+        });
+    }
 })();
 </script>
 ```
@@ -161,16 +228,30 @@ Replace the single Submit button with two versions:
 2. Auth check runs in background, fails (as expected)
 3. UI stays the same - no flash, correct state shown immediately
 
-### Logged-In User
-1. Page loads with "Log in" in nav and disabled Submit button
-2. Auth check runs in background, succeeds (~100-200ms)
-3. UI updates: "Log in" → "Profile", Submit button becomes clickable
-4. Brief flash is acceptable tradeoff for reliable auth detection
+### Logged-In User (First Visit)
+1. Page loads, fetch starts in `<head>` (parallel with HTML)
+2. Body renders with "Log in" (default state)
+3. Fetch completes quickly (~50ms since it started early)
+4. UI updates to "Profile" - minimal flash
+5. localStorage cache is set for future visits
+
+### Logged-In User (Returning)
+1. Page loads, localStorage cache is checked in `<head>`
+2. Body renders, cache hit detected → "Profile" shown instantly
+3. Fetch validates in background (no UI change needed)
+4. **Zero flash** for returning users
 
 ### After Logout
 1. User clicks logout, redirected to `/?loggedOut=1`
-2. Auth check is skipped (detected via URL param)
-3. UI shows logged-out state immediately - no flash
+2. localStorage cache is cleared
+3. Auth check is skipped
+4. UI shows logged-out state immediately - no flash
+
+### Session Expired (Edge Case)
+1. User returns with stale localStorage cache
+2. "Profile" shown instantly (from cache)
+3. Fetch runs, returns not-authenticated
+4. Page reloads to show correct logged-out state
 
 ### JavaScript Disabled
 1. Page shows logged-out state (default)
@@ -182,8 +263,11 @@ Replace the single Submit button with two versions:
 ## Testing Checklist
 
 - [ ] Logged-out user sees "Log in" and disabled Submit button
-- [ ] Logged-in user sees "Profile" and clickable Submit button (after brief delay)
+- [ ] Logged-in user (first visit) sees "Profile" after minimal delay
+- [ ] Logged-in user (returning) sees "Profile" instantly (from cache)
 - [ ] After logout (with `?loggedOut=1`), user sees logged-out state immediately
+- [ ] After logout, localStorage cache is cleared
+- [ ] Session expired: page reloads to show logged-out state
 - [ ] JavaScript disabled: user sees logged-out state (graceful degradation)
 - [ ] Network timeout/error: user sees logged-out state
 - [ ] Mobile: responsive behavior works correctly
@@ -209,3 +293,4 @@ Replace the single Submit button with two versions:
 4. **Graceful degradation** - Works without JavaScript
 5. **No false positives** - Never shows "Profile" to logged-out users
 6. **Works with Cloudflare Access** - No configuration changes needed
+7. **Minimal flash** - Early fetch + localStorage cache means returning users see instant correct UI
