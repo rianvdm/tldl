@@ -194,6 +194,20 @@ function formatDate(dateString: string): string {
 // escapeHtml imported from ../lib/auth
 
 // ============================================================================
+// GET /profile/auth-check - Quick auth probe for client-side detection
+// ============================================================================
+
+authenticated.get("/profile/auth-check", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    return c.json({
+        authenticated: true,
+        email: c.get("userEmail") || null
+    });
+});
+
+// ============================================================================
 // POST /profile/rebuild-index - Admin-only: Rebuild episode index
 // ============================================================================
 

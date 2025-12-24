@@ -178,6 +178,37 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                 <meta name="twitter:image" content="${ogImage}" />
                 <link rel="stylesheet" href="/styles.css" />
                 <link rel="alternate" type="application/rss+xml" title="TL;DL RSS Feed" href="/feed" />
+                <script>
+                (function() {
+                    var CACHE_KEY = 'tldl-auth';
+                    var loggedOut = new URLSearchParams(location.search).get('loggedOut') === '1';
+
+                    // Clear cache and skip fetch if just logged out
+                    if (loggedOut) {
+                        localStorage.removeItem(CACHE_KEY);
+                        window.__authCheck = Promise.resolve(false);
+                        return;
+                    }
+
+                    // Start fetch early (runs in parallel with HTML parsing)
+                    window.__authCheck = fetch('/profile/auth-check', { credentials: 'include' })
+                        .then(function(r) {
+                            if (r.ok) {
+                                localStorage.setItem(CACHE_KEY, '1');
+                                return true;
+                            }
+                            localStorage.removeItem(CACHE_KEY);
+                            return false;
+                        })
+                        .catch(function() {
+                            localStorage.removeItem(CACHE_KEY);
+                            return false;
+                        });
+
+                    // Check cache for instant UI (will be applied in body script)
+                    window.__authCached = localStorage.getItem(CACHE_KEY) === '1';
+                })();
+                </script>
                 ${raw(props.headExtra || "")}
             </head>
             <body>
@@ -188,13 +219,45 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                             >Too Long Didn't Listen</span
                         >
                         <a href="/about" class="nav-link">About</a>
-                        <a href="/profile" class="nav-link">Profile</a>
+                        <a href="/profile" class="nav-link" id="nav-auth-link">Log in</a>
                     </nav>
                     <main class="main">${raw(props.children)}</main>
                     <footer class="footer">
                         <p><a href="https://github.com/rianvdm/tldl/issues" target="_blank" rel="noopener noreferrer">Submit a Bug</a> | <a href="/about#creator-opt-out">Creator Opt-out</a></p>
                     </footer>
                 </div>
+                <script>
+                (function() {
+                    function showLoggedIn() {
+                        var nav = document.getElementById('nav-auth-link');
+                        if (nav) nav.textContent = 'Profile';
+                        document.querySelectorAll('.auth-logged-out').forEach(function(el) {
+                            el.classList.add('hidden');
+                        });
+                        document.querySelectorAll('.auth-logged-in').forEach(function(el) {
+                            el.classList.remove('hidden');
+                        });
+                    }
+
+                    // If cached as logged in, show immediately (zero flash for returning users)
+                    if (window.__authCached) {
+                        showLoggedIn();
+                    }
+
+                    // Then validate with actual fetch result (updates if cache was wrong)
+                    if (window.__authCheck) {
+                        window.__authCheck.then(function(isLoggedIn) {
+                            if (isLoggedIn && !window.__authCached) {
+                                // Fetch confirmed login, but wasn't cached - update now
+                                showLoggedIn();
+                            } else if (!isLoggedIn && window.__authCached) {
+                                // Cache was wrong (session expired) - reload to show logged-out state
+                                location.reload();
+                            }
+                        });
+                    }
+                })();
+                </script>
             </body>
         </html>`;
 }
@@ -410,7 +473,15 @@ publicRoutes.get("/", async (c) => {
                 <h1>Recently Added Episodes</h1>
                 <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
             </div>
-            <a href="/submit" class="button button-primary">
+            <span class="auth-logged-out" title="Submissions are invite-only for now">
+                <span class="button button-primary auth-disabled">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
+                    </svg>
+                    Submit Episode
+                </span>
+            </span>
+            <a href="/submit" class="button button-primary auth-logged-in hidden">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
                 </svg>
@@ -507,7 +578,15 @@ publicRoutes.get("/", async (c) => {
             </div>
             <p>No episodes yet.</p>
             <p class="text-muted">Submit your first podcast episode to get started!</p>
-            <a href="/submit" class="button button-primary mt-4">
+            <span class="auth-logged-out" title="Submissions are invite-only for now">
+                <span class="button button-primary mt-4 auth-disabled">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
+                    </svg>
+                    Submit Your First Episode
+                </span>
+            </span>
+            <a href="/submit" class="button button-primary mt-4 auth-logged-in hidden">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
                 </svg>

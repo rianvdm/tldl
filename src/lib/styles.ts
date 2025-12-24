@@ -1577,4 +1577,18 @@ h4 {
         padding: 0.875rem;
     }
 }
+
+/* ============================================================================
+   Auth-Conditional UI Utilities
+   ============================================================================ */
+
+.hidden {
+    display: none !important;
+}
+
+.auth-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
 `;

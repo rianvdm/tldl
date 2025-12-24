@@ -1,10 +1,10 @@
 # Auth-Conditional UI with Cloudflare Access
 
-This document explains the goal of detecting logged-in users on public pages (e.g., to show/hide the "Submit Episode" button), what we tried, what we learned, and recommendations for the future.
+This document explains the goal of detecting logged-in users on public pages (e.g., to show/hide the "Submit Episode" button), what we tried, what we learned, and the solution we implemented.
 
-## Status: Not Implemented
+## Status: Implemented
 
-After testing, we discovered fundamental limitations with Cloudflare Access that make reliable client-facing auth detection difficult. The implementation was reverted.
+We implemented a client-side auth probe solution that reliably detects auth state by pinging a protected endpoint. See `docs/auth-conditional-ui-plan.md` for the full implementation details.
 
 ## The Goal
 
@@ -74,44 +74,28 @@ There's no reliable way to detect logout on public pages because:
 2. The cookie can persist after Cloudflare invalidates the session
 3. We can't validate the session without calling a protected endpoint
 
-## Recommendations for Future Implementation
+## Implemented Solution
 
-### Option A: Client-Side Session Validation (Recommended)
+We chose **Option A: Client-Side Session Validation** with enhancements to minimize flash:
 
-Add JavaScript that pings a protected endpoint on page load to verify the session:
+1. **Early fetch in `<head>`**: Start the auth check request immediately, in parallel with HTML parsing
+2. **localStorage cache**: Return visitors see instant correct UI from cache
+3. **Default to logged-out**: New visitors see "Log in" by default (safer, no false positives)
 
-```javascript
-// On every page load
-fetch('/api/auth-check', { credentials: 'include' })
-    .then(res => {
-        if (res.ok) {
-            // Session is valid - show logged-in UI
-            document.querySelector('.nav-profile-link').textContent = 'Profile';
-            document.querySelector('.submit-btn').classList.remove('disabled');
-        } else {
-            // Session invalid or expired - show logged-out UI
-            document.querySelector('.nav-profile-link').textContent = 'Log in';
-            document.querySelector('.submit-btn').classList.add('disabled');
-        }
-    });
-```
+### How It Works
 
-**Pros**: Reliable, always reflects true auth state
-**Cons**: Requires JavaScript, brief flash of incorrect state before fetch completes
+1. Script in `<head>` starts fetch to `/profile/auth-check` (protected by Cloudflare Access)
+2. Also checks localStorage cache for instant UI on returning visits
+3. Script before `</body>` updates DOM based on cache and fetch result
+4. If session expired (cache wrong), page reloads to show correct state
 
-### Option B: Accept the Limitation
+### Key Files
 
-Keep the current behavior where the nav always shows "Profile" and the Submit button is always visible. Protected routes correctly redirect to login when needed.
+- `src/routes/authenticated.ts` - `/profile/auth-check` endpoint
+- `src/routes/public.ts` - Layout with auth scripts, nav link, Submit buttons
+- `src/lib/styles.ts` - `.hidden` and `.auth-disabled` CSS classes
 
-**Pros**: No additional complexity
-**Cons**: UI doesn't reflect auth state
-
-### Option C: Shorter Session Duration
-
-Configure Cloudflare Access with a shorter session duration (e.g., 1 hour instead of 24 hours). This reduces the window where the cookie outlasts the session.
-
-**Pros**: Reduces inconsistency window
-**Cons**: Users have to log in more frequently
+See `docs/auth-conditional-ui-plan.md` for complete implementation details.
 
 ## Current Protected Paths
 
