@@ -251,6 +251,10 @@ h4 {
     margin-bottom: 0;
 }
 
+.page-header h2 {
+    font-size: 1.5rem;
+}
+
 .page-subtitle {
     color: var(--muted-foreground);
     margin-top: 0.5rem;
