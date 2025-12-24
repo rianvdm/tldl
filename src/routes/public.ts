@@ -473,7 +473,7 @@ publicRoutes.get("/", async (c) => {
                 <h1>Recently Added Episodes</h1>
                 <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
             </div>
-            <span class="auth-logged-out" title="Submissions are invite-only for now">
+            <span class="auth-logged-out" data-tooltip="Submissions are invite-only for now">
                 <span class="button button-primary auth-disabled">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
@@ -578,7 +578,7 @@ publicRoutes.get("/", async (c) => {
             </div>
             <p>No episodes yet.</p>
             <p class="text-muted">Submit your first podcast episode to get started!</p>
-            <span class="auth-logged-out" title="Submissions are invite-only for now">
+            <span class="auth-logged-out" data-tooltip="Submissions are invite-only for now">
                 <span class="button button-primary mt-4 auth-disabled">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>

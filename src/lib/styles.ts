@@ -1587,8 +1587,60 @@ h4 {
 }
 
 .auth-disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
     pointer-events: none;
+    filter: grayscale(100%);
+}
+
+/* Tooltip wrapper for disabled auth elements */
+.auth-logged-out {
+    position: relative;
+    display: inline-block;
+}
+
+.auth-logged-out::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 0.5rem);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.5rem 0.75rem;
+    background-color: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, visibility 0.15s ease;
+    z-index: 100;
+    pointer-events: none;
+}
+
+.auth-logged-out:hover::after {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Arrow for tooltip */
+.auth-logged-out::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 0.25rem);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 0.375rem solid transparent;
+    border-top-color: var(--border);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, visibility 0.15s ease;
+    z-index: 101;
+}
+
+.auth-logged-out:hover::before {
+    opacity: 1;
+    visibility: visible;
 }
 `;
