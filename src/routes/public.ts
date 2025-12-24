@@ -498,24 +498,125 @@ publicRoutes.get("/", async (c) => {
             </div>
             <button type="submit" class="button">Search</button>
         </form>
-        <div class="tag-filter-bar">
-            <span class="tag-filter-label">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.375rem;">
-                    <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
-                </svg>
-                Filter by topic:
-            </span>
-            ${tagFilter ? `<a href="/" class="tag-badge tag-badge-selected">
+        <div class="topic-filter" id="topic-filter">
+            ${tagFilter ? `
+            <a href="/" class="topic-filter-selected">
                 ${escapeHtml(tagFilter)}
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 0.25rem;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
                 </svg>
-            </a>` : ""}
-            ${getValidTags().map(tag => {
-                if (tag === tagFilter) return ""; // Already shown as selected
-                return `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge">${escapeHtml(tag)}</a>`;
-            }).join("")}
+            </a>
+            ` : ""}
+            <div class="topic-filter-input-wrapper" ${tagFilter ? 'style="display: none;"' : ""}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topic-filter-icon">
+                    <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
+                </svg>
+                <input 
+                    type="text" 
+                    class="topic-filter-input" 
+                    id="topic-filter-input"
+                    placeholder="Filter by topic..." 
+                    autocomplete="off"
+                />
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topic-filter-chevron">
+                    <path d="m6 9 6 6 6-6"/>
+                </svg>
+            </div>
+            <div class="topic-filter-dropdown" id="topic-filter-dropdown">
+                ${getValidTags().map(tag =>
+                `<a href="/?tag=${encodeURIComponent(tag)}" class="topic-filter-option${tag === tagFilter ? ' selected' : ''}" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</a>`
+            ).join("")}
+            </div>
         </div>
+        <script>
+        (function() {
+            var filter = document.getElementById('topic-filter');
+            var input = document.getElementById('topic-filter-input');
+            var dropdown = document.getElementById('topic-filter-dropdown');
+            var options = dropdown.querySelectorAll('.topic-filter-option');
+            var allTags = ${JSON.stringify(getValidTags())};
+            var highlightedIndex = -1;
+
+            function openDropdown() {
+                filter.classList.add('open');
+                updateHighlight(-1);
+            }
+
+            function closeDropdown() {
+                filter.classList.remove('open');
+                highlightedIndex = -1;
+            }
+
+            function updateHighlight(index) {
+                var visibleOptions = dropdown.querySelectorAll('.topic-filter-option:not([style*="display: none"])');
+                visibleOptions.forEach(function(opt, i) {
+                    opt.classList.toggle('highlighted', i === index);
+                });
+                highlightedIndex = index;
+                if (index >= 0 && visibleOptions[index]) {
+                    visibleOptions[index].scrollIntoView({ block: 'nearest' });
+                }
+            }
+
+            function filterOptions(query) {
+                var q = query.toLowerCase().trim();
+                var visibleCount = 0;
+                options.forEach(function(opt) {
+                    var tag = opt.getAttribute('data-tag').toLowerCase();
+                    var matches = !q || tag.includes(q);
+                    opt.style.display = matches ? '' : 'none';
+                    if (matches) visibleCount++;
+                });
+                updateHighlight(-1);
+                // Show/hide empty state
+                var existing = dropdown.querySelector('.topic-filter-empty');
+                if (existing) existing.remove();
+                if (visibleCount === 0) {
+                    var empty = document.createElement('div');
+                    empty.className = 'topic-filter-empty';
+                    empty.textContent = 'No topics match "' + query + '"';
+                    dropdown.appendChild(empty);
+                }
+            }
+
+            input.addEventListener('focus', openDropdown);
+            input.addEventListener('input', function() {
+                filterOptions(this.value);
+            });
+
+            input.addEventListener('keydown', function(e) {
+                var visibleOptions = dropdown.querySelectorAll('.topic-filter-option:not([style*="display: none"])');
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    if (!filter.classList.contains('open')) openDropdown();
+                    updateHighlight(Math.min(highlightedIndex + 1, visibleOptions.length - 1));
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    updateHighlight(Math.max(highlightedIndex - 1, 0));
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (highlightedIndex >= 0 && visibleOptions[highlightedIndex]) {
+                        window.location.href = visibleOptions[highlightedIndex].href;
+                    }
+                } else if (e.key === 'Escape') {
+                    closeDropdown();
+                    input.blur();
+                }
+            });
+
+            // Close on outside click
+            document.addEventListener('click', function(e) {
+                if (!filter.contains(e.target)) {
+                    closeDropdown();
+                }
+            });
+
+            // Prevent dropdown from closing when clicking inside
+            dropdown.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+            });
+        })();
+        </script>
         ${search && episodes.length === 0 ? `
         <div class="empty-state">
             <p>No episodes found matching "${escapeHtml(search)}"${tagFilter ? ` with tag "${escapeHtml(tagFilter)}"` : ""}</p>
