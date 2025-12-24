@@ -61,6 +61,27 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
   - Tag generation is non-critical: empty tags don't fail jobs
   - Home page supports single-tag filtering with `/?tag=tagname`
 
+### Authentication & Auth-Conditional UI
+
+Authentication is handled by **Cloudflare Access** at the edge. Protected routes (under `/profile/*`, `/submit*`) require login before requests reach the Worker.
+
+**Auth-Conditional UI** shows different UI elements for logged-in vs logged-out users on public pages:
+- Nav shows "Log in" (logged out) or "Profile" (logged in)
+- Submit button is disabled with tooltip (logged out) or enabled (logged in)
+
+**How it works** (see `docs/auth-conditional-ui-plan.md` for details):
+1. Script in `<head>` starts fetch to `/profile/auth-check` (protected endpoint)
+2. Also checks `localStorage` cache (`tldl-auth`) for instant UI on returning visits
+3. Script before `</body>` updates DOM based on cache hit and fetch result
+4. If session expired (cache wrong), page reloads to show correct state
+
+**Key files**:
+- `src/routes/authenticated.ts` - `/profile/auth-check` endpoint returns `{ authenticated: true, email }`
+- `src/routes/public.ts` - Layout component with auth scripts, nav link (`#nav-auth-link`), Submit buttons (`.auth-logged-out` / `.auth-logged-in`)
+- `src/lib/styles.ts` - `.hidden`, `.auth-disabled` CSS classes
+
+**Why client-side**: Cloudflare Access only sends the `Cf-Access-Jwt-Assertion` header on protected paths. On public pages, we can't detect auth state server-side, so we probe a protected endpoint via JavaScript.
+
 ### KV Storage Schema
 
 Keys in `src/lib/kv.ts`:
@@ -86,6 +107,7 @@ Keys in `src/lib/kv.ts`:
 - `GET /api/templates` - Available summary templates
 
 **Authenticated** (`src/routes/authenticated.ts`):
+- `GET /profile/auth-check` - Auth probe for client-side detection (returns `{ authenticated, email }`)
 - `GET /profile` - User profile page (shows submitted episodes; public but intended for authenticated users)
 - `POST /submit` - Create new job
 - `POST /episode/:id/regenerate` - Regenerate with different template
