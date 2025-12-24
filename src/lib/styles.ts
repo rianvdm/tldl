@@ -221,6 +221,16 @@ h4 {
     margin-right: auto;
 }
 
+.hero-link {
+    color: var(--accent-red);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.hero-link:hover {
+    color: var(--accent-red-hover);
+}
+
 /* ============================================================================
    Page Header
    ============================================================================ */

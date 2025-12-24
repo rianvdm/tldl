@@ -148,8 +148,10 @@ export interface Env {
     OPENAI_API_KEY: string;
     PODCAST_INDEX_KEY: string;
     PODCAST_INDEX_SECRET: string;
+    TURNSTILE_SECRET: string;
 
     // Environment variables (from wrangler.toml [vars])
+    TURNSTILE_SITE_KEY: string;
     MAX_EPISODE_MINUTES: string;
     CACHE_TTL_DAYS: string;
     DEFAULT_TEMPLATE: string;

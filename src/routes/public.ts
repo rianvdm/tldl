@@ -28,6 +28,7 @@ import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 import { generateEpisodePdf } from "../services/pdf";
 import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
 import { marked } from "marked";
+import { verifyTurnstile, isValidEmail } from "../lib/turnstile";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -459,7 +460,7 @@ publicRoutes.get("/", async (c) => {
     const introSection = `
         <div class="hero-section">
             <h1 class="hero-headline">Your favorite podcasts, <span class="text-accent">summarized</span>.</h1>
-            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Submissions are invite-only for now—you can browse existing summaries below.</p>
+            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Submissions are invite-only for now—<a href="/waitlist" class="hero-link">join the waitlist</a> or browse existing summaries below.</p>
         </div>
     `;
 
@@ -470,7 +471,7 @@ publicRoutes.get("/", async (c) => {
         ${introSection}
         <div class="page-header-with-action">
             <div class="page-header">
-                <h1>Recently Added Episodes</h1>
+                <h2>Recently Added Episodes</h2>
                 <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
             </div>
             <span class="auth-logged-out" data-tooltip="Submissions are invite-only for now">
@@ -1664,6 +1665,137 @@ function JobStatusPage(job: Job): string {
             <p class="text-muted text-sm">This page will automatically update. You can safely navigate away and return later.</p>
         </div>
         ` : ""}
+    `;
+}
+
+// ============================================================================
+// GET /waitlist — Waitlist signup form
+// ============================================================================
+
+publicRoutes.get("/waitlist", async (c) => {
+    const success = c.req.query("success") === "1";
+    const error = c.req.query("error");
+    const siteKey = c.env.TURNSTILE_SITE_KEY;
+
+    const content = WaitlistPage({ success, error, siteKey });
+    const turnstileScript = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>';
+    return c.html(Layout({ title: "Join the Waitlist", children: content, headExtra: turnstileScript }));
+});
+
+// ============================================================================
+// POST /waitlist — Handle waitlist signup
+// ============================================================================
+
+publicRoutes.post("/waitlist", async (c) => {
+    const body = await c.req.parseBody();
+    const email = body.email as string;
+    const token = body["cf-turnstile-response"] as string;
+
+    // 1. Validate Turnstile
+    const turnstileValid = await verifyTurnstile(token, c.env.TURNSTILE_SECRET);
+    if (!turnstileValid) {
+        return c.redirect("/waitlist?error=captcha");
+    }
+
+    // 2. Validate email
+    if (!email || !isValidEmail(email)) {
+        return c.redirect("/waitlist?error=invalid-email");
+    }
+
+    // 3. Store in KV (lowercase for deduplication)
+    const normalizedEmail = email.toLowerCase().trim();
+    const key = `waitlist:${normalizedEmail}`;
+
+    await c.env.TLDL_DATA.put(key, JSON.stringify({
+        email: normalizedEmail,
+        createdAt: new Date().toISOString()
+    }));
+
+    console.log(
+        JSON.stringify({
+            event: "waitlist_signup",
+            email: normalizedEmail,
+        })
+    );
+
+    return c.redirect("/waitlist?success=1");
+});
+
+// ============================================================================
+// Waitlist Page Component
+// ============================================================================
+
+function WaitlistPage(props: { success: boolean; error?: string | null; siteKey: string }): string {
+    if (props.success) {
+        return `
+            <div class="page-header">
+                <h1>Join the Waitlist</h1>
+                <p class="page-subtitle text-muted">
+                    TL;DL is currently invite-only. Sign up to get notified when we open up.
+                </p>
+            </div>
+
+            <div class="alert alert-success">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                <span>You're on the list! We'll email you when spots open up.</span>
+            </div>
+            <div style="margin-top: 1.5rem;">
+                <a href="/" class="button button-primary">Go Home</a>
+            </div>
+        `;
+    }
+
+    const errorMessage = props.error === "captcha"
+        ? "Verification failed. Please try again."
+        : props.error === "invalid-email"
+            ? "Please enter a valid email address."
+            : null;
+
+    return `
+        <div class="page-header">
+            <h1>Join the Waitlist</h1>
+            <p class="page-subtitle text-muted">
+                TL;DL is currently invite-only. Sign up to get notified when we open up.
+            </p>
+        </div>
+
+        ${errorMessage ? `
+            <div class="alert alert-error" style="margin-bottom: 1.5rem;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span>${escapeHtml(errorMessage)}</span>
+            </div>
+        ` : ""}
+
+        <div class="card">
+            <form method="POST" action="/waitlist" class="form">
+                <div class="form-group">
+                    <label for="email" class="form-label">Email address</label>
+                    <input
+                        type="email"
+                        id="email"
+                        name="email"
+                        class="form-input"
+                        placeholder="you@example.com"
+                        required
+                        autocomplete="email"
+                    />
+                </div>
+
+                <!-- Turnstile widget -->
+                <div class="cf-turnstile" data-sitekey="${escapeHtml(props.siteKey)}" data-theme="dark"></div>
+
+                <div class="form-actions">
+                    <button type="submit" class="button button-primary">Join Waitlist</button>
+                </div>
+            </form>
+        </div>
     `;
 }
 

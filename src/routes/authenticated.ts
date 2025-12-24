@@ -609,6 +609,122 @@ authenticated.post("/profile/cleanup-failed-jobs", async (c) => {
 });
 
 // ============================================================================
+// GET /profile/waitlist - Admin view of waitlist entries
+// ============================================================================
+
+interface WaitlistEntry {
+    email: string;
+    createdAt: string;
+}
+
+authenticated.get("/profile/waitlist", async (c) => {
+    // Auth check - reject unauthorized requests in production
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    // Admin-only check
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    // Check if CSV export requested
+    const format = c.req.query("format");
+
+    // List all waitlist entries
+    const list = await c.env.TLDL_DATA.list({ prefix: "waitlist:" });
+    const entries: WaitlistEntry[] = [];
+
+    for (const key of list.keys) {
+        const data = await c.env.TLDL_DATA.get(key.name);
+        if (data) {
+            try {
+                entries.push(JSON.parse(data) as WaitlistEntry);
+            } catch {
+                // Skip malformed entries
+            }
+        }
+    }
+
+    // Sort by createdAt descending (newest first)
+    entries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Return CSV if requested
+    if (format === "csv") {
+        const csvContent = [
+            "email,createdAt",
+            ...entries.map(e => `${e.email},${e.createdAt}`)
+        ].join("\n");
+
+        return new Response(csvContent, {
+            headers: {
+                "Content-Type": "text/csv",
+                "Content-Disposition": `attachment; filename="waitlist-${new Date().toISOString().split('T')[0]}.csv"`,
+            },
+        });
+    }
+
+    // Render admin page with entries
+    const content = `
+        <div class="page-header">
+            <h1>Waitlist Admin</h1>
+            <p class="page-subtitle">${entries.length} ${entries.length === 1 ? 'signup' : 'signups'} on the waitlist</p>
+        </div>
+
+        <div class="card" style="margin-bottom: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <a href="/profile" class="button">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m15 18-6-6 6-6"/>
+                    </svg>
+                    Back to Profile
+                </a>
+                ${entries.length > 0 ? `
+                <a href="/profile/waitlist?format=csv" class="button button-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" x2="12" y1="15" y2="3"/>
+                    </svg>
+                    Export CSV
+                </a>
+                ` : ''}
+            </div>
+        </div>
+
+        ${entries.length > 0 ? `
+        <div class="card">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <th style="text-align: left; padding: 0.75rem 1rem; font-weight: 600; color: var(--muted-foreground);">Email</th>
+                        <th style="text-align: left; padding: 0.75rem 1rem; font-weight: 600; color: var(--muted-foreground);">Signed Up</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${entries.map(entry => `
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.75rem 1rem;">${escapeHtml(entry.email)}</td>
+                        <td style="padding: 0.75rem 1rem; color: var(--muted-foreground);">${formatDate(entry.createdAt)}</td>
+                    </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        ` : `
+        <div class="empty-state">
+            <p>No waitlist signups yet.</p>
+        </div>
+        `}
+    `;
+
+    return c.html(Layout({
+        title: "Waitlist Admin",
+        children: content
+    }));
+});
+
+// ============================================================================
 // GET /profile - User Profile Page (shows submitted episodes with delete)
 // ============================================================================
 
@@ -738,7 +854,10 @@ authenticated.get("/profile", async (c) => {
         <div class="page-header">
             <h1>Your Profile</h1>
             <p class="page-subtitle">${escapeHtml(userEmail)}${isAdmin ? ' <span class="badge">Admin</span>' : ''}</p>
-            <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F%3FloggedOut%3D1" class="button button-secondary">Log Out</a>
+            <div style="display: flex; gap: 0.5rem;">
+                ${isAdmin ? `<a href="/profile/waitlist" class="button button-secondary">Waitlist</a>` : ''}
+                <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F%3FloggedOut%3D1" class="button button-secondary">Log Out</a>
+            </div>
         </div>
 
         <div class="divider"></div>
@@ -764,6 +883,18 @@ authenticated.get("/profile", async (c) => {
             <h2>Admin Tools</h2>
             <div class="admin-tools">
                 <div class="admin-tool-item">
+                    <p class="text-muted">View and export waitlist signups</p>
+                    <a href="/profile/waitlist" class="button">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                        View Waitlist
+                    </a>
+                </div>
+                <div class="admin-tool-item" style="margin-top: 1.5rem;">
                     <p class="text-muted">Rebuild the episode index (use after database changes or if home page is empty)</p>
                     <button type="button" class="button" id="rebuild-index-btn" onclick="rebuildIndex()">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
