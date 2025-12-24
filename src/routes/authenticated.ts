@@ -724,7 +724,7 @@ authenticated.get("/profile", async (c) => {
         <div class="page-header">
             <h1>Your Profile</h1>
             <p class="page-subtitle">${escapeHtml(userEmail)}${isAdmin ? ' <span class="badge">Admin</span>' : ''}</p>
-            <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout" class="button button-secondary">Log Out</a>
+            <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F%3FloggedOut%3D1" class="button button-secondary">Log Out</a>
         </div>
 
         <div class="divider"></div>

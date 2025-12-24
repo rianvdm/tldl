@@ -330,6 +330,7 @@ publicRoutes.get("/", async (c) => {
     const pageSize = 10;
     const search = c.req.query("q") || "";
     const tagFilter = c.req.query("tag") || "";
+    const loggedOut = c.req.query("loggedOut") === "1";
 
     // Validate tag if provided
     const isValidTagFilter = tagFilter ? isValidTag(tagFilter) : true;
@@ -378,16 +379,30 @@ publicRoutes.get("/", async (c) => {
         <div class="divider"></div>
     ` : "";
 
+    // Logout success message
+    const logoutMessage = loggedOut ? `
+        <div class="alert alert-success" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 0.5rem; display: flex; align-items: center; justify-content: space-between;">
+            <span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.5rem; vertical-align: middle; color: rgb(34, 197, 94);">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/>
+                </svg>
+                You have been successfully logged out.
+            </span>
+            <a href="/" style="color: var(--text-muted); text-decoration: none; font-size: 1.25rem; line-height: 1;">&times;</a>
+        </div>
+    ` : "";
+
     // Intro text for the home page
     const introSection = `
         <div class="intro-section">
-            <p><span class="text-accent">Get key insights from your favorite podcasts.</span> Submit an Apple Podcasts link and choose how you want it summarized—key takeaways, narrative overview, or simplified explainer. Submissions are invite-only for now—browse existing summaries below.</p>
+            <p><span class="text-accent"><strong>Get helpful summaries of your favorite podcasts.</strong></span> Choose between key takeaways, a narrative overview, or a simplified explainer. Submissions are invite-only for now—browse existing summaries below.</p>
         </div>
     `;
 
     const content =
         episodes.length > 0 || activeJobs.length > 0 || search
             ? `
+        ${logoutMessage}
         ${introSection}
         <div class="page-header-with-action">
             <div class="page-header">
