@@ -743,7 +743,23 @@ authenticated.get("/profile", async (c) => {
 
         <div class="divider"></div>
 
+        <section class="section">
+            <h2>${isAdmin ? 'All Episodes (Admin View)' : 'Your Submitted Episodes'}</h2>
+            ${episodes.length > 0 ? `
+                <div class="episode-list">
+                    ${episodeCards.join("")}
+                </div>
+                ${paginationHtml}
+            ` : `
+                <div class="empty-state">
+                    <p>You haven't submitted any episodes yet.</p>
+                    <a href="/submit" class="button button-primary">Submit Your First Episode</a>
+                </div>
+            `}
+        </section>
+
         ${isAdmin ? `
+        <div class="divider"></div>
         <section class="section">
             <h2>Admin Tools</h2>
             <div class="admin-tools">
@@ -802,23 +818,7 @@ authenticated.get("/profile", async (c) => {
                 </div>
             </div>
         </section>
-        <div class="divider"></div>
         ` : ""}
-
-        <section class="section">
-            <h2>${isAdmin ? 'All Episodes (Admin View)' : 'Your Submitted Episodes'}</h2>
-            ${episodes.length > 0 ? `
-                <div class="episode-list">
-                    ${episodeCards.join("")}
-                </div>
-                ${paginationHtml}
-            ` : `
-                <div class="empty-state">
-                    <p>You haven't submitted any episodes yet.</p>
-                    <a href="/submit" class="button button-primary">Submit Your First Episode</a>
-                </div>
-            `}
-        </section>
 
         <div id="delete-modal" class="modal" style="display: none;">
             <div class="modal-backdrop" onclick="hideDeleteModal()"></div>
