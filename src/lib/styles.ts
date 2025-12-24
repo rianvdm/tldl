@@ -190,6 +190,38 @@ h4 {
 }
 
 /* ============================================================================
+   Hero Section (Home Page)
+   ============================================================================ */
+
+.hero-section {
+    text-align: center;
+    margin-bottom: 2rem;
+    padding: 2rem 1.5rem;
+    background: linear-gradient(135deg, rgba(38, 38, 38, 0.5) 0%, rgba(23, 23, 23, 0.8) 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.hero-headline {
+    font-size: 2.25rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+    margin-bottom: 0.75rem;
+    color: var(--foreground);
+}
+
+.hero-subtitle {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--muted-foreground);
+    margin: 0;
+    max-width: 36rem;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* ============================================================================
    Page Header
    ============================================================================ */
 

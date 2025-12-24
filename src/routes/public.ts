@@ -394,8 +394,9 @@ publicRoutes.get("/", async (c) => {
 
     // Intro text for the home page
     const introSection = `
-        <div class="intro-section">
-            <p><span class="text-accent"><strong>Get helpful summaries of your favorite podcasts.</strong></span> Choose between key takeaways, a narrative overview, or a simplified explainer. Submissions are invite-only for now—browse existing summaries below.</p>
+        <div class="hero-section">
+            <h1 class="hero-headline">Your favorite podcasts, <span class="text-accent">summarized</span>.</h1>
+            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Submissions are invite-only for now—you can browse existing summaries below.</p>
         </div>
     `;
 
