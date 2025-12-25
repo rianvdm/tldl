@@ -27,6 +27,16 @@ npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "summary
 npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "transcript:<episodeId>"
 ```
 
+Seed local dev environment with rich test data (12 episodes, 6 podcasts, tags, authors):
+```bash
+npx tsx scripts/seed-local-data.ts
+```
+
+Clear all local state (KV + Durable Objects) and start fresh:
+```bash
+rm -rf .wrangler/state && npx tsx scripts/seed-local-data.ts
+```
+
 ## Architecture Overview
 
 TLDL is a Cloudflare Workers application that generates AI summaries from Apple Podcasts URLs. Built with Hono framework, Cloudflare Queues for background processing, and Durable Objects for job status consistency.
@@ -60,6 +70,13 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
   - Predefined tag list in `src/lib/constants.ts` (EPISODE_TAGS)
   - Tag generation is non-critical: empty tags don't fail jobs
   - Home page supports single-tag filtering with `/?tag=tagname`
+- **Podcast Pages**: Browse and individual podcast pages (`/podcasts`, `/podcasts/:id`)
+  - `extractPodcastId()` in `src/lib/url-parser.ts` extracts podcast ID from episode ID format `{podcastId}_{episodeId}`
+  - `getPodcastList()` in `src/lib/kv.ts` aggregates podcasts from episode index, sorted by most recently updated
+  - `getEpisodesForPodcast()` in `src/lib/kv.ts` returns paginated episodes for a specific podcast
+  - Podcast info includes: id, name, author, episodeCount, latestEpisodeDate
+  - No separate podcast index needed — computed on-demand from existing episode index
+  - Episode detail pages include "More from X" link to podcast page
 
 ### Authentication & Auth-Conditional UI
 
@@ -100,6 +117,8 @@ Keys in `src/lib/kv.ts`:
 - `GET /episode/:id/pdf` - PDF download
 - `GET /submit` - Submit form
 - `GET /job/:id` - Job status page
+- `GET /podcasts` - Browse all podcasts with pagination (10 per page)
+- `GET /podcasts/:id` - Individual podcast page with all episodes
 
 **API** (`src/routes/api.ts`):
 - `GET /api/episodes` - JSON episode list
