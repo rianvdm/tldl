@@ -231,3 +231,107 @@ src/
 ## Important Notes
 
 - **GPT-5.2 exists**: The project uses OpenAI GPT-5.2 for both summarization and tag generation. This is a real model - do not change references to GPT-4o or other models unless explicitly instructed.
+
+## How to Restore Transcripts on Episode Pages
+
+Transcripts are still saved in KV (`transcript:{episodeId}`) but currently hidden from the UI. To restore them:
+
+### 1. Add the import in `src/routes/public.ts`
+
+```typescript
+import {
+    listEpisodes,
+    getEpisode,
+    getTranscript,  // Add this
+    listSummariesForEpisode,
+    // ...
+} from "../lib/kv";
+```
+
+### 2. Fetch the transcript in the episode route
+
+Replace:
+```typescript
+// Fetch summaries
+const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
+```
+
+With:
+```typescript
+// Fetch transcript and summaries
+const [transcript, summaries] = await Promise.all([
+    getTranscript(c.env.TLDL_DATA, episodeId),
+    listSummariesForEpisode(c.env.TLDL_DATA, episodeId),
+]);
+```
+
+### 3. Build the transcript content (add before `const content = ...`)
+
+```typescript
+// Build transcript content with collapse/expand
+// Collapse if transcript is longer than ~20 lines worth of characters
+const needsCollapse = transcript ? transcript.text.length > 2000 : false;
+
+const transcriptContent = transcript
+    ? `
+    <div class="transcript-source">
+        <span class="source-indicator"></span>
+        ${escapeHtml(transcript.source)} transcript
+    </div>
+    <div class="transcript-container${needsCollapse ? ' collapsed' : ''}" id="transcript-container">
+        <div class="transcript-text" id="transcript-text">
+            ${escapeHtml(transcript.text)}
+        </div>
+        ${needsCollapse ? '<div class="transcript-fade"></div>' : ''}
+    </div>
+    ${needsCollapse ? `
+    <button class="transcript-toggle" id="transcript-toggle" onclick="toggleTranscript()">
+        <span id="toggle-text">Show full transcript</span>
+        <svg id="toggle-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m6 9 6 6 6-6"/>
+        </svg>
+    </button>
+    <script>
+        function toggleTranscript() {
+            const container = document.getElementById('transcript-container');
+            const toggleText = document.getElementById('toggle-text');
+            const toggleIcon = document.getElementById('toggle-icon');
+            const isCollapsed = container.classList.contains('collapsed');
+
+            if (isCollapsed) {
+                container.classList.remove('collapsed');
+                toggleText.textContent = 'Show less';
+                toggleIcon.style.transform = 'rotate(180deg)';
+            } else {
+                container.classList.add('collapsed');
+                toggleText.textContent = 'Show full transcript';
+                toggleIcon.style.transform = 'rotate(0deg)';
+            }
+        }
+    </script>
+    ` : ''}
+`
+    : `
+    <div class="empty-state">
+        <p>No transcript available for this episode.</p>
+    </div>
+`;
+```
+
+### 4. Add the transcript section in the HTML (after the summary section)
+
+```typescript
+        </section>
+
+        <div class="divider"></div>
+
+        <section class="section">
+            <h2>Full Transcript</h2>
+            <div class="card">
+                ${transcriptContent}
+            </div>
+        </section>
+    `;
+```
+
+The CSS for `.transcript-source`, `.transcript-container`, `.transcript-text`, `.transcript-toggle`, and `.transcript-fade` is already in `src/lib/styles.ts`.
