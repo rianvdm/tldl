@@ -1771,4 +1771,161 @@ h4 {
     opacity: 1;
     visibility: visible;
 }
+
+/* ============================================================================
+   Podcast Pages
+   ============================================================================ */
+
+.podcast-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.podcast-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    background-color: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.podcast-card:hover {
+    border-color: var(--muted-foreground);
+    background-color: var(--accent);
+}
+
+.podcast-card-content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.podcast-card-icon {
+    flex-shrink: 0;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--muted);
+    border-radius: var(--radius);
+    color: var(--muted-foreground);
+}
+
+.podcast-card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.podcast-card-name {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.25rem 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.podcast-card:hover .podcast-card-name {
+    color: var(--primary);
+}
+
+.podcast-card-author {
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
+    margin-bottom: 0.25rem;
+}
+
+.podcast-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
+}
+
+.podcast-card-arrow {
+    color: var(--muted-foreground);
+    transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.podcast-card:hover .podcast-card-arrow {
+    color: var(--foreground);
+    transform: translateX(4px);
+}
+
+/* Podcast Header (Individual Podcast Page) */
+
+.podcast-header {
+    margin-bottom: 1.5rem;
+}
+
+.podcast-header h1 {
+    margin-bottom: 0.25rem;
+}
+
+.podcast-header-author {
+    font-size: 0.9375rem;
+    color: var(--muted-foreground);
+    margin-bottom: 0.5rem;
+}
+
+.podcast-header-meta {
+    color: var(--muted-foreground);
+    margin-bottom: 0.75rem;
+}
+
+.podcast-website-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    transition: color 0.2s ease;
+}
+
+.podcast-website-link:hover {
+    color: var(--primary);
+}
+
+/* Back Link */
+
+.back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
+    margin-bottom: 1.5rem;
+    transition: color 0.2s ease;
+}
+
+.back-link:hover {
+    color: var(--foreground);
+}
+
+/* Responsive - Podcast Pages */
+
+@media (max-width: 640px) {
+    .podcast-card-icon {
+        display: none;
+    }
+
+    .podcast-card-meta {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.125rem;
+    }
+
+    .podcast-card-meta .meta-dot {
+        display: none;
+    }
+}
 `;

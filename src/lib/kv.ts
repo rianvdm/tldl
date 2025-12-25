@@ -568,3 +568,84 @@ export async function listSummariesForEpisode(
 export async function deleteJob(kv: KVNamespace, jobId: string): Promise<void> {
     await kv.delete(KV_KEYS.job(jobId));
 }
+
+// ============================================================================
+// Podcast Operations
+// ============================================================================
+
+import { extractPodcastId } from "./url-parser";
+
+/**
+ * Podcast info for the browse podcasts page
+ */
+export interface PodcastInfo {
+    id: string;
+    name: string;
+    author?: string;  // Podcast author/creator name
+    episodeCount: number;
+    latestEpisodeDate: string;  // createdAt of most recent episode submission
+}
+
+/**
+ * Get a list of all podcasts with summarized episodes
+ * Sorted by most recently updated (latest episode submission first)
+ */
+export async function getPodcastList(kv: KVNamespace): Promise<PodcastInfo[]> {
+    const index = await getEpisodeIndex(kv);
+
+    const podcasts = new Map<string, PodcastInfo>();
+
+    for (const ep of index) {
+        const podcastId = extractPodcastId(ep.id);
+        if (!podcastId) continue;
+
+        const existing = podcasts.get(podcastId);
+        if (existing) {
+            existing.episodeCount++;
+            // Track latest by createdAt (submission date), not episodeDate
+            if (ep.createdAt > existing.latestEpisodeDate) {
+                existing.latestEpisodeDate = ep.createdAt;
+                // Update author from most recent episode (in case it was added later)
+                if (ep.podcastAuthor) {
+                    existing.author = ep.podcastAuthor;
+                }
+            }
+        } else {
+            podcasts.set(podcastId, {
+                id: podcastId,
+                name: ep.podcastName,
+                author: ep.podcastAuthor,
+                episodeCount: 1,
+                latestEpisodeDate: ep.createdAt,
+            });
+        }
+    }
+
+    // Sort by most recently updated
+    return Array.from(podcasts.values())
+        .sort((a, b) => b.latestEpisodeDate.localeCompare(a.latestEpisodeDate));
+}
+
+/**
+ * Get paginated episodes for a specific podcast
+ * Episodes are sorted by createdAt descending (most recently added first)
+ */
+export async function getEpisodesForPodcast(
+    kv: KVNamespace,
+    podcastId: string,
+    options?: { page?: number; pageSize?: number }
+): Promise<PaginatedEpisodes> {
+    const page = Math.max(1, options?.page ?? 1);
+    const pageSize = options?.pageSize ?? 10;
+
+    const index = await getEpisodeIndex(kv);
+    const podcastEpisodes = index.filter(ep => ep.id.startsWith(`${podcastId}_`));
+
+    const total = podcastEpisodes.length;
+    const totalPages = Math.ceil(total / pageSize);
+    const start = (page - 1) * pageSize;
+    const episodes = podcastEpisodes.slice(start, start + pageSize);
+
+    return { episodes, total, page, pageSize, totalPages };
+}
+

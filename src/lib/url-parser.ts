@@ -75,3 +75,17 @@ export function parseApplePodcastsUrl(url: string): ParsedAppleUrl | null {
 export function deriveEpisodeId(podcastId: string, episodeId: string): string {
     return `${podcastId}_${episodeId}`;
 }
+
+/**
+ * Extract the podcast ID from a derived episode ID
+ *
+ * @param episodeId - The derived episode ID in format: {podcastId}_{episodeId}
+ * @returns The podcast ID if valid format, null otherwise
+ */
+export function extractPodcastId(episodeId: string): string | null {
+    if (!episodeId || typeof episodeId !== "string") {
+        return null;
+    }
+    const match = episodeId.match(/^(\d+)_/);
+    return match ? match[1] : null;
+}
