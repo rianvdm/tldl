@@ -22,7 +22,7 @@ export type TranscriptSource = "apple" | "rss" | "openai";
 /**
  * Job record - tracks the processing state of a submitted episode
  * Stored in KV with key: job:{job_id}
- * TTL: 7 days
+ * TTL: 1 day
  */
 export interface Job {
     id: string;                    // UUID

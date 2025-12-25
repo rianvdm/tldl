@@ -81,7 +81,7 @@ describe("Integration: Episode View Flow", () => {
         await clearTestData();
     });
 
-    it("full view flow: list → detail → PDF", async () => {
+    it("full view flow: list → detail", async () => {
         // Setup: Create complete episode data
         const episode = createSampleEpisode();
         const transcript = createSampleTranscript({ episodeId: episode.id });
@@ -115,20 +115,14 @@ describe("Integration: Episode View Flow", () => {
         // Step 4: View episode detail (JSON API)
         const apiDetailResponse = await SELF.fetch(`http://localhost/api/episode/${episode.id}`);
         expect(apiDetailResponse.status).toBe(200);
-        const apiDetailData = await apiDetailResponse.json() as { 
-            episode: Episode; 
-            summaries: Summary[]; 
+        const apiDetailData = await apiDetailResponse.json() as {
+            episode: Episode;
+            summaries: Summary[];
             transcript: Transcript | null;
         };
         expect(apiDetailData.episode.id).toBe(episode.id);
         expect(apiDetailData.summaries.length).toBe(1);
         expect(apiDetailData.transcript).not.toBeNull();
-
-        // Step 5: Download PDF
-        const pdfResponse = await SELF.fetch(`http://localhost/episode/${episode.id}/pdf`);
-        expect(pdfResponse.status).toBe(200);
-        expect(pdfResponse.headers.get("content-type")).toBe("application/pdf");
-        expect(pdfResponse.headers.get("content-disposition")).toContain("attachment");
     });
 });
 

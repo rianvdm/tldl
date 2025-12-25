@@ -11,11 +11,11 @@ import type {
 import {
     TEMPLATES,
     ERROR_CODES,
-    TTL,
     getTemplateIds,
     isValidTemplateId,
     getTemplate,
 } from "../src/lib/constants";
+import { TTL } from "../src/lib/kv";
 
 describe("Type Definitions", () => {
     describe("Job", () => {
@@ -230,8 +230,8 @@ describe("Constants", () => {
     });
 
     describe("TTL", () => {
-        it("has correct job TTL (7 days)", () => {
-            expect(TTL.JOB).toBe(7 * 24 * 60 * 60);
+        it("has correct job TTL (1 day)", () => {
+            expect(TTL.JOB).toBe(1 * 24 * 60 * 60);
         });
 
         it("has correct content TTL (365 days)", () => {

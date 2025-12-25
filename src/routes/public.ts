@@ -26,7 +26,6 @@ import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS, getValidTags, isVa
 import { parseApplePodcastsUrl, deriveEpisodeId, extractPodcastId } from "../lib/url-parser";
 import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 
-import { generateEpisodePdf } from "../services/pdf";
 import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
 import { marked } from "marked";
 import { verifyTurnstile, isValidEmail } from "../lib/turnstile";
@@ -863,54 +862,6 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
     return c.html(
         Layout({ title: episode.episodeTitle, children: content, description: episodeDescription })
     );
-});
-
-// ============================================================================
-// GET /episode/:episodeId/pdf — PDF Download (hidden from UI, but functional)
-// ============================================================================
-
-publicRoutes.get("/episode/:episodeId/pdf", async (c) => {
-    const episodeId = c.req.param("episodeId");
-    const selectedTemplate = c.req.query("template");
-
-    // Verify episode exists
-    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
-    if (!episode) {
-        return c.json({ error: "Episode not found" }, 404);
-    }
-
-    // Fetch summaries (PDF only includes summary, not transcript)
-    const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
-
-    // Determine which summary to use
-    const templateId = selectedTemplate || (summaries.length > 0 ? summaries[0].templateId : "key-takeaways");
-    const summary = summaries.find((s) => s.templateId === templateId);
-    const template = getTemplate(templateId);
-
-    // Generate PDF (summary only, no transcript)
-    const pdfBuffer = generateEpisodePdf({
-        podcastName: episode.podcastName,
-        episodeTitle: episode.episodeTitle,
-        episodeDate: episode.episodeDate,
-        episodeDuration: episode.episodeDuration,
-        summary: summary?.text || "",
-        summaryTemplate: template?.name || templateId,
-        expiresAt: episode.expiresAt,
-    });
-
-    // Sanitize filename - remove special characters
-    const safeFilename = episode.episodeTitle
-        .replace(/[^a-zA-Z0-9\s-]/g, "")
-        .replace(/\s+/g, "_")
-        .substring(0, 100);
-
-    // Return as downloadable PDF
-    return new Response(pdfBuffer, {
-        headers: {
-            "Content-Type": "application/pdf",
-            "Content-Disposition": `attachment; filename="${safeFilename}.pdf"`,
-        },
-    });
 });
 
 // ============================================================================

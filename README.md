@@ -11,7 +11,6 @@ Paste an Apple Podcasts episode URL, get an AI-generated summary. Transcripts an
 - **Smart episode matching** — Multi-strategy matching handles various podcast feed formats
 - **Large file support** — Audio files >25MB are automatically chunked at MP3 frame boundaries
 - **Three summary templates** — Key Takeaways, Narrative Summary, or ELI5
-- **PDF export** — Download summaries as formatted PDFs
 - **Public access** — Anyone can view completed summaries; authenticated users can submit new episodes
 
 ## Tech Stack
@@ -93,8 +92,7 @@ tldl/
 │   │   ├── rss.ts               # RSS feed parsing + episode matching
 │   │   ├── transcription.ts     # OpenAI Whisper integration
 │   │   ├── summarization.ts     # OpenAI GPT-4o integration
-│   │   ├── tag-generation.ts    # OpenAI GPT-5.2 for episode tags
-│   │   └── pdf.ts               # PDF generation with jsPDF
+│   │   └── tag-generation.ts    # OpenAI GPT-5.2 for episode tags
 │   ├── queue/
 │   │   └── consumer.ts          # Background job processor
 │   ├── durable-objects/
@@ -169,7 +167,6 @@ Episodes are automatically tagged with 1-4 relevant topics from a predefined lis
 
 - `GET /` — Episode list page (supports `?tag=tagname` filtering)
 - `GET /episode/:id` — Episode detail with summary and tags
-- `GET /episode/:id/pdf` — Download PDF
 - `GET /api/episodes` — JSON episode list
 - `GET /api/episode/:id` — JSON episode detail
 - `GET /api/templates` — Available templates

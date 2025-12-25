@@ -102,7 +102,7 @@ Authentication is handled by **Cloudflare Access** at the edge. Protected routes
 ### KV Storage Schema
 
 Keys in `src/lib/kv.ts`:
-- `job:{jobId}` - Job state (TTL: 7 days)
+- `job:{jobId}` - Job state (TTL: 1 day)
 - `episode:{episodeId}` - Episode metadata with optional tags (TTL: 365 days)
 - `transcript:{episodeId}` - Full transcript (TTL: 365 days)
 - `summary:{episodeId}:{templateId}` - Generated summary (TTL: 365 days)
@@ -113,8 +113,7 @@ Keys in `src/lib/kv.ts`:
 
 **Public** (`src/routes/public.ts`):
 - `GET /` - Episode list with pagination and tag filtering (`?tag=tagname`)
-- `GET /episode/:id` - Episode detail with summary, transcript, and tags
-- `GET /episode/:id/pdf` - PDF download
+- `GET /episode/:id` - Episode detail with summary and tags
 - `GET /submit` - Submit form
 - `GET /job/:id` - Job status page
 - `GET /podcasts` - Browse all podcasts with pagination (10 per page)
@@ -207,8 +206,7 @@ src/
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI Whisper
 │   ├── summarization.ts  # OpenAI GPT-4o
-│   ├── tag-generation.ts # OpenAI GPT-5.2 for episode tags
-│   └── pdf.ts            # PDF generation
+│   └── tag-generation.ts # OpenAI GPT-5.2 for episode tags
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages
 │   ├── api.ts            # JSON API

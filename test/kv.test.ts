@@ -98,8 +98,8 @@ describe("KV Key Generation", () => {
 });
 
 describe("TTL Constants", () => {
-    it("sets job TTL to 7 days", () => {
-        expect(TTL.JOB).toBe(7 * 24 * 60 * 60);
+    it("sets job TTL to 1 day", () => {
+        expect(TTL.JOB).toBe(1 * 24 * 60 * 60);
     });
 
     it("sets content TTL to 365 days", () => {
