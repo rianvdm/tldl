@@ -1898,8 +1898,14 @@ publicRoutes.get("/podcasts", async (c) => {
     const pageParam = c.req.query("page");
     const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
     const pageSize = 10;
+    const search = c.req.query("q") || "";
 
     const allPodcasts = await getPodcastList(c.env.TLDL_DATA);
+
+    // Filter by search query (case-insensitive match on podcast name)
+    const filteredPodcasts = search
+        ? allPodcasts.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
+        : allPodcasts;
 
     if (allPodcasts.length === 0) {
         const content = `
@@ -1916,15 +1922,15 @@ publicRoutes.get("/podcasts", async (c) => {
         return c.html(Layout({ title: "Browse Podcasts", children: content }));
     }
 
-    // Paginate podcasts
-    const total = allPodcasts.length;
+    // Paginate filtered podcasts
+    const total = filteredPodcasts.length;
     const totalPages = Math.ceil(total / pageSize);
     const start = (page - 1) * pageSize;
-    const podcasts = allPodcasts.slice(start, start + pageSize);
+    const podcasts = filteredPodcasts.slice(start, start + pageSize);
 
     // Redirect if page is out of bounds
     if (podcasts.length === 0 && page > 1) {
-        return c.redirect('/podcasts');
+        return c.redirect(`/podcasts${search ? `?q=${encodeURIComponent(search)}` : ''}`);
     }
 
     const podcastCards = podcasts.map(podcast => `
@@ -1955,11 +1961,11 @@ publicRoutes.get("/podcasts", async (c) => {
         </div>
     `).join("");
 
-    // Build pagination
+    // Build pagination with search query preserved
     const paginationHtml = totalPages > 1 ? `
         <nav class="pagination" aria-label="Podcast pagination">
             ${page > 1 ? `
-            <a href="/podcasts?page=${page - 1}" class="pagination-link pagination-prev">
+            <a href="/podcasts?page=${page - 1}${search ? `&q=${encodeURIComponent(search)}` : ''}" class="pagination-link pagination-prev">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m15 18-6-6 6-6"/>
                 </svg>
@@ -1973,7 +1979,7 @@ publicRoutes.get("/podcasts", async (c) => {
             </span>`}
             <span class="pagination-info">Page ${page} of ${totalPages}</span>
             ${page < totalPages ? `
-            <a href="/podcasts?page=${page + 1}" class="pagination-link pagination-next">
+            <a href="/podcasts?page=${page + 1}${search ? `&q=${encodeURIComponent(search)}` : ''}" class="pagination-link pagination-next">
                 Next
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m9 18 6-6-6-6"/>
@@ -1988,15 +1994,41 @@ publicRoutes.get("/podcasts", async (c) => {
         </nav>
     ` : "";
 
+    // Search form (reuses home page styling)
+    const searchForm = `
+        <form method="GET" action="/podcasts" class="search-form">
+            <div class="search-input-wrapper">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                </svg>
+                <input type="text" name="q" value="${escapeHtml(search)}" placeholder="Search podcasts..." class="search-input" id="search-input">
+                ${search ? `<a href="/podcasts" class="search-clear" title="Clear search">×</a>` : ""}
+            </div>
+            <button type="submit" class="button">Search</button>
+        </form>
+    `;
+
+    // Empty state for no search results
+    const noResultsHtml = search && filteredPodcasts.length === 0 ? `
+        <div class="empty-state">
+            <p>No podcasts found matching "${escapeHtml(search)}"</p>
+            <a href="/podcasts" class="button">Clear Search</a>
+        </div>
+    ` : "";
+
     const content = `
         <div class="page-header">
             <h1>Browse Podcasts</h1>
-            <p class="page-subtitle">${total} podcast${total !== 1 ? 's' : ''} with AI summaries</p>
+            <p class="page-subtitle">${allPodcasts.length} podcast${allPodcasts.length !== 1 ? 's' : ''} with AI summaries</p>
         </div>
+        ${searchForm}
+        ${noResultsHtml}
+        ${filteredPodcasts.length > 0 ? `
         <div class="podcast-list">
             ${podcastCards}
         </div>
         ${paginationHtml}
+        ` : ""}
     `;
 
     return c.html(Layout({ title: "Browse Podcasts", children: content }));
