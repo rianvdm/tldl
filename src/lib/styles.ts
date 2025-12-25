@@ -253,11 +253,12 @@ h4 {
 
 .page-header h2 {
     font-size: 1.5rem;
+    margin-bottom: 0;
 }
 
 .page-subtitle {
     color: var(--muted-foreground);
-    margin-top: 0.5rem;
+    margin-top: 0.25rem;
 }
 
 /* ============================================================================
