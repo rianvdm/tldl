@@ -134,6 +134,8 @@ Keys in `src/lib/kv.ts`:
 - `POST /profile/delete/:episodeId` - Delete episode from profile page
 - `POST /profile/rebuild-index` - Admin only: Rebuild episode index
 - `POST /profile/update-tags/:episodeId` - Admin only: Update episode tags
+- `GET /profile/summaries/:episodeId` - Admin only: Get all summaries for an episode
+- `POST /profile/update-summary/:episodeId/:templateId` - Admin only: Update a summary's text
 - `POST /profile/backfill-tags` - Admin only: Generate tags for episodes without them
 - `POST /profile/cleanup-invalid-tags` - Admin only: Remove tags no longer in EPISODE_TAGS
 

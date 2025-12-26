@@ -1684,6 +1684,49 @@ h4 {
     justify-content: flex-end;
 }
 
+.modal-content-large {
+    max-width: 700px;
+    max-height: 85vh;
+    overflow-y: auto;
+}
+
+.summary-edit-item {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.summary-edit-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.summary-textarea {
+    width: 100%;
+    padding: 0.75rem;
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    line-height: 1.5;
+    background-color: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    resize: vertical;
+}
+
+.summary-textarea:focus {
+    outline: none;
+    border-color: var(--accent-red);
+    box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.15);
+}
+
+.episode-card-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
 .job-id {
     font-family: var(--font-mono);
     font-size: 0.75rem;

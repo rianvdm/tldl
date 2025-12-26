@@ -13,6 +13,7 @@ import {
     getEpisode,
     getTranscript,
     getSummary,
+    saveSummary,
     deleteEpisode,
     listEpisodesByUser,
     listEpisodes,
@@ -30,7 +31,7 @@ import {
     createRegenerateSummaryMessage,
 } from "../lib/queue";
 import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
-import { isValidTemplateId, RATE_LIMITS, getValidTags, validateTags } from "../lib/constants";
+import { isValidTemplateId, RATE_LIMITS, getValidTags, validateTags, TEMPLATES } from "../lib/constants";
 import { updateEpisodeTags } from "../lib/kv";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { generateEpisodeTags } from "../services/tag-generation";
@@ -817,6 +818,15 @@ authenticated.get("/profile", async (c) => {
                         </svg>
                         Delete
                     </button>
+                    ${isAdmin ? `
+                    <button type="button" class="button button-secondary button-sm" onclick="openSummaryEditor('${escapeHtml(episode.id)}', '${escapeHtml(episode.episodeTitle.replace(/'/g, "\\\\'"))}')">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                            <path d="m15 5 4 4"/>
+                        </svg>
+                        Edit Summaries
+                    </button>
+                    ` : ''}
                 </div>
             `;
         })
@@ -968,8 +978,23 @@ authenticated.get("/profile", async (c) => {
             </div>
         </div>
 
+        <div id="summary-edit-modal" class="modal" style="display: none;">
+            <div class="modal-backdrop" onclick="hideSummaryEditModal()"></div>
+            <div class="modal-content modal-content-large">
+                <h3 id="summary-modal-title">Edit Summaries</h3>
+                <div id="summary-edit-content">
+                    <p class="text-muted">Loading summaries...</p>
+                </div>
+                <div id="summary-edit-status" style="display: none; margin-top: 1rem;"></div>
+                <div class="modal-actions">
+                    <button type="button" class="button" onclick="hideSummaryEditModal()">Close</button>
+                </div>
+            </div>
+        </div>
+
 <script>
             let deleteEpisodeId = null;
+            let currentSummaryEpisodeId = null;
 
 function confirmDelete(episodeId, episodeTitle) {
     deleteEpisodeId = episodeId;
@@ -982,6 +1007,91 @@ function confirmDelete(episodeId, episodeTitle) {
 function hideDeleteModal() {
     document.getElementById('delete-modal').style.display = 'none';
     deleteEpisodeId = null;
+}
+
+async function openSummaryEditor(episodeId, episodeTitle) {
+    currentSummaryEpisodeId = episodeId;
+    document.getElementById('summary-modal-title').textContent = 'Edit Summaries: ' + episodeTitle;
+    document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">Loading summaries...</p>';
+    document.getElementById('summary-edit-status').style.display = 'none';
+    document.getElementById('summary-edit-modal').style.display = 'flex';
+
+    try {
+        const response = await fetch('/profile/summaries/' + episodeId, {
+            credentials: 'include'
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">Error: ' + (data.error || 'Failed to load summaries') + '</p>';
+            return;
+        }
+
+        if (data.summaries.length === 0) {
+            document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">No summaries found for this episode.</p>';
+            return;
+        }
+
+        let html = '';
+        for (const summary of data.summaries) {
+            html += '<div class="summary-edit-item" data-template-id="' + summary.templateId + '">';
+            html += '<label class="form-label">' + summary.templateName + '</label>';
+            html += '<textarea class="summary-textarea" id="summary-text-' + summary.templateId + '" rows="12">' + escapeHtmlForTextarea(summary.text) + '</textarea>';
+            html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.5rem;">';
+            html += '<span class="text-muted" style="font-size: 0.75rem;">Model: ' + summary.model + '</span>';
+            html += '<button type="button" class="button button-sm" onclick="saveSummary(\\'' + summary.templateId + '\\')">Save ' + summary.templateName + '</button>';
+            html += '</div>';
+            html += '<div class="summary-save-status" id="summary-status-' + summary.templateId + '" style="display: none; margin-top: 0.5rem;"></div>';
+            html += '</div>';
+        }
+        document.getElementById('summary-edit-content').innerHTML = html;
+    } catch (err) {
+        document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">Failed to load summaries</p>';
+    }
+}
+
+function escapeHtmlForTextarea(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function hideSummaryEditModal() {
+    document.getElementById('summary-edit-modal').style.display = 'none';
+    currentSummaryEpisodeId = null;
+}
+
+async function saveSummary(templateId) {
+    if (!currentSummaryEpisodeId) return;
+
+    const textarea = document.getElementById('summary-text-' + templateId);
+    const statusEl = document.getElementById('summary-status-' + templateId);
+    const text = textarea.value;
+
+    statusEl.className = 'alert alert-info';
+    statusEl.textContent = 'Saving...';
+    statusEl.style.display = 'block';
+
+    try {
+        const response = await fetch('/profile/update-summary/' + currentSummaryEpisodeId + '/' + templateId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ text })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            statusEl.className = 'alert alert-success';
+            statusEl.textContent = 'Saved successfully!';
+            setTimeout(() => { statusEl.style.display = 'none'; }, 3000);
+        } else {
+            statusEl.className = 'alert alert-error';
+            statusEl.textContent = 'Error: ' + (data.error || 'Failed to save');
+        }
+    } catch (err) {
+        statusEl.className = 'alert alert-error';
+        statusEl.textContent = 'Failed to save summary';
+    }
 }
 
 async function doDelete() {
@@ -1525,6 +1635,111 @@ authenticated.post("/profile/update-tags/:episodeId", async (c) => {
             error: error instanceof Error ? error.message : "Failed to update tags",
         }, 500);
     }
+});
+
+// ============================================================================
+// GET /profile/summaries/:episodeId - Get all summaries for an episode (admin only)
+// ============================================================================
+
+authenticated.get("/profile/summaries/:episodeId", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    const episodeId = c.req.param("episodeId");
+
+    // Verify episode exists
+    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (!episode) {
+        return c.json({ error: "Episode not found" }, 404);
+    }
+
+    // Get all summaries for this episode
+    const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
+
+    // Return summaries with template names
+    return c.json({
+        episodeId,
+        episodeTitle: episode.episodeTitle,
+        summaries: summaries.map(s => ({
+            templateId: s.templateId,
+            templateName: TEMPLATES[s.templateId]?.name || s.templateId,
+            text: s.text,
+            model: s.model,
+            createdAt: s.createdAt,
+        })),
+    });
+});
+
+// ============================================================================
+// POST /profile/update-summary/:episodeId/:templateId - Update a summary (admin only)
+// ============================================================================
+
+authenticated.post("/profile/update-summary/:episodeId/:templateId", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    const episodeId = c.req.param("episodeId");
+    const templateId = c.req.param("templateId");
+
+    // Validate template ID
+    if (!isValidTemplateId(templateId)) {
+        return c.json({ error: `Invalid template ID: ${templateId}` }, 400);
+    }
+
+    // Verify episode exists
+    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (!episode) {
+        return c.json({ error: "Episode not found" }, 404);
+    }
+
+    // Get existing summary
+    const existingSummary = await getSummary(c.env.TLDL_DATA, episodeId, templateId);
+    if (!existingSummary) {
+        return c.json({ error: "Summary not found for this template" }, 404);
+    }
+
+    // Parse request body
+    let body: { text: string };
+    try {
+        body = await c.req.json();
+    } catch {
+        return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    if (!body.text || typeof body.text !== "string") {
+        return c.json({ error: "text field is required" }, 400);
+    }
+
+    // Update the summary
+    await saveSummary(c.env.TLDL_DATA, {
+        episodeId,
+        templateId,
+        text: body.text.trim(),
+        model: existingSummary.model, // Keep original model
+        createdAt: new Date().toISOString(), // Update timestamp
+    });
+
+    console.log(JSON.stringify({
+        event: "summary_updated",
+        episodeId,
+        templateId,
+        updatedBy: userEmail,
+    }));
+
+    return c.json({
+        success: true,
+        templateId,
+    });
 });
 
 // ============================================================================
