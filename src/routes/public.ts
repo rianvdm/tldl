@@ -29,6 +29,7 @@ import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
 import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
 import { marked } from "marked";
 import { verifyTurnstile, isValidEmail } from "../lib/turnstile";
+import { Footer } from "../lib/components";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -224,9 +225,7 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                         <a href="/profile" class="nav-link" id="nav-auth-link">Log in</a>
                     </nav>
                     <main class="main">${raw(props.children)}</main>
-                    <footer class="footer">
-                        <p><a href="https://github.com/rianvdm/tldl/issues" target="_blank" rel="noopener noreferrer">Submit a Bug</a> | <a href="/about#creator-opt-out">Creator Opt-out</a></p>
-                    </footer>
+                    ${Footer}
                 </div>
                 <script>
                 (function() {

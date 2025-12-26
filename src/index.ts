@@ -13,6 +13,7 @@ import api from "./routes/api";
 import authenticated from "./routes/authenticated";
 import publicRoutes from "./routes/public";
 import queueConsumer from "./queue/consumer";
+import { Footer } from "./lib/components";
 
 // ============================================================================
 // MAINTENANCE MODE TOGGLE
@@ -363,9 +364,7 @@ function ErrorPage(props: { title: string; message: string; showRetry: boolean }
                             </div>
                         </div>
                     </main>
-                    <footer class="footer">
-                        <p><a href="https://github.com/rianvdm/tldl/issues" target="_blank" rel="noopener noreferrer">Submit a Bug</a> | <a href="/about#creator-opt-out">Creator Opt-out</a></p>
-                    </footer>
+                    ${Footer}
                 </div>
             </body>
         </html>`;
