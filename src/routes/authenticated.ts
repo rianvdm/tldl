@@ -109,6 +109,11 @@ async function requireAuth(c: import("hono").Context<HonoEnv>): Promise<Response
         if (userEmail) {
             c.set("userEmail", userEmail);
         }
+    } else if (isDevelopment) {
+        // Mock admin user for local development - allows testing all features
+        // Safe because: ENVIRONMENT is only "development" in [env.dev.vars] in wrangler.toml
+        // Production deploys always use ENVIRONMENT="production"
+        c.set("userEmail", "rianvdm@gmail.com");
     }
 
     return null;

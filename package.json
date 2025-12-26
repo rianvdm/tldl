@@ -4,7 +4,7 @@
   "description": "Too Long Didn't Listen - AI-powered podcast summaries",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --var ENVIRONMENT:development",
     "deploy": "wrangler deploy",
     "test": "vitest run",
     "test:watch": "vitest",
