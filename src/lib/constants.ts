@@ -60,15 +60,16 @@ export const EPISODE_TAGS = [
     "music",
     "faith",
     "entertainment",
+    "ai",
 ] as const;
 
 export type EpisodeTag = (typeof EPISODE_TAGS)[number];
 
 /**
- * Get all valid episode tags
+ * Get all valid episode tags (sorted alphabetically)
  */
 export function getValidTags(): readonly string[] {
-    return EPISODE_TAGS;
+    return [...EPISODE_TAGS].sort();
 }
 
 /**

@@ -628,7 +628,7 @@ export async function getPodcastList(kv: KVNamespace): Promise<PodcastInfo[]> {
 
 /**
  * Get paginated episodes for a specific podcast
- * Episodes are sorted by createdAt descending (most recently added first)
+ * Episodes are sorted by episodeDate descending (reverse chronological by air date)
  */
 export async function getEpisodesForPodcast(
     kv: KVNamespace,
@@ -639,7 +639,11 @@ export async function getEpisodesForPodcast(
     const pageSize = options?.pageSize ?? 10;
 
     const index = await getEpisodeIndex(kv);
-    const podcastEpisodes = index.filter(ep => ep.id.startsWith(`${podcastId}_`));
+    const podcastEpisodes = index
+        .filter(ep => ep.id.startsWith(`${podcastId}_`))
+        .sort((a, b) =>
+            new Date(b.episodeDate).getTime() - new Date(a.episodeDate).getTime()
+        );
 
     const total = podcastEpisodes.length;
     const totalPages = Math.ceil(total / pageSize);
