@@ -223,6 +223,10 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                         <a href="/podcasts" class="nav-link">Podcasts</a>
                         <a href="/about" class="nav-link">About</a>
                         <a href="/profile" class="nav-link" id="nav-auth-link">Log in</a>
+                        <span class="auth-logged-out nav-submit-wrapper" data-tooltip="Submissions are invite-only">
+                            <span class="nav-submit-btn nav-submit-disabled">Submit</span>
+                        </span>
+                        <a href="/submit" class="nav-submit-btn auth-logged-in hidden">Submit</a>
                     </nav>
                     <main class="main">${raw(props.children)}</main>
                     ${Footer}
@@ -469,25 +473,9 @@ publicRoutes.get("/", async (c) => {
             ? `
         ${logoutMessage}
         ${introSection}
-        <div class="page-header-with-action">
-            <div class="page-header">
-                <h2>Recently Added Episodes</h2>
-                <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
-            </div>
-            <span class="auth-logged-out" data-tooltip="Submissions are invite-only for now">
-                <span class="button button-primary auth-disabled">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
-                    </svg>
-                    Submit Episode
-                </span>
-            </span>
-            <a href="/submit" class="button button-primary auth-logged-in hidden">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
-                </svg>
-                Submit Episode
-            </a>
+        <div class="page-header">
+            <h2>Recently Added Episodes</h2>
+            <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
         </div>
         <form method="GET" action="/" class="search-form">
             <div class="search-input-wrapper">
@@ -679,21 +667,7 @@ publicRoutes.get("/", async (c) => {
                 </svg>
             </div>
             <p>No episodes yet.</p>
-            <p class="text-muted">Submit your first podcast episode to get started!</p>
-            <span class="auth-logged-out" data-tooltip="Submissions are invite-only for now">
-                <span class="button button-primary mt-4 auth-disabled">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
-                    </svg>
-                    Submit Your First Episode
-                </span>
-            </span>
-            <a href="/submit" class="button button-primary mt-4 auth-logged-in hidden">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
-                </svg>
-                Submit Your First Episode
-            </a>
+            <p class="text-muted">Click Submit in the nav bar to add your first podcast episode!</p>
         </div>
     `;
 

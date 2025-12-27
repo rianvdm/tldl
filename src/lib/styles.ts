@@ -108,6 +108,75 @@ a {
     color: var(--accent-red);
 }
 
+/* Nav Submit Button */
+.nav-submit-wrapper {
+    position: relative;
+}
+
+.nav-submit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-radius: var(--radius);
+    background-color: var(--accent-red);
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    text-decoration: none;
+}
+
+.nav-submit-btn:hover {
+    background-color: var(--accent-red-hover);
+}
+
+.nav-submit-disabled {
+    background-color: var(--muted);
+    color: var(--muted-foreground);
+    cursor: not-allowed;
+}
+
+.nav-submit-disabled:hover {
+    background-color: var(--muted);
+}
+
+/* Tooltip for nav submit - override .auth-logged-out tooltip */
+.nav-submit-wrapper.auth-logged-out::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    bottom: auto;
+    left: auto;
+    right: 0;
+    transform: none;
+    padding: 0.375rem 0.625rem;
+    font-size: 0.75rem;
+    font-weight: 400;
+    white-space: nowrap;
+    max-width: none;
+    text-align: left;
+    background-color: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted-foreground);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    z-index: 100;
+    pointer-events: none;
+}
+
+.nav-submit-wrapper.auth-logged-out::before {
+    display: none;
+}
+
+.nav-submit-wrapper.auth-logged-out:hover::after {
+    opacity: 1;
+    visibility: visible;
+}
+
 .main {
     flex: 1;
     padding: 2rem 0;
