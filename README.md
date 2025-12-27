@@ -1,41 +1,29 @@
 # TLDL — Too Long Didn't Listen
 
-> AI-powered podcast summaries from Apple Podcasts URLs
-
-Paste an Apple Podcasts episode URL, get an AI-generated summary. Transcripts and summaries are cached for a year and publicly accessible.
-
-## Features
-
-- **Automatic transcription** — Uses existing transcripts from RSS feeds, or falls back to OpenAI Whisper
-- **AI-powered tagging** — Episodes automatically tagged with 1-4 relevant topics for easy filtering
-- **Smart episode matching** — Multi-strategy matching handles various podcast feed formats
-- **Large file support** — Audio files >25MB are automatically chunked at MP3 frame boundaries
-- **Three summary templates** — Key Takeaways, Narrative Summary, or ELI5
-- **Public access** — Anyone can view completed summaries; authenticated users can submit new episodes
+AI-powered podcast summaries from Apple Podcasts URLs. Paste an episode link, get an AI-generated summary with key takeaways.
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
+| Layer | Technology |
+|-------|------------|
 | Runtime | [Cloudflare Workers](https://workers.cloudflare.com) |
 | Framework | [Hono](https://hono.dev) |
 | Background Jobs | Cloudflare Queues |
-| Storage | Cloudflare Workers KV + Durable Objects |
-| Podcast Metadata | [Podcast Index API](https://podcastindex.org) |
-| Transcription | OpenAI Whisper API |
+| Storage | Cloudflare KV + Durable Objects |
+| Podcast Data | [Podcast Index API](https://podcastindex.org) |
+| Transcription | OpenAI Whisper |
 | Summarization | OpenAI GPT-5.2 |
-| Tag Generation | OpenAI GPT-5.2 Responses API |
 | Authentication | Cloudflare Access (Email OTP) |
+| Spam Protection | Cloudflare Turnstile |
 
 ## Quick Start
 
 ### Prerequisites
 
 - Node.js 18+
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
-- Cloudflare account
-- OpenAI API key
-- Podcast Index API credentials (free at [podcastindex.org](https://podcastindex.org))
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)
+- Cloudflare account with Workers, KV, Queues, and Durable Objects enabled
+- API keys: OpenAI, Podcast Index (free at [podcastindex.org](https://podcastindex.org))
 
 ### Local Development
 
@@ -43,159 +31,288 @@ Paste an Apple Podcasts episode URL, get an AI-generated summary. Transcripts an
 # Install dependencies
 npm install
 
-# Create .dev.vars file with your secrets
-cat > .dev.vars << EOF
+# Create .dev.vars with your secrets
+cat > .dev.vars << 'EOF'
 OPENAI_API_KEY=sk-...
 PODCAST_INDEX_KEY=...
 PODCAST_INDEX_SECRET=...
+TURNSTILE_SECRET=...
 EOF
 
-# Start local dev server
+# Start dev server
 npm run dev
 # → http://localhost:8787
 ```
 
-### Running Tests
+### Seed Test Data
+
+Populate local dev with sample episodes, podcasts, and tags:
 
 ```bash
-npm test                    # Run all 214+ tests
-npm test -- test/kv.test.ts # Run single test file
+npx tsx scripts/seed-local-data.ts
 ```
 
-### Deploy to Production
+Reset everything and start fresh:
 
 ```bash
-# Set secrets (one-time)
-wrangler secret put OPENAI_API_KEY
-wrangler secret put PODCAST_INDEX_KEY
-wrangler secret put PODCAST_INDEX_SECRET
-
-# Deploy
-npm run deploy
-
-# View logs
-npx wrangler tail
+rm -rf .wrangler/state && npx tsx scripts/seed-local-data.ts
 ```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start local dev server (http://localhost:8787) |
+| `npm test` | Run all tests |
+| `npm test -- test/kv.test.ts` | Run single test file |
+| `npm run typecheck` | TypeScript type checking |
+| `npm run deploy` | Deploy to production |
+| `npx wrangler tail` | Stream live production logs |
 
 ## Project Structure
 
 ```
-tldl/
-├── src/
-│   ├── index.ts                 # Hono app entry, exports fetch + queue handlers
-│   ├── routes/
-│   │   ├── public.ts            # HTML pages (list, detail, submit form, job status)
-│   │   ├── api.ts               # JSON API endpoints
-│   │   └── authenticated.ts     # Protected mutation endpoints
-│   ├── services/
-│   │   ├── podcast-index.ts     # Podcast Index API client
-│   │   ├── rss.ts               # RSS feed parsing + episode matching
-│   │   ├── transcription.ts     # OpenAI Whisper integration
-│   │   ├── summarization.ts     # OpenAI GPT-4o integration
-│   │   └── tag-generation.ts    # OpenAI GPT-5.2 for episode tags
-│   ├── queue/
-│   │   └── consumer.ts          # Background job processor
-│   ├── durable-objects/
-│   │   └── job-status.ts        # Strongly consistent job status
-│   └── lib/
-│       ├── kv.ts                # KV storage helpers
-│       ├── audio.ts             # MP3 chunking for large files
-│       ├── constants.ts         # Summary templates + episode tags
-│       └── errors.ts            # Error types and messages
-├── test/                        # Vitest tests (mirrors src/ structure)
-├── public/
-│   ├── styles.css               # Dark mode CSS
-│   └── favicon.svg
-└── wrangler.toml                # Cloudflare Workers configuration
+src/
+├── index.ts                 # Hono app entry, static routes, error handling
+├── types/index.ts           # All TypeScript interfaces
+├── lib/
+│   ├── constants.ts         # Tags, templates, error codes, timeouts
+│   ├── kv.ts                # All KV CRUD operations
+│   ├── url-parser.ts        # Apple Podcasts URL parsing
+│   ├── audio.ts             # MP3 frame-aware chunking for large files
+│   ├── styles.ts            # All CSS (embedded, Workers can't read files)
+│   ├── job-status-do.ts     # Durable Object client helpers
+│   ├── turnstile.ts         # Spam protection verification
+│   └── auth.ts              # JWT parsing, admin checks
+├── services/
+│   ├── apple-podcasts.ts    # Episode metadata lookup
+│   ├── podcast-index.ts     # Podcast Index API client
+│   ├── rss.ts               # RSS parsing + episode matching
+│   ├── transcription.ts     # OpenAI Whisper integration
+│   ├── summarization.ts     # GPT-5.2 summary generation
+│   └── tag-generation.ts    # GPT-5.2 tag generation
+├── routes/
+│   ├── public.ts            # Public pages (home, episodes, podcasts)
+│   ├── api.ts               # JSON API endpoints
+│   └── authenticated.ts     # Protected mutations, admin tools
+├── queue/
+│   └── consumer.ts          # Background job processor
+└── durable-objects/
+    └── job-status.ts        # Job status DO for consistency
 ```
+
+## Architecture
+
+### Episode Processing Flow
+
+1. **Submit** (`POST /submit`): User submits Apple Podcasts URL
+   - URL parsed → episode ID derived
+   - Check KV cache for existing episode
+   - Create job in Durable Object + KV
+   - Enqueue to Cloudflare Queue
+   - Redirect to job status page
+
+2. **Queue Consumer** (`src/queue/consumer.ts`): Background processing
+   - Fetch episode metadata via Podcast Index + RSS
+   - Check for existing transcript in RSS feed
+   - Transcribe with OpenAI Whisper (chunking for >25MB)
+   - Generate summary with GPT-5.2
+   - Generate 1-4 tags with GPT-5.2 (non-critical)
+   - Store in KV with 365-day TTL
+
+3. **View** (`GET /episode/:id`): Serve cached episode with summary
+
+### Key Design Decisions
+
+**Durable Objects for Job Status**: KV is eventually consistent, which caused issues with job status pages showing stale data. Durable Objects provide strong consistency for real-time job tracking.
+
+**Podcast Index over iTunes API**: iTunes API returns 403s from Workers. Podcast Index is a free, open alternative with better reliability.
+
+**Embedded CSS**: Workers can't read from filesystem. All styles are in `src/lib/styles.ts`.
+
+**MP3 Frame-Aware Chunking**: OpenAI Whisper has a 25MB limit. Large files are split at MP3 frame boundaries to avoid audio corruption.
+
+**Non-Critical Tag Generation**: If tag generation fails, the job continues. Empty tags are acceptable.
+
+### KV Storage Schema
+
+| Key Pattern | TTL | Description |
+|-------------|-----|-------------|
+| `job:{jobId}` | 1 day | Job state and progress |
+| `episode:{episodeId}` | 365 days | Episode metadata |
+| `transcript:{episodeId}` | 365 days | Full transcript |
+| `summary:{episodeId}:{templateId}` | 365 days | Generated summary |
+| `episodes:index` | 365 days | Lightweight list for home page |
+| `ratelimit:{email}:{hour}` | 1 hour | Rate limiting |
+| `waitlist:{email}` | none | Waitlist signups |
 
 ## Configuration
 
-### Environment Variables
-
-Set in `wrangler.toml`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MAX_EPISODE_MINUTES` | 80 | Maximum episode duration (rejects longer) |
-| `CACHE_TTL_DAYS` | 365 | How long to cache transcripts/summaries |
-| `DEFAULT_TEMPLATE` | key-takeaways | Default summary template |
-| `ENVIRONMENT` | production | `production` or `development` |
-
-### Secrets
-
-Set via `wrangler secret put <NAME>`:
+### Secrets (set via `wrangler secret put`)
 
 | Secret | Description |
 |--------|-------------|
 | `OPENAI_API_KEY` | OpenAI API key for Whisper + GPT |
 | `PODCAST_INDEX_KEY` | Podcast Index API key |
 | `PODCAST_INDEX_SECRET` | Podcast Index API secret |
+| `TURNSTILE_SECRET` | Cloudflare Turnstile secret key |
 
-### Cloudflare Access Setup
+### Environment Variables (in `wrangler.toml`)
 
-To protect the submit functionality:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_EPISODE_MINUTES` | 106 | Maximum episode duration |
+| `CACHE_TTL_DAYS` | 365 | How long to cache content |
+| `DEFAULT_TEMPLATE` | key-takeaways | Default summary template |
+| `TURNSTILE_SITE_KEY` | — | Turnstile widget site key |
 
-1. Create an Access Application in Cloudflare dashboard
-2. Set application domain to your worker URL
-3. Add paths: `/submit*`, `/job/*`, `/episode/*/regenerate`
-4. Create a policy allowing specific email addresses
-5. Choose "One-time PIN" as authentication method
+## Testing
+
+Uses `@cloudflare/vitest-pool-workers` for a Workers-like test environment.
+
+```bash
+npm test                      # Run all tests
+npm test -- test/kv.test.ts   # Run single file
+npm run test:watch            # Watch mode
+```
+
+Tests are organized to mirror `src/`:
+- `test/kv.test.ts` — KV storage operations
+- `test/rss.test.ts` — RSS parsing and episode matching
+- `test/transcription.test.ts` — Whisper integration
+- `test/integration/` — End-to-end flows
+
+**Note**: Durable Object tests may show "Isolated storage" warnings. This is a Vitest pool infrastructure issue, not a test failure.
+
+## Debugging
+
+### Inspect KV Data
+
+```bash
+# View episode data
+npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "episode:<episodeId>"
+
+# View summary
+npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "summary:<episodeId>:<templateId>"
+
+# View transcript
+npx wrangler kv key get --namespace-id=ee123158d5d54359b4257f8a1b678adf "transcript:<episodeId>"
+```
+
+### Debug Routes (Development Only)
+
+| Route | Description |
+|-------|-------------|
+| `GET /debug/parse?url=...` | Test URL parsing |
+| `GET /debug/episode?url=...` | Fetch episode metadata |
+| `GET /debug/validate-audio?url=...` | Validate audio URL |
+| `GET /debug/transcribe?url=...` | Test transcription (blocked in prod) |
+| `GET /debug/summarize?text=...` | Test summarization (blocked in prod) |
+
+### Live Logs
+
+```bash
+npx wrangler tail
+```
+
+## Deployment
+
+```bash
+# Set secrets (first time only)
+wrangler secret put OPENAI_API_KEY
+wrangler secret put PODCAST_INDEX_KEY
+wrangler secret put PODCAST_INDEX_SECRET
+wrangler secret put TURNSTILE_SECRET
+
+# Deploy
+npm run deploy
+```
+
+### Maintenance Mode
+
+To disable HTTP endpoints while keeping queue processing:
+
+```typescript
+// src/index.ts
+const MAINTENANCE_MODE = true;
+```
+
+## Admin Tools
+
+Admin endpoints are under `/profile/*` (protected by Cloudflare Access). Available to users in `ADMIN_EMAILS` array in `src/lib/constants.ts`.
+
+| Tool | Endpoint | Description |
+|------|----------|-------------|
+| Rebuild Index | `POST /profile/rebuild-index` | Rebuild episode index from all episodes |
+| Update Tags | `POST /profile/update-tags/:id` | Manually edit episode tags |
+| Edit Summary | `POST /profile/update-summary/:id/:templateId` | Edit summary text |
+| Backfill Tags | `POST /profile/backfill-tags` | Generate tags for episodes without them |
+| Cleanup Tags | `POST /profile/cleanup-invalid-tags` | Remove tags not in EPISODE_TAGS |
+| View Waitlist | `GET /profile/waitlist` | View collected waitlist emails |
 
 ## Summary Templates
 
-| Template | Best For | Output Style |
-|----------|----------|--------------|
-| **Key Takeaways** | Professional/craft podcasts | Bullet points with actionable insights |
-| **Narrative Summary** | Story-driven/interview podcasts | Flowing prose capturing the arc |
-| **ELI5** | Technical topics | Simple language with analogies |
+| Template | Best For |
+|----------|----------|
+| `key-takeaways` | Professional/craft podcasts — bullet points, actionable insights |
+| `narrative-summary` | Story-driven content — flowing prose |
+| `eli5` | Technical topics — simple language, analogies |
 
 ## Episode Tags
 
-Episodes are automatically tagged with 1-4 relevant topics from a predefined list:
+14 predefined tags in `src/lib/constants.ts`:
 
-**Available Tags:** business, creativity, education, faith, health, music, politics, product, psychology, science, sport, technology
+ai, business, creativity, education, entertainment, faith, health, music, politics, product, psychology, science, sport, technology
 
-- Tags generated automatically during episode processing using GPT-5.2
-- Filter episodes by tag on the home page (`/?tag=tagname`)
-- Admin users can manually edit tags via profile page
-- Easy to add/remove tags by editing `EPISODE_TAGS` in `src/lib/constants.ts`
+To add/remove tags:
+1. Edit `EPISODE_TAGS` array in `src/lib/constants.ts`
+2. After removing tags, use "Cleanup Invalid Tags" admin tool
 
-## API Endpoints
+## Best Practices
 
-### Public (no auth)
+### Code Style
 
-- `GET /` — Episode list page (supports `?tag=tagname` filtering)
-- `GET /episode/:id` — Episode detail with summary and tags
-- `GET /api/episodes` — JSON episode list
-- `GET /api/episode/:id` — JSON episode detail
-- `GET /api/templates` — Available templates
+- **Keep it simple**: Avoid over-engineering. Only add what's directly needed.
+- **Read before editing**: Always read existing code before modifying.
+- **Prefer editing over creating**: Edit existing files rather than creating new ones.
+- **No backward compatibility hacks**: Delete unused code completely.
 
-### Authenticated (Cloudflare Access)
+### Testing
 
-- `POST /submit` — Submit new episode
-- `POST /episode/:id/regenerate` — Regenerate with different template
-- `DELETE /episode/:id` — Delete episode and all data
-- `POST /job/:id/retry` — Retry failed job
+- Write tests for new functionality
+- Run `npm test` before committing
+- Keep tests focused and fast
 
-### Admin Only (under `/profile/*`)
+### Security
 
-- `POST /profile/update-tags/:id` — Update episode tags
-- `POST /profile/backfill-tags` — Generate tags for episodes without them
-- `POST /profile/cleanup-invalid-tags` — Remove tags no longer in EPISODE_TAGS
-- `POST /profile/rebuild-index` — Rebuild episode index
+- Never commit secrets to `.dev.vars`
+- Validate all user input
+- Be mindful of OWASP top 10 vulnerabilities
 
-> **Note:** Admin endpoints must be under `/profile/*` to work with Cloudflare Access configuration
+### Performance
 
-## Maintenance Mode
+- KV reads are fast; use them liberally
+- Durable Objects are for consistency, not speed
+- Queue processing has a 20-minute timeout
 
-To disable HTTP endpoints while keeping queue processing active:
+## Common Issues
 
-```typescript
-// In src/index.ts
-const MAINTENANCE_MODE = true;  // Set to true to disable endpoints
-```
+| Issue | Solution |
+|-------|----------|
+| iTunes 403 errors | Use Podcast Index API (already configured) |
+| Episode title wrong | URL slugs are unreliable; we scrape the actual page |
+| Large audio fails | Files >25MB are automatically chunked |
+| Job status stale | Durable Object handles consistency; KV is backup |
+| Admin 401/403 | Endpoints must be under `/profile/*` for Cloudflare Access |
 
-## License
+## More Documentation
 
-MIT
+See `CLAUDE.md` for detailed architecture documentation, including:
+- Complete route reference
+- All KV key patterns
+- Durable Object implementation
+- Queue consumer pipeline
+- Authentication flow
+- How to restore transcripts to UI
+
+See `docs/` for design documents and archived plans.

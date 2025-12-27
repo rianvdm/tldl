@@ -78,6 +78,22 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
   - No separate podcast index needed — computed on-demand from existing episode index
   - Episode detail pages include "More from X" link to podcast page
 
+### Spam Protection (Turnstile)
+
+The submit form uses **Cloudflare Turnstile** for spam protection:
+- Widget embedded in the submit form (`src/routes/public.ts`)
+- Server-side verification in `src/lib/turnstile.ts`
+- Requires `TURNSTILE_SITE_KEY` (env var) and `TURNSTILE_SECRET` (secret)
+- Only active on the public submit form; authenticated users bypass Turnstile
+
+### Waitlist
+
+A waitlist system for collecting emails before public launch:
+- `GET /waitlist` - Signup page with Turnstile protection
+- `POST /waitlist` - Add email to waitlist (stored in KV)
+- `GET /profile/waitlist` - Admin-only view of collected emails
+- Emails stored in KV with key: `waitlist:{email}`
+
 ### Authentication & Auth-Conditional UI
 
 Authentication is handled by **Cloudflare Access** at the edge. Protected routes (under `/profile/*`, `/submit*`) require login before requests reach the Worker.
@@ -108,16 +124,22 @@ Keys in `src/lib/kv.ts`:
 - `summary:{episodeId}:{templateId}` - Generated summary (TTL: 365 days)
 - `ratelimit:{email}:{hour}` - Rate limiting (TTL: 1 hour)
 - `episodes:index` - Lightweight episode list with tags for home page (TTL: 365 days)
+- `waitlist:{email}` - Waitlist signups (no TTL)
 
 ### Routes
 
 **Public** (`src/routes/public.ts`):
 - `GET /` - Episode list with pagination and tag filtering (`?tag=tagname`)
 - `GET /episode/:id` - Episode detail with summary and tags
-- `GET /submit` - Submit form
+- `GET /submit` - Submit form (with Turnstile spam protection)
 - `GET /job/:id` - Job status page
 - `GET /podcasts` - Browse all podcasts with pagination (10 per page)
 - `GET /podcasts/:id` - Individual podcast page with all episodes
+- `GET /about` - About page
+- `GET /feed` - RSS feed of recent episodes
+- `GET /waitlist` - Waitlist signup page
+- `POST /submit` - Create new job (rate limited, Turnstile protected)
+- `POST /waitlist` - Add email to waitlist
 
 **API** (`src/routes/api.ts`):
 - `GET /api/episodes` - JSON episode list
@@ -126,8 +148,9 @@ Keys in `src/lib/kv.ts`:
 
 **Authenticated** (`src/routes/authenticated.ts`):
 - `GET /profile/auth-check` - Auth probe for client-side detection (returns `{ authenticated, email }`)
-- `GET /profile` - User profile page (shows submitted episodes; public but intended for authenticated users)
-- `POST /submit` - Create new job
+- `GET /profile` - User profile page (shows submitted episodes)
+- `GET /profile/waitlist` - Admin only: View waitlist emails
+- `POST /submit` - Create new job (authenticated version)
 - `POST /episode/:id/regenerate` - Regenerate with different template
 - `DELETE /episode/:id` - Delete episode
 - `POST /job/:id/retry` - Retry failed job
@@ -138,6 +161,8 @@ Keys in `src/lib/kv.ts`:
 - `POST /profile/update-summary/:episodeId/:templateId` - Admin only: Update a summary's text
 - `POST /profile/backfill-tags` - Admin only: Generate tags for episodes without them
 - `POST /profile/cleanup-invalid-tags` - Admin only: Remove tags no longer in EPISODE_TAGS
+- `POST /profile/backfill-podcast-info` - Admin only: Backfill podcast metadata
+- `POST /profile/cleanup-failed-jobs` - Admin only: Clean up old failed jobs
 
 **Important**: Admin endpoints must be under `/profile/*` path to be protected by Cloudflare Access. Do not create admin endpoints under `/admin/*` or other paths - they won't be properly authenticated in production.
 
@@ -151,7 +176,7 @@ Defined in `src/lib/constants.ts`:
 ### Episode Tags
 
 Defined in `src/lib/constants.ts` (EPISODE_TAGS array):
-- 12 predefined tags: business, creativity, education, faith, health, music, politics, product, psychology, science, sport, technology
+- 14 predefined tags: ai, business, creativity, education, entertainment, faith, health, music, politics, product, psychology, science, sport, technology
 - Tags are alphabetically sorted for consistency
 - Easy to add/remove tags - just edit the EPISODE_TAGS array
 - After removing tags, use "Cleanup Invalid Tags" admin tool to remove them from existing episodes
@@ -173,12 +198,14 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 - `OPENAI_API_KEY` - OpenAI API key
 - `PODCAST_INDEX_KEY` - Podcast Index API key
 - `PODCAST_INDEX_SECRET` - Podcast Index API secret
+- `TURNSTILE_SECRET` - Cloudflare Turnstile secret key (spam protection)
 
 **Environment Variables**:
-- `MAX_EPISODE_MINUTES` - Max duration (default: 80)
+- `MAX_EPISODE_MINUTES` - Max duration (default: 106)
 - `ENVIRONMENT` - `production` or `development`
 - `CACHE_TTL_DAYS` - Content cache TTL (default: 365)
 - `DEFAULT_TEMPLATE` - Default summary template (default: `key-takeaways`)
+- `TURNSTILE_SITE_KEY` - Cloudflare Turnstile site key (spam protection)
 
 ## Testing
 
@@ -201,13 +228,16 @@ src/
 │   ├── errors.ts         # Error handling
 │   ├── retry.ts          # Retry logic with backoff
 │   ├── job-status-do.ts  # Durable Object client helpers
-│   └── ...
+│   ├── turnstile.ts      # Cloudflare Turnstile verification
+│   ├── components.ts     # Reusable UI components (Footer)
+│   ├── assets.ts         # SVG assets (favicon, Apple Podcasts badge)
+│   └── auth.ts           # JWT parsing and auth helpers
 ├── services/             # External API integrations
 │   ├── apple-podcasts.ts # iTunes API + page scraping
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI Whisper
-│   ├── summarization.ts  # OpenAI GPT-4o
+│   ├── summarization.ts  # OpenAI GPT-5.2
 │   └── tag-generation.ts # OpenAI GPT-5.2 for episode tags
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages
