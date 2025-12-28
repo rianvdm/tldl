@@ -35,7 +35,7 @@ import {
     createProcessEpisodeMessage,
     createRegenerateSummaryMessage,
 } from "../lib/queue";
-import { parseApplePodcastsUrl, deriveEpisodeId } from "../lib/url-parser";
+import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId, RATE_LIMITS, getValidTags, validateTags, TEMPLATES } from "../lib/constants";
 import { updateEpisodeTags } from "../lib/kv";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
@@ -2406,10 +2406,10 @@ authenticated.post("/profile/podcasts/add", async (c) => {
         return c.json({ error: "Missing appleUrl" }, 400);
     }
 
-    // Parse Apple Podcasts URL to extract podcast ID
-    const parsed = parseApplePodcastsUrl(body.appleUrl);
+    // Parse Apple Podcasts URL to extract podcast ID (accepts both podcast and episode URLs)
+    const parsed = parsePodcastUrl(body.appleUrl);
     if (!parsed) {
-        return c.json({ error: "Invalid Apple Podcasts URL" }, 400);
+        return c.json({ error: "Invalid Apple Podcasts URL. Please use a podcast URL like: https://podcasts.apple.com/us/podcast/podcast-name/id1234567890" }, 400);
     }
 
     const result = await addPodcastToMonitoring(
