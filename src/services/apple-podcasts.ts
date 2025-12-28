@@ -569,6 +569,22 @@ export async function getEpisodeMetadata(
     } else {
         // Fetch fresh from iTunes (HTTP context only)
         episodeInfo = await lookupEpisodeInfo(parsedUrl.podcastId, parsedUrl.episodeId);
+
+        // If iTunes failed (403 from Cloudflare Workers), try to get title from Apple page
+        if (!episodeInfo && options.appleUrl) {
+            console.log(JSON.stringify({
+                event: "itunes_failed_trying_apple_page",
+                appleUrl: options.appleUrl,
+            }));
+            const titleFromPage = await getEpisodeTitleFromApplePage(options.appleUrl);
+            if (titleFromPage) {
+                episodeInfo = {
+                    trackId: parseInt(parsedUrl.episodeId, 10),
+                    trackName: titleFromPage,
+                    releaseDate: "",
+                };
+            }
+        }
     }
 
     // Fetch RSS feed
@@ -717,15 +733,14 @@ async function getEpisodeFromPodcastIndex(
             ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
         };
     } catch (error) {
-        // Re-throw AppErrors (especially rate limit) so they cause job retries
-        if (error instanceof AppError) {
-            throw error;
-        }
+        // Log the error and fall back to iTunes for ALL errors including rate limits
+        // This ensures the job continues even when Podcast Index is unavailable
         console.error(JSON.stringify({
             event: "podcast_index_metadata_error",
             podcastId: parsedUrl.podcastId,
             episodeId: parsedUrl.episodeId,
             error: error instanceof Error ? error.message : String(error),
+            fallingBackToItunes: true,
         }));
         return null;
     }

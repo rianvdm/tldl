@@ -381,6 +381,31 @@ export function findEpisodeInFeed(
 
     // Strategy 3: Title similarity match (high confidence)
     if (options.expectedTitle) {
+        // First check for truncated titles (ending with ellipsis)
+        // Apple pages often truncate long titles with "…" or "..."
+        const truncatedMatch = options.expectedTitle.match(/^(.+?)[…\.]{1,3}$/);
+        if (truncatedMatch) {
+            const prefix = normalizeText(truncatedMatch[1]);
+            console.log(JSON.stringify({
+                event: "episode_truncated_prefix_matching",
+                originalTitle: options.expectedTitle,
+                normalizedPrefix: prefix,
+            }));
+
+            for (const episode of feed.episodes) {
+                const normalizedEpisodeTitle = normalizeText(episode.title);
+                if (normalizedEpisodeTitle.startsWith(prefix)) {
+                    console.log(JSON.stringify({
+                        event: "episode_matched_truncated_prefix",
+                        title: episode.title,
+                        prefix,
+                    }));
+                    return episode;
+                }
+            }
+        }
+
+        // Fall back to word overlap similarity
         let bestMatch: RssEpisode | null = null;
         let bestScore = 0;
         const scores: Array<{ title: string; score: number }> = [];
