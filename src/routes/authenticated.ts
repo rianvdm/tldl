@@ -2075,8 +2075,13 @@ authenticated.get("/profile/podcasts", async (c) => {
         </section>
 
         <style>
-            .monitor-settings-form .form-group {
-                margin-bottom: 1rem;
+            /* Form spacing for both forms */
+            #settings-form .form-group,
+            #add-podcast-form .form-group {
+                margin-bottom: 1.25rem;
+            }
+            #add-podcast-form button[type="submit"] {
+                margin-top: 0.5rem;
             }
             /* Form select dropdown styling */
             .form-select {
