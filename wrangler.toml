@@ -17,6 +17,10 @@ DEFAULT_TEMPLATE = "key-takeaways"
 ENVIRONMENT = "development"
 TURNSTILE_SITE_KEY = "0x4AAAAAACI8nqr-nsEAR6gr"
 
+[observability]
+enabled = true
+head_sampling_rate = 1 # optional. default = 1.
+
 # KV Namespace
 [[kv_namespaces]]
 binding = "TLDL_DATA"

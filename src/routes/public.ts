@@ -33,6 +33,9 @@ import { Footer } from "../lib/components";
 
 const publicRoutes = new Hono<HonoEnv>();
 
+// Base URL for canonical links
+const BASE_URL = "https://tldl-pod.com";
+
 // ============================================================================
 // JWT Email Extraction
 // ============================================================================
@@ -143,7 +146,7 @@ function getFirstSentence(text: string, maxLength: number = 160): string {
 // Layout Component
 // ============================================================================
 
-export function Layout(props: { title: string; children: string; headExtra?: string; description?: string }) {
+export function Layout(props: { title: string; children: string; headExtra?: string; description?: string; canonicalUrl?: string }) {
     // Use custom title for home page
     const pageTitle = props.title === "Home"
         ? "TL;DL - Too Long Didn't Listen"
@@ -155,6 +158,7 @@ export function Layout(props: { title: string; children: string; headExtra?: str
     const ogDescription = props.description || "Get AI summaries of podcast episodes";
 
     const ogImage = "https://file.elezea.com/tldl-hero.png";
+    const canonicalUrl = props.canonicalUrl || null;
 
     return html`<!DOCTYPE html>
         <html lang="en" class="dark">
@@ -170,10 +174,15 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                     content="${metaDescription}"
                 />
                 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+                <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+                <link rel="manifest" href="/manifest.webmanifest" />
+                <meta name="theme-color" content="#0a0a0a" />
                 <meta property="og:title" content="${pageTitle}" />
                 <meta property="og:description" content="${ogDescription}" />
                 <meta property="og:type" content="website" />
                 <meta property="og:image" content="${ogImage}" />
+                ${raw(canonicalUrl ? `<meta property="og:url" content="${canonicalUrl}" />` : '')}
+                ${raw(canonicalUrl ? `<link rel="canonical" href="${canonicalUrl}" />` : '')}
                 <meta name="twitter:card" content="summary_large_image" />
                 <meta name="twitter:title" content="${pageTitle}" />
                 <meta name="twitter:description" content="${ogDescription}" />
@@ -687,7 +696,8 @@ publicRoutes.get("/", async (c) => {
     return c.html(Layout({
         title: "Home",
         children: content,
-        headExtra: refreshMeta
+        headExtra: refreshMeta,
+        canonicalUrl: BASE_URL + "/"
     }));
 });
 
@@ -833,7 +843,7 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
         : `AI-generated summary of "${episode.episodeTitle}" from ${episode.podcastName}`;
 
     return c.html(
-        Layout({ title: episode.episodeTitle, children: content, description: episodeDescription })
+        Layout({ title: episode.episodeTitle, children: content, description: episodeDescription, canonicalUrl: `${BASE_URL}/episode/${episodeId}` })
     );
 });
 
@@ -843,7 +853,7 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
 
 publicRoutes.get("/submit", async (c) => {
     const content = SubmitFormPage({ error: null, url: "", templateId: "key-takeaways" });
-    return c.html(Layout({ title: "Submit Episode", children: content }));
+    return c.html(Layout({ title: "Submit Episode", children: content, canonicalUrl: `${BASE_URL}/submit` }));
 });
 
 // ============================================================================
@@ -1027,7 +1037,7 @@ publicRoutes.get("/about", async (c) => {
             </section>
         </div>
     `;
-    return c.html(Layout({ title: "About", children: content.toString() }));
+    return c.html(Layout({ title: "About", children: content.toString(), canonicalUrl: `${BASE_URL}/about` }));
 });
 
 // ============================================================================
@@ -1894,7 +1904,7 @@ publicRoutes.get("/podcasts", async (c) => {
         ` : ""}
     `;
 
-    return c.html(Layout({ title: "Browse Podcasts", children: content }));
+    return c.html(Layout({ title: "Browse Podcasts", children: content, canonicalUrl: `${BASE_URL}/podcasts` }));
 });
 
 // ============================================================================
@@ -2028,7 +2038,8 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
     return c.html(Layout({
         title: podcastName,
         children: content,
-        description: `AI-generated summaries for ${total} episode${total !== 1 ? 's' : ''} from ${podcastName}`
+        description: `AI-generated summaries for ${total} episode${total !== 1 ? 's' : ''} from ${podcastName}`,
+        canonicalUrl: `${BASE_URL}/podcasts/${podcastId}`
     }));
 });
 

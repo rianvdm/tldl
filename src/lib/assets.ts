@@ -11,6 +11,29 @@ export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
   <path d="M8 10h16M8 16h12M8 22h8" stroke="#fafafa" stroke-width="2.5" stroke-linecap="round"/>
 </svg>`;
 
+/**
+ * Apple Touch Icon PNG (180x180) for iOS "Add to Home Screen"
+ * Generated from the favicon SVG design
+ */
+export const APPLE_TOUCH_ICON_PNG_BASE64 = "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";
+
+/**
+ * Web App Manifest for PWA-like "Add to Home Screen" support
+ */
+export const WEB_MANIFEST = JSON.stringify({
+    name: "TL;DL - Too Long Didn't Listen",
+    short_name: "TL;DL",
+    description: "AI-powered podcast summaries from Apple Podcasts URLs",
+    start_url: "/",
+    display: "standalone",
+    background_color: "#0a0a0a",
+    theme_color: "#0a0a0a",
+    icons: [
+        { src: "/favicon.svg", type: "image/svg+xml", sizes: "any" },
+        { src: "/apple-touch-icon.png", type: "image/png", sizes: "180x180" }
+    ]
+});
+
 export const APPLE_PODCASTS_BADGE = `<?xml version="1.0" encoding="utf-8"?>
 <svg version="1.1" id="Artwork" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
 	 width="129.155px" height="41px" viewBox="0 0 129.155 41" style="enable-background:new 0 0 129.155 41;" xml:space="preserve">

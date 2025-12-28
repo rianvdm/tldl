@@ -7,7 +7,7 @@ import { getEpisodeMetadata } from "./services/apple-podcasts";
 import { generateSummary } from "./services/summarization";
 import { rebuildEpisodeIndex } from "./lib/kv";
 import { CSS } from "./lib/styles";
-import { APPLE_PODCASTS_BADGE, FAVICON_SVG } from "./lib/assets";
+import { APPLE_PODCASTS_BADGE, FAVICON_SVG, APPLE_TOUCH_ICON_PNG_BASE64, WEB_MANIFEST } from "./lib/assets";
 import { AppError, logError } from "./lib/errors";
 import api from "./routes/api";
 import authenticated from "./routes/authenticated";
@@ -91,9 +91,48 @@ if (MAINTENANCE_MODE) {
         });
     });
 
+    // Serve Apple touch icon (for iOS "Add to Home Screen")
+    app.get("/apple-touch-icon.png", () => {
+        const pngBuffer = Uint8Array.from(atob(APPLE_TOUCH_ICON_PNG_BASE64), c => c.charCodeAt(0));
+        return new Response(pngBuffer, {
+            headers: {
+                "Content-Type": "image/png",
+                "Cache-Control": "public, max-age=86400",
+            },
+        });
+    });
+
     // Health check endpoint
     app.get("/health", (c) => {
         return c.json({ status: "ok", timestamp: new Date().toISOString() });
+    });
+
+    // Serve robots.txt
+    app.get("/robots.txt", () => {
+        const robotsTxt = `User-agent: *
+Allow: /
+Disallow: /job/
+Disallow: /profile/
+Disallow: /debug/
+
+Sitemap: https://tldl-pod.com/sitemap.xml
+`;
+        return new Response(robotsTxt, {
+            headers: {
+                "Content-Type": "text/plain",
+                "Cache-Control": "public, max-age=86400",
+            },
+        });
+    });
+
+    // Serve web manifest (for PWA "Add to Home Screen")
+    app.get("/manifest.webmanifest", () => {
+        return new Response(WEB_MANIFEST, {
+            headers: {
+                "Content-Type": "application/manifest+json",
+                "Cache-Control": "public, max-age=86400",
+            },
+        });
     });
 
     // Debug route for URL parsing (will be removed in production)
