@@ -2004,8 +2004,8 @@ authenticated.get("/profile/podcasts", async (c) => {
                 </div>
                 ${podcast.lastError ? `<div class="alert alert-error">${escapeHtml(podcast.lastError)}</div>` : ""}
                 <div class="podcast-actions">
-                    <button class="btn btn-small" onclick="checkPodcast('${escapeHtml(podcast.id)}')">Check Now</button>
-                    <button class="btn btn-small btn-danger" onclick="removePodcast('${escapeHtml(podcast.id)}')">Remove</button>
+                    <button class="button" onclick="checkPodcast('${escapeHtml(podcast.id)}')">Check Now</button>
+                    <button class="button button-danger" onclick="removePodcast('${escapeHtml(podcast.id)}')">Remove</button>
                 </div>
             </div>
         `).join("");
@@ -2021,20 +2021,20 @@ authenticated.get("/profile/podcasts", async (c) => {
                 <h2>Global Settings</h2>
                 <form id="settings-form" class="monitor-settings-form">
                     <div class="form-group">
-                        <label for="checkInterval">Check interval (hours)</label>
-                        <input type="number" id="checkInterval" name="checkInterval" value="${settings.checkIntervalHours}" min="1" max="24" />
+                        <label class="form-label" for="checkInterval">Check interval (hours)</label>
+                        <input type="number" id="checkInterval" name="checkInterval" class="form-input" value="${settings.checkIntervalHours}" min="1" max="24" style="max-width: 120px;" />
                     </div>
                     <div class="form-group">
-                        <label for="maxEpisodes">Max episodes per check</label>
-                        <input type="number" id="maxEpisodes" name="maxEpisodes" value="${settings.maxEpisodesPerCheck}" min="1" max="10" />
+                        <label class="form-label" for="maxEpisodes">Max episodes per check</label>
+                        <input type="number" id="maxEpisodes" name="maxEpisodes" class="form-input" value="${settings.maxEpisodesPerCheck}" min="1" max="10" style="max-width: 120px;" />
                     </div>
                     <div class="form-group checkbox-group">
                         <input type="checkbox" id="enabled" name="enabled" ${settings.enabled ? "checked" : ""} />
                         <label for="enabled">Enable automatic monitoring</label>
                     </div>
                     <div class="button-group">
-                        <button type="submit" class="btn btn-primary">Save Settings</button>
-                        <button type="button" class="btn" onclick="checkAllNow()">Check All Now</button>
+                        <button type="submit" class="button button-primary">Save Settings</button>
+                        <button type="button" class="button" onclick="checkAllNow()">Check All Now</button>
                     </div>
                 </form>
                 <div id="settings-message" class="alert" style="display: none; margin-top: 1rem;"></div>
@@ -2046,12 +2046,12 @@ authenticated.get("/profile/podcasts", async (c) => {
                 <h2>Add Podcast</h2>
                 <form id="add-podcast-form">
                     <div class="form-group">
-                        <label for="appleUrl">Apple Podcasts URL</label>
-                        <input type="url" id="appleUrl" name="appleUrl" placeholder="https://podcasts.apple.com/us/podcast/..." required />
+                        <label class="form-label" for="appleUrl">Apple Podcasts URL</label>
+                        <input type="url" id="appleUrl" name="appleUrl" class="form-input" placeholder="https://podcasts.apple.com/us/podcast/..." required />
                     </div>
                     <div class="form-group">
-                        <label for="templateId">Summary Template</label>
-                        <select id="templateId" name="templateId">
+                        <label class="form-label" for="templateId">Summary Template</label>
+                        <select id="templateId" name="templateId" class="form-select">
                             <option value="key-takeaways">Key Takeaways</option>
                             <option value="narrative-summary">Narrative Summary</option>
                             <option value="eli5">ELI5</option>
@@ -2061,7 +2061,7 @@ authenticated.get("/profile/podcasts", async (c) => {
                         <input type="checkbox" id="queueLatest" name="queueLatest" checked />
                         <label for="queueLatest">Queue latest episode immediately</label>
                     </div>
-                    <button type="submit" class="btn btn-primary">Add Podcast</button>
+                    <button type="submit" class="button button-primary">Add Podcast</button>
                 </form>
                 <div id="add-message" class="alert" style="display: none; margin-top: 1rem;"></div>
             </div>
@@ -2077,22 +2077,6 @@ authenticated.get("/profile/podcasts", async (c) => {
         <style>
             .monitor-settings-form .form-group {
                 margin-bottom: 1rem;
-            }
-            .monitor-settings-form label {
-                display: block;
-                margin-bottom: 0.25rem;
-                font-weight: 500;
-            }
-            .monitor-settings-form input[type="number"],
-            .monitor-settings-form input[type="url"],
-            .monitor-settings-form select {
-                width: 100%;
-                max-width: 300px;
-                padding: 0.5rem;
-                border: 1px solid var(--border);
-                border-radius: 4px;
-                background: var(--surface);
-                color: var(--text);
             }
             .checkbox-group {
                 display: flex;
@@ -2126,9 +2110,9 @@ authenticated.get("/profile/podcasts", async (c) => {
                 font-weight: 600;
                 text-transform: uppercase;
             }
-            .status-active { background: var(--success-bg); color: var(--success); }
-            .status-paused { background: var(--warning-bg); color: var(--warning); }
-            .status-error { background: var(--error-bg); color: var(--error); }
+            .status-active { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+            .status-paused { background: rgba(234, 179, 8, 0.15); color: #eab308; }
+            .status-error { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
             .podcast-meta {
                 display: flex;
                 gap: 1rem;
@@ -2142,16 +2126,14 @@ authenticated.get("/profile/podcasts", async (c) => {
                 gap: 0.5rem;
                 margin-top: 0.5rem;
             }
-            .btn-small {
-                padding: 0.25rem 0.5rem;
-                font-size: 0.75rem;
-            }
-            .btn-danger {
-                background: var(--error);
+            .button-danger {
+                background: #ef4444;
                 color: white;
+                border-color: #ef4444;
             }
-            .btn-danger:hover {
-                background: var(--error-hover);
+            .button-danger:hover {
+                background: #dc2626;
+                border-color: #dc2626;
             }
         </style>
 
