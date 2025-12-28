@@ -2078,13 +2078,70 @@ authenticated.get("/profile/podcasts", async (c) => {
             .monitor-settings-form .form-group {
                 margin-bottom: 1rem;
             }
+            /* Form select dropdown styling */
+            .form-select {
+                padding: 0.75rem 2.5rem 0.75rem 1rem;
+                font-size: 0.875rem;
+                background-color: var(--background);
+                color: var(--foreground);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                cursor: pointer;
+                appearance: none;
+                background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+                background-repeat: no-repeat;
+                background-position: right 0.75rem center;
+                transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            }
+            .form-select:focus {
+                outline: none;
+                border-color: var(--accent-red);
+                box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.15);
+            }
+            .form-select option {
+                background-color: var(--background);
+                color: var(--foreground);
+            }
+            /* Custom checkbox styling */
             .checkbox-group {
                 display: flex;
+                flex-direction: row;
                 align-items: center;
-                gap: 0.5rem;
+                gap: 0.75rem;
             }
             .checkbox-group label {
                 margin-bottom: 0;
+                cursor: pointer;
+            }
+            .checkbox-group input[type="checkbox"] {
+                appearance: none;
+                width: 1.25rem;
+                height: 1.25rem;
+                border: 2px solid var(--border);
+                border-radius: 4px;
+                background-color: var(--background);
+                cursor: pointer;
+                position: relative;
+                transition: all 0.2s ease;
+            }
+            .checkbox-group input[type="checkbox"]:checked {
+                background-color: var(--accent-red);
+                border-color: var(--accent-red);
+            }
+            .checkbox-group input[type="checkbox"]:checked::after {
+                content: '';
+                position: absolute;
+                left: 5px;
+                top: 1px;
+                width: 5px;
+                height: 10px;
+                border: solid white;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }
+            .checkbox-group input[type="checkbox"]:focus {
+                outline: none;
+                box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.15);
             }
             .button-group {
                 display: flex;
