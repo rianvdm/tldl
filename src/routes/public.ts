@@ -996,6 +996,26 @@ publicRoutes.get("/about", async (c) => {
                     and I'll add your podcast to the blocklist.</p>
             </section>
 
+            <section id="rss-feed" style="margin-top: 2rem;">
+                <h2>RSS Feed</h2>
+                <p>
+                    Subscribe to new episode summaries via the
+                    <a href="/feed">RSS feed</a>.
+                    The feed includes the latest 50 episodes with their summaries.
+                </p>
+                <p>
+                    You can also filter the feed by topic using the <code>tag</code> parameter. For example:
+                </p>
+                <ul>
+                    <li><a href="/feed?tag=technology">/feed?tag=technology</a> — Technology episodes only</li>
+                    <li><a href="/feed?tag=music">/feed?tag=music</a> — Music episodes only</li>
+                    <li><a href="/feed?tag=business">/feed?tag=business</a> — Business episodes only</li>
+                </ul>
+                <p>
+                    See the home page's "Filter by topic" dropdown for the full list of available tags.
+                </p>
+            </section>
+
             <section style="margin-top: 2rem;">
                 <h2>Technology</h2>
                 <p>TL;DL is built entirely on Cloudflare's edge platform:</p>
