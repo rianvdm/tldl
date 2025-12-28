@@ -3,7 +3,7 @@
  * Provides typed helpers for all KV operations with consistent key schemas and TTLs.
  */
 
-import type { Job, JobStatus, Episode, Transcript, Summary, EpisodeIndexEntry } from "../types";
+import type { Job, JobStatus, Episode, Transcript, Summary, EpisodeIndexEntry, MonitoredPodcast, MonitorSettings } from "../types";
 
 // Key generation functions for consistent naming
 export const KV_KEYS = {
@@ -13,6 +13,11 @@ export const KV_KEYS = {
     summary: (episodeId: string, templateId: string) =>
         `summary:${episodeId}:${templateId}`,
     episodeIndex: "episodes:index",
+    // Podcast monitoring keys
+    monitorSettings: "monitor:settings",
+    monitoredList: "monitored:list",
+    monitoredPodcast: (podcastId: string) => `monitored:${podcastId}`,
+    monitoredProcessed: (podcastId: string) => `monitored:processed:${podcastId}`,
 };
 
 // TTL constants in seconds
@@ -651,5 +656,186 @@ export async function getEpisodesForPodcast(
     const episodes = podcastEpisodes.slice(start, start + pageSize);
 
     return { episodes, total, page, pageSize, totalPages };
+}
+
+// ============================================================================
+// Podcast Monitoring Operations
+// ============================================================================
+
+const DEFAULT_MONITOR_SETTINGS: MonitorSettings = {
+    checkIntervalHours: 8,
+    maxEpisodesPerCheck: 5,
+    enabled: true,
+};
+
+/**
+ * Get global monitor settings
+ */
+export async function getMonitorSettings(kv: KVNamespace): Promise<MonitorSettings> {
+    const data = await kv.get(KV_KEYS.monitorSettings);
+    if (!data) return { ...DEFAULT_MONITOR_SETTINGS };
+    return JSON.parse(data) as MonitorSettings;
+}
+
+/**
+ * Save global monitor settings
+ */
+export async function saveMonitorSettings(
+    kv: KVNamespace,
+    settings: MonitorSettings
+): Promise<void> {
+    await kv.put(KV_KEYS.monitorSettings, JSON.stringify(settings));
+}
+
+/**
+ * Get list of monitored podcast IDs
+ */
+export async function getMonitoredPodcastIds(kv: KVNamespace): Promise<string[]> {
+    const data = await kv.get(KV_KEYS.monitoredList);
+    if (!data) return [];
+    return JSON.parse(data) as string[];
+}
+
+/**
+ * Add a podcast ID to the monitored list
+ */
+export async function addToMonitoredList(
+    kv: KVNamespace,
+    podcastId: string
+): Promise<void> {
+    const list = await getMonitoredPodcastIds(kv);
+    if (!list.includes(podcastId)) {
+        list.push(podcastId);
+        await kv.put(KV_KEYS.monitoredList, JSON.stringify(list));
+    }
+}
+
+/**
+ * Remove a podcast ID from the monitored list
+ */
+export async function removeFromMonitoredList(
+    kv: KVNamespace,
+    podcastId: string
+): Promise<void> {
+    const list = await getMonitoredPodcastIds(kv);
+    const filtered = list.filter(id => id !== podcastId);
+    if (filtered.length !== list.length) {
+        await kv.put(KV_KEYS.monitoredList, JSON.stringify(filtered));
+    }
+}
+
+/**
+ * Get a monitored podcast by ID
+ */
+export async function getMonitoredPodcast(
+    kv: KVNamespace,
+    podcastId: string
+): Promise<MonitoredPodcast | null> {
+    const data = await kv.get(KV_KEYS.monitoredPodcast(podcastId));
+    if (!data) return null;
+    return JSON.parse(data) as MonitoredPodcast;
+}
+
+/**
+ * Save a monitored podcast record
+ */
+export async function saveMonitoredPodcast(
+    kv: KVNamespace,
+    podcast: MonitoredPodcast
+): Promise<void> {
+    await kv.put(KV_KEYS.monitoredPodcast(podcast.id), JSON.stringify(podcast));
+}
+
+/**
+ * Delete a monitored podcast record and its processed episodes list
+ */
+export async function deleteMonitoredPodcast(
+    kv: KVNamespace,
+    podcastId: string
+): Promise<void> {
+    await kv.delete(KV_KEYS.monitoredPodcast(podcastId));
+    await kv.delete(KV_KEYS.monitoredProcessed(podcastId));
+    await removeFromMonitoredList(kv, podcastId);
+}
+
+/**
+ * List all monitored podcasts
+ */
+export async function listMonitoredPodcasts(
+    kv: KVNamespace
+): Promise<MonitoredPodcast[]> {
+    const ids = await getMonitoredPodcastIds(kv);
+    if (ids.length === 0) return [];
+
+    const podcasts = await Promise.all(
+        ids.map(id => getMonitoredPodcast(kv, id))
+    );
+
+    return podcasts
+        .filter((p): p is MonitoredPodcast => p !== null)
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Get processed episode GUIDs for a podcast
+ */
+export async function getProcessedEpisodes(
+    kv: KVNamespace,
+    podcastId: string
+): Promise<string[]> {
+    const data = await kv.get(KV_KEYS.monitoredProcessed(podcastId));
+    if (!data) return [];
+    return JSON.parse(data) as string[];
+}
+
+/**
+ * Mark an episode GUID as processed for a podcast
+ */
+export async function markEpisodeProcessed(
+    kv: KVNamespace,
+    podcastId: string,
+    episodeGuid: string
+): Promise<void> {
+    const processed = await getProcessedEpisodes(kv, podcastId);
+    if (!processed.includes(episodeGuid)) {
+        processed.push(episodeGuid);
+        await kv.put(KV_KEYS.monitoredProcessed(podcastId), JSON.stringify(processed));
+    }
+}
+
+/**
+ * Mark multiple episode GUIDs as processed for a podcast (initial setup)
+ */
+export async function markEpisodesProcessed(
+    kv: KVNamespace,
+    podcastId: string,
+    episodeGuids: string[]
+): Promise<void> {
+    const processed = await getProcessedEpisodes(kv, podcastId);
+    const unique = [...new Set([...processed, ...episodeGuids])];
+    await kv.put(KV_KEYS.monitoredProcessed(podcastId), JSON.stringify(unique));
+}
+
+/**
+ * Update lastChecked timestamp and optionally episodesProcessed count
+ */
+export async function updateMonitoredPodcastStatus(
+    kv: KVNamespace,
+    podcastId: string,
+    updates: { lastChecked?: string; episodesProcessed?: number; status?: "active" | "paused" | "error"; lastError?: string }
+): Promise<void> {
+    const podcast = await getMonitoredPodcast(kv, podcastId);
+    if (!podcast) return;
+
+    const updated: MonitoredPodcast = {
+        ...podcast,
+        ...updates,
+    };
+
+    if (updates.status === "active" || updates.status === "paused") {
+        delete updated.lastError;
+    }
+
+    await saveMonitoredPodcast(kv, updated);
 }
 

@@ -167,3 +167,33 @@ export type HonoEnv = {
         userEmail?: string;
     };
 };
+
+// ============================================================================
+// Podcast Monitoring Types
+// ============================================================================
+
+/**
+ * Monitored podcast record - tracks a podcast being monitored for new episodes
+ * Stored in KV with key: monitored:{podcastId}
+ */
+export interface MonitoredPodcast {
+    id: string;                    // Apple podcast ID
+    name: string;                  // Podcast name
+    rssUrl: string;                // RSS feed URL (from Podcast Index API)
+    templateId: string;            // Template to use for new episodes
+    addedAt: string;               // ISO timestamp when added
+    lastChecked?: string;          // ISO timestamp of last check
+    episodesProcessed: number;     // Count of episodes processed
+    status: "active" | "paused" | "error";
+    lastError?: string;            // Error message if status is "error"
+}
+
+/**
+ * Global settings for podcast monitoring
+ * Stored in KV with key: monitor:settings
+ */
+export interface MonitorSettings {
+    checkIntervalHours: number;    // Default: 8
+    maxEpisodesPerCheck: number;   // Default: 5
+    enabled: boolean;              // Global enable/disable
+}

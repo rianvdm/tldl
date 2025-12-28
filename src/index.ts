@@ -14,6 +14,8 @@ import authenticated from "./routes/authenticated";
 import publicRoutes from "./routes/public";
 import queueConsumer from "./queue/consumer";
 import { Footer } from "./lib/components";
+import { checkAllPodcasts } from "./lib/monitor";
+import type { Env } from "./types";
 
 // ============================================================================
 // MAINTENANCE MODE TOGGLE
@@ -416,10 +418,42 @@ function ErrorPage(props: { title: string; message: string; showRetry: boolean }
 export { JobStatusDO } from "./durable-objects/job-status";
 
 // ============================================================================
+// Scheduled Handler (for cron-triggered podcast monitoring)
+// ============================================================================
+
+async function scheduledHandler(
+    controller: ScheduledController,
+    env: Env,
+    _ctx: ExecutionContext
+): Promise<void> {
+    console.log(JSON.stringify({
+        event: "scheduled_handler_started",
+        trigger: controller.cron,
+        scheduledTime: new Date(controller.scheduledTime).toISOString(),
+    }));
+
+    try {
+        const result = await checkAllPodcasts(env);
+        console.log(JSON.stringify({
+            event: "scheduled_handler_complete",
+            checked: result.checked,
+            totalNewEpisodes: result.totalNewEpisodes,
+            errors: result.errors.length,
+        }));
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: "scheduled_handler_error",
+            error: error instanceof Error ? error.message : String(error),
+        }));
+    }
+}
+
+// ============================================================================
 // Export handlers
 // ============================================================================
 
 export default {
     fetch: app.fetch,
     queue: queueConsumer.queue,
+    scheduled: scheduledHandler,
 };

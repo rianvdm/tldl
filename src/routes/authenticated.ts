@@ -5,7 +5,7 @@
  */
 
 import { Hono } from "hono";
-import type { HonoEnv, Job, EpisodeIndexEntry } from "../types";
+import type { HonoEnv, Job, EpisodeIndexEntry, MonitorSettings } from "../types";
 import { Layout } from "./public";
 import {
     createJob,
@@ -19,6 +19,11 @@ import {
     listEpisodes,
     listSummariesForEpisode,
     rebuildEpisodeIndex,
+    getMonitorSettings,
+    saveMonitorSettings,
+    listMonitoredPodcasts,
+    getMonitoredPodcast,
+    deleteMonitoredPodcast,
 } from "../lib/kv";
 import {
     createJobDO,
@@ -36,6 +41,11 @@ import { updateEpisodeTags } from "../lib/kv";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { generateEpisodeTags } from "../services/tag-generation";
 import { getUserEmailFromJwt, escapeHtml, isAdminUser } from "../lib/auth";
+import {
+    addPodcastToMonitoring,
+    forceCheckAllPodcasts,
+    checkPodcastForNewEpisodes,
+} from "../lib/monitor";
 
 const authenticated = new Hono<HonoEnv>();
 
@@ -870,6 +880,7 @@ authenticated.get("/profile", async (c) => {
             <h1>Your Profile</h1>
             <p class="page-subtitle">${escapeHtml(userEmail)}${isAdmin ? ' <span class="badge">Admin</span>' : ''}</p>
             <div style="display: flex; gap: 0.5rem;">
+                ${isAdmin ? `<a href="/profile/podcasts" class="button button-secondary">Monitor Podcasts</a>` : ''}
                 ${isAdmin ? `<a href="/profile/waitlist" class="button button-secondary">Waitlist</a>` : ''}
                 <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F%3FloggedOut%3D1" class="button button-secondary">Log Out</a>
             </div>
@@ -898,6 +909,18 @@ authenticated.get("/profile", async (c) => {
             <h2>Admin Tools</h2>
             <div class="admin-tools">
                 <div class="admin-tool-item">
+                    <p class="text-muted">Automatically monitor podcasts for new episodes</p>
+                    <a href="/profile/podcasts" class="button">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            <line x1="12" x2="12" y1="19" y2="23"/>
+                            <line x1="8" x2="16" y1="23" y2="23"/>
+                        </svg>
+                        Monitor Podcasts
+                    </a>
+                </div>
+                <div class="admin-tool-item" style="margin-top: 1.5rem;">
                     <p class="text-muted">View and export waitlist signups</p>
                     <a href="/profile/waitlist" class="button">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1947,6 +1970,471 @@ authenticated.post("/job/:jobId/retry", async (c, next) => {
     };
 
     return c.json(response);
+});
+
+// ============================================================================
+// Podcast Monitoring Routes
+// ============================================================================
+
+// GET /profile/podcasts - Podcast monitoring admin page
+authenticated.get("/profile/podcasts", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.text("Admin access required", 403);
+    }
+
+    const settings = await getMonitorSettings(c.env.TLDL_DATA);
+    const podcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
+
+    const podcastCards = podcasts.length === 0
+        ? `<div class="empty-state">No podcasts are being monitored yet.</div>`
+        : podcasts.map(podcast => `
+            <div class="card podcast-monitor-card" id="podcast-${escapeHtml(podcast.id)}">
+                <div class="podcast-header">
+                    <h3>${escapeHtml(podcast.name)}</h3>
+                    <span class="status-badge status-${podcast.status}">${podcast.status}</span>
+                </div>
+                <div class="podcast-meta">
+                    <span>Template: ${escapeHtml(podcast.templateId)}</span>
+                    <span>Episodes: ${podcast.episodesProcessed}</span>
+                    ${podcast.lastChecked ? `<span>Last checked: ${new Date(podcast.lastChecked).toLocaleString()}</span>` : ""}
+                </div>
+                ${podcast.lastError ? `<div class="alert alert-error">${escapeHtml(podcast.lastError)}</div>` : ""}
+                <div class="podcast-actions">
+                    <button class="btn btn-small" onclick="checkPodcast('${escapeHtml(podcast.id)}')">Check Now</button>
+                    <button class="btn btn-small btn-danger" onclick="removePodcast('${escapeHtml(podcast.id)}')">Remove</button>
+                </div>
+            </div>
+        `).join("");
+
+    const content = `
+        <section class="section">
+            <h1>Monitor Podcasts</h1>
+            <p>Automatically check podcasts for new episodes and queue them for processing.</p>
+        </section>
+
+        <section class="section">
+            <div class="card">
+                <h2>Global Settings</h2>
+                <form id="settings-form" class="monitor-settings-form">
+                    <div class="form-group">
+                        <label for="checkInterval">Check interval (hours)</label>
+                        <input type="number" id="checkInterval" name="checkInterval" value="${settings.checkIntervalHours}" min="1" max="24" />
+                    </div>
+                    <div class="form-group">
+                        <label for="maxEpisodes">Max episodes per check</label>
+                        <input type="number" id="maxEpisodes" name="maxEpisodes" value="${settings.maxEpisodesPerCheck}" min="1" max="10" />
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="enabled" name="enabled" ${settings.enabled ? "checked" : ""} />
+                        <label for="enabled">Enable automatic monitoring</label>
+                    </div>
+                    <div class="button-group">
+                        <button type="submit" class="btn btn-primary">Save Settings</button>
+                        <button type="button" class="btn" onclick="checkAllNow()">Check All Now</button>
+                    </div>
+                </form>
+                <div id="settings-message" class="alert" style="display: none; margin-top: 1rem;"></div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="card">
+                <h2>Add Podcast</h2>
+                <form id="add-podcast-form">
+                    <div class="form-group">
+                        <label for="appleUrl">Apple Podcasts URL</label>
+                        <input type="url" id="appleUrl" name="appleUrl" placeholder="https://podcasts.apple.com/us/podcast/..." required />
+                    </div>
+                    <div class="form-group">
+                        <label for="templateId">Summary Template</label>
+                        <select id="templateId" name="templateId">
+                            <option value="key-takeaways">Key Takeaways</option>
+                            <option value="narrative-summary">Narrative Summary</option>
+                            <option value="eli5">ELI5</option>
+                        </select>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="queueLatest" name="queueLatest" checked />
+                        <label for="queueLatest">Queue latest episode immediately</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add Podcast</button>
+                </form>
+                <div id="add-message" class="alert" style="display: none; margin-top: 1rem;"></div>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>Monitored Podcasts</h2>
+            <div id="podcasts-list">
+                ${podcastCards}
+            </div>
+        </section>
+
+        <style>
+            .monitor-settings-form .form-group {
+                margin-bottom: 1rem;
+            }
+            .monitor-settings-form label {
+                display: block;
+                margin-bottom: 0.25rem;
+                font-weight: 500;
+            }
+            .monitor-settings-form input[type="number"],
+            .monitor-settings-form input[type="url"],
+            .monitor-settings-form select {
+                width: 100%;
+                max-width: 300px;
+                padding: 0.5rem;
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                background: var(--surface);
+                color: var(--text);
+            }
+            .checkbox-group {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            .checkbox-group label {
+                margin-bottom: 0;
+            }
+            .button-group {
+                display: flex;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+            .podcast-monitor-card {
+                margin-bottom: 1rem;
+            }
+            .podcast-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 0.5rem;
+            }
+            .podcast-header h3 {
+                margin: 0;
+            }
+            .status-badge {
+                padding: 0.25rem 0.5rem;
+                border-radius: 4px;
+                font-size: 0.75rem;
+                font-weight: 600;
+                text-transform: uppercase;
+            }
+            .status-active { background: var(--success-bg); color: var(--success); }
+            .status-paused { background: var(--warning-bg); color: var(--warning); }
+            .status-error { background: var(--error-bg); color: var(--error); }
+            .podcast-meta {
+                display: flex;
+                gap: 1rem;
+                flex-wrap: wrap;
+                color: var(--text-secondary);
+                font-size: 0.875rem;
+                margin-bottom: 0.5rem;
+            }
+            .podcast-actions {
+                display: flex;
+                gap: 0.5rem;
+                margin-top: 0.5rem;
+            }
+            .btn-small {
+                padding: 0.25rem 0.5rem;
+                font-size: 0.75rem;
+            }
+            .btn-danger {
+                background: var(--error);
+                color: white;
+            }
+            .btn-danger:hover {
+                background: var(--error-hover);
+            }
+        </style>
+
+        <script>
+            document.getElementById('settings-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const msg = document.getElementById('settings-message');
+                
+                try {
+                    const response = await fetch('/profile/podcasts/settings', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            checkIntervalHours: parseInt(document.getElementById('checkInterval').value),
+                            maxEpisodesPerCheck: parseInt(document.getElementById('maxEpisodes').value),
+                            enabled: document.getElementById('enabled').checked,
+                        }),
+                    });
+                    
+                    const data = await response.json();
+                    msg.className = response.ok ? 'alert alert-success' : 'alert alert-error';
+                    msg.textContent = response.ok ? 'Settings saved!' : (data.error || 'Failed to save');
+                    msg.style.display = 'block';
+                } catch (err) {
+                    msg.className = 'alert alert-error';
+                    msg.textContent = 'Failed to save settings';
+                    msg.style.display = 'block';
+                }
+            });
+
+            document.getElementById('add-podcast-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const msg = document.getElementById('add-message');
+                const btn = e.target.querySelector('button[type="submit"]');
+                btn.disabled = true;
+                btn.textContent = 'Adding...';
+                
+                try {
+                    const response = await fetch('/profile/podcasts/add', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            appleUrl: document.getElementById('appleUrl').value,
+                            templateId: document.getElementById('templateId').value,
+                            queueLatest: document.getElementById('queueLatest').checked,
+                        }),
+                    });
+                    
+                    const data = await response.json();
+                    msg.className = response.ok ? 'alert alert-success' : 'alert alert-error';
+                    msg.textContent = response.ok ? 'Podcast added!' + (data.queuedLatest ? ' Latest episode queued.' : '') : (data.error || 'Failed to add');
+                    msg.style.display = 'block';
+                    
+                    if (response.ok) {
+                        setTimeout(() => window.location.reload(), 1500);
+                    }
+                } catch (err) {
+                    msg.className = 'alert alert-error';
+                    msg.textContent = 'Failed to add podcast';
+                    msg.style.display = 'block';
+                }
+                
+                btn.disabled = false;
+                btn.textContent = 'Add Podcast';
+            });
+
+            async function checkAllNow() {
+                const msg = document.getElementById('settings-message');
+                msg.className = 'alert alert-info';
+                msg.textContent = 'Checking all podcasts...';
+                msg.style.display = 'block';
+                
+                try {
+                    const response = await fetch('/profile/podcasts/check-now', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+                    
+                    const data = await response.json();
+                    msg.className = response.ok ? 'alert alert-success' : 'alert alert-error';
+                    msg.textContent = response.ok 
+                        ? \`Checked \${data.checked} podcasts. \${data.totalNewEpisodes} new episode(s) queued.\`
+                        : (data.error || 'Failed');
+                    msg.style.display = 'block';
+                    
+                    if (response.ok && data.totalNewEpisodes > 0) {
+                        setTimeout(() => window.location.reload(), 2000);
+                    }
+                } catch (err) {
+                    msg.className = 'alert alert-error';
+                    msg.textContent = 'Failed to check podcasts';
+                    msg.style.display = 'block';
+                }
+            }
+
+            async function checkPodcast(podcastId) {
+                const card = document.getElementById('podcast-' + podcastId);
+                const btn = card.querySelector('button');
+                btn.disabled = true;
+                btn.textContent = 'Checking...';
+                
+                try {
+                    const response = await fetch('/profile/podcasts/' + podcastId + '/check', {
+                        method: 'POST',
+                        credentials: 'include',
+                    });
+                    
+                    if (response.ok) {
+                        window.location.reload();
+                    } else {
+                        const data = await response.json();
+                        alert(data.error || 'Failed to check podcast');
+                    }
+                } catch (err) {
+                    alert('Failed to check podcast');
+                }
+                
+                btn.disabled = false;
+                btn.textContent = 'Check Now';
+            }
+
+            async function removePodcast(podcastId) {
+                if (!confirm('Remove this podcast from monitoring? This will not delete any existing summaries.')) {
+                    return;
+                }
+                
+                try {
+                    const response = await fetch('/profile/podcasts/' + podcastId, {
+                        method: 'DELETE',
+                        credentials: 'include',
+                    });
+                    
+                    if (response.ok) {
+                        document.getElementById('podcast-' + podcastId).remove();
+                    } else {
+                        const data = await response.json();
+                        alert(data.error || 'Failed to remove podcast');
+                    }
+                } catch (err) {
+                    alert('Failed to remove podcast');
+                }
+            }
+        </script>
+    `;
+
+    return c.html(Layout({
+        title: "Monitor Podcasts",
+        children: content,
+    }));
+});
+
+// PUT /profile/podcasts/settings - Update monitor settings
+authenticated.put("/profile/podcasts/settings", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    let body: Partial<MonitorSettings>;
+    try {
+        body = await c.req.json();
+    } catch {
+        return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const current = await getMonitorSettings(c.env.TLDL_DATA);
+    const updated: MonitorSettings = {
+        checkIntervalHours: body.checkIntervalHours ?? current.checkIntervalHours,
+        maxEpisodesPerCheck: body.maxEpisodesPerCheck ?? current.maxEpisodesPerCheck,
+        enabled: body.enabled ?? current.enabled,
+    };
+
+    // Validate
+    if (updated.checkIntervalHours < 1 || updated.checkIntervalHours > 24) {
+        return c.json({ error: "Check interval must be 1-24 hours" }, 400);
+    }
+    if (updated.maxEpisodesPerCheck < 1 || updated.maxEpisodesPerCheck > 10) {
+        return c.json({ error: "Max episodes must be 1-10" }, 400);
+    }
+
+    await saveMonitorSettings(c.env.TLDL_DATA, updated);
+    return c.json({ success: true, settings: updated });
+});
+
+// POST /profile/podcasts/add - Add a podcast to monitoring
+authenticated.post("/profile/podcasts/add", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    let body: { appleUrl: string; templateId: string; queueLatest?: boolean };
+    try {
+        body = await c.req.json();
+    } catch {
+        return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    if (!body.appleUrl) {
+        return c.json({ error: "Missing appleUrl" }, 400);
+    }
+
+    // Parse Apple Podcasts URL to extract podcast ID
+    const parsed = parseApplePodcastsUrl(body.appleUrl);
+    if (!parsed) {
+        return c.json({ error: "Invalid Apple Podcasts URL" }, 400);
+    }
+
+    const result = await addPodcastToMonitoring(
+        c.env,
+        parsed.podcastId,
+        body.templateId || "key-takeaways",
+        body.queueLatest !== false
+    );
+
+    if (!result.success) {
+        return c.json({ error: result.error }, 400);
+    }
+
+    return c.json({
+        success: true,
+        podcast: result.podcast,
+        queuedLatest: result.queuedLatest,
+    });
+});
+
+// POST /profile/podcasts/check-now - Force check all podcasts
+authenticated.post("/profile/podcasts/check-now", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    const result = await forceCheckAllPodcasts(c.env);
+    return c.json(result);
+});
+
+// POST /profile/podcasts/:podcastId/check - Check single podcast
+authenticated.post("/profile/podcasts/:podcastId/check", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    const podcastId = c.req.param("podcastId");
+    const podcast = await getMonitoredPodcast(c.env.TLDL_DATA, podcastId);
+
+    if (!podcast) {
+        return c.json({ error: "Podcast not found" }, 404);
+    }
+
+    const settings = await getMonitorSettings(c.env.TLDL_DATA);
+    const result = await checkPodcastForNewEpisodes(c.env, podcast, settings.maxEpisodesPerCheck);
+    return c.json(result);
+});
+
+// DELETE /profile/podcasts/:podcastId - Remove podcast from monitoring
+authenticated.delete("/profile/podcasts/:podcastId", async (c) => {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+
+    const userEmail = c.get("userEmail");
+    if (!isAdminUser(userEmail)) {
+        return c.json({ error: "Admin access required" }, 403);
+    }
+
+    const podcastId = c.req.param("podcastId");
+    await deleteMonitoredPodcast(c.env.TLDL_DATA, podcastId);
+    return c.json({ success: true });
 });
 
 export default authenticated;
