@@ -59,7 +59,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
 - **Podcast Index API**: Primary metadata source (`src/services/podcast-index.ts`) — replaces iTunes API due to 403 errors in Workers
 - **Apple Podcasts page scraping**: `getEpisodeTitleFromApplePage()` in `src/services/apple-podcasts.ts` extracts episode titles from HTML `<title>` tags when URL slugs are unreliable
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
-- **Audio chunking**: `src/lib/audio.ts` handles MP3 frame-aware splitting for large files (>25MB)
+- **Audio chunking**: `src/lib/audio.ts` handles MP3 frame-aware splitting for large files (>25MB, up to 300MB)
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
   - Home page uses `listActiveJobsWithDO()` to fetch active jobs from DO for real-time updates
   - Job status page uses `getJobWithFallback()` for immediate status visibility

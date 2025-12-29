@@ -145,6 +145,10 @@ src/
 | `episodes:index` | 365 days | Lightweight list for home page |
 | `ratelimit:{email}:{hour}` | 1 hour | Rate limiting |
 | `waitlist:{email}` | none | Waitlist signups |
+| `monitor:settings` | none | Podcast monitoring global settings |
+| `monitored:list` | none | List of monitored podcast IDs |
+| `monitored:{podcastId}` | none | Individual monitored podcast config |
+| `monitored:processed:{podcastId}` | none | Processed episode GUIDs per podcast |
 
 ## Configuration
 
@@ -243,6 +247,7 @@ Admin endpoints are under `/profile/*` (protected by Cloudflare Access). Availab
 
 | Tool | Endpoint | Description |
 |------|----------|-------------|
+| Monitor Podcasts | `GET /profile/podcasts` | Auto-queue new episodes from monitored podcasts |
 | Rebuild Index | `POST /profile/rebuild-index` | Rebuild episode index from all episodes |
 | Update Tags | `POST /profile/update-tags/:id` | Manually edit episode tags |
 | Edit Summary | `POST /profile/update-summary/:id/:templateId` | Edit summary text |
