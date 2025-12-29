@@ -15,6 +15,7 @@ import {
     saveMonitoredPodcast,
     addToMonitoredList,
     getEpisode,
+    getEpisodeIndex,
 } from "./kv";
 import { fetchAndParseFeed, type RssEpisode } from "../services/rss";
 import { lookupPodcastByItunesId, getEpisodesByItunesId } from "../services/podcast-index";
@@ -141,9 +142,11 @@ export async function addPodcastToMonitoring(
         if (matchedPiEpisode) {
             const episodeId = `${podcastId}_${matchedPiEpisode.id}`;
 
-            // Check if already exists in KV
+            // Check if already exists in KV (by ID or by title)
             const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
-            if (!existingEpisode) {
+            const existsByTitle = await episodeExistsByTitle(env, podcastId, latestEpisode.title);
+
+            if (!existingEpisode && !existsByTitle) {
                 // Queue the latest episode
                 await queueEpisodeForProcessing(env, {
                     podcastId,
@@ -152,7 +155,7 @@ export async function addPodcastToMonitoring(
                     expectedTitle: latestEpisode.title,
                     expectedDate: latestEpisode.pubDate,
                     templateId,
-                    appleUrl: `https://podcasts.apple.com/podcast/id${podcastId}?i=${matchedPiEpisode.id}`,
+                    appleUrl: `https://podcasts.apple.com/us/podcast/podcast/id${podcastId}?i=${matchedPiEpisode.id}`,
                 });
                 queuedLatest = true;
             }
@@ -236,9 +239,11 @@ export async function checkPodcastForNewEpisodes(
 
                 const episodeId = `${podcast.id}_${matchedPiEpisode.id}`;
 
-                // Check if already in KV (might have been manually submitted)
+                // Check if already in KV by ID or title (handles Apple vs Podcast Index ID mismatch)
                 const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
-                if (existingEpisode) {
+                const existsByTitle = await episodeExistsByTitle(env, podcast.id, rssEpisode.title);
+
+                if (existingEpisode || existsByTitle) {
                     await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
                     continue;
                 }
@@ -251,7 +256,7 @@ export async function checkPodcastForNewEpisodes(
                     expectedTitle: rssEpisode.title,
                     expectedDate: rssEpisode.pubDate,
                     templateId: podcast.templateId,
-                    appleUrl: `https://podcasts.apple.com/podcast/id${podcast.id}?i=${matchedPiEpisode.id}`,
+                    appleUrl: `https://podcasts.apple.com/us/podcast/podcast/id${podcast.id}?i=${matchedPiEpisode.id}`,
                 });
 
                 await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
@@ -476,3 +481,23 @@ function findMatchingPiEpisode(
 
     return null;
 }
+
+/**
+ * Check if an episode already exists by title for a given podcast
+ * This is needed because Apple episode IDs differ from Podcast Index IDs
+ */
+async function episodeExistsByTitle(
+    env: Env,
+    podcastId: string,
+    episodeTitle: string
+): Promise<boolean> {
+    const index = await getEpisodeIndex(env.TLDL_DATA);
+    const normalizedTitle = episodeTitle.toLowerCase().trim();
+
+    // Check if any episode for this podcast has a matching title
+    return index.some(ep =>
+        ep.id.startsWith(`${podcastId}_`) &&
+        ep.episodeTitle.toLowerCase().trim() === normalizedTitle
+    );
+}
+
