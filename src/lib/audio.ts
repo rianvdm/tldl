@@ -27,9 +27,10 @@ export const TARGET_CHUNK_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
 export const CHUNK_OVERLAP_BYTES = 32 * 1024; // 32KB (~2 seconds at 128kbps)
 
 /**
- * Maximum file size we'll attempt to transcribe (80 min at 192kbps = ~115MB)
+ * Maximum file size we'll attempt to transcribe (106 min at 256kbps = ~204MB)
+ * Increased to 300MB safety limit for higher bitrate files
  */
-export const MAX_TOTAL_SIZE_BYTES = 150 * 1024 * 1024; // 150MB safety limit
+export const MAX_TOTAL_SIZE_BYTES = 300 * 1024 * 1024; // 300MB safety limit
 
 // ============================================================================
 // Types

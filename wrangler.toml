@@ -45,3 +45,8 @@ class_name = "JobStatusDO"
 [[migrations]]
 tag = "v1"
 new_classes = ["JobStatusDO"]
+
+# Cron trigger for podcast monitoring
+[triggers]
+crons = ["0 */8 * * *"]  # Every 8 hours at minute 0
+

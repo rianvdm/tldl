@@ -66,6 +66,58 @@ export function parseApplePodcastsUrl(url: string): ParsedAppleUrl | null {
 }
 
 /**
+ * Result of parsing a podcast-level URL (no episode)
+ */
+export interface ParsedPodcastUrl {
+    podcastId: string;
+    country: string;
+}
+
+/**
+ * Parse an Apple Podcasts podcast URL and extract podcast ID
+ * 
+ * Valid URL format:
+ * https://podcasts.apple.com/{country}/podcast/{podcast-slug}/id{podcast_id}
+ * 
+ * Note: This accepts both podcast-level URLs and episode URLs (ignoring the episode ID)
+ *
+ * @param url - The Apple Podcasts URL to parse
+ * @returns ParsedPodcastUrl if valid, null otherwise
+ */
+export function parsePodcastUrl(url: string): ParsedPodcastUrl | null {
+    if (!url || typeof url !== "string") {
+        return null;
+    }
+
+    try {
+        const parsed = new URL(url);
+
+        // Must be podcasts.apple.com
+        if (parsed.hostname !== "podcasts.apple.com") {
+            return null;
+        }
+
+        // Extract country and podcast ID from path
+        // Pattern: /{country}/podcast/{slug}/id{podcastId}
+        const pathMatch = parsed.pathname.match(
+            /^\/([a-z]{2})\/podcast\/[^/]+\/id(\d+)\/?$/i
+        );
+
+        if (!pathMatch) {
+            return null;
+        }
+
+        return {
+            podcastId: pathMatch[2],
+            country: pathMatch[1].toLowerCase(),
+        };
+    } catch {
+        // URL constructor throws on invalid URLs
+        return null;
+    }
+}
+
+/**
  * Derive a stable episode ID for storage from podcast and episode IDs
  *
  * @param podcastId - The podcast ID from Apple

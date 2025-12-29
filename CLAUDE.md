@@ -125,6 +125,10 @@ Keys in `src/lib/kv.ts`:
 - `ratelimit:{email}:{hour}` - Rate limiting (TTL: 1 hour)
 - `episodes:index` - Lightweight episode list with tags for home page (TTL: 365 days)
 - `waitlist:{email}` - Waitlist signups (no TTL)
+- `monitor:settings` - Global podcast monitoring settings (no TTL)
+- `monitored:list` - Array of monitored podcast IDs (no TTL)
+- `monitored:{podcastId}` - Individual monitored podcast config (no TTL)
+- `monitored:processed:{podcastId}` - Array of processed episode GUIDs (no TTL)
 
 ### Routes
 
@@ -163,8 +167,22 @@ Keys in `src/lib/kv.ts`:
 - `POST /profile/cleanup-invalid-tags` - Admin only: Remove tags no longer in EPISODE_TAGS
 - `POST /profile/backfill-podcast-info` - Admin only: Backfill podcast metadata
 - `POST /profile/cleanup-failed-jobs` - Admin only: Clean up old failed jobs
+- `GET /profile/podcasts` - Admin only: Podcast monitoring page
+- `PUT /profile/podcasts/settings` - Admin only: Update monitoring settings
+- `POST /profile/podcasts/add` - Admin only: Add podcast to monitoring
+- `POST /profile/podcasts/check-now` - Admin only: Force check all podcasts
+- `POST /profile/podcasts/:podcastId/check` - Admin only: Check single podcast
+- `DELETE /profile/podcasts/:podcastId` - Admin only: Remove podcast from monitoring
 
 **Important**: Admin endpoints must be under `/profile/*` path to be protected by Cloudflare Access. Do not create admin endpoints under `/admin/*` or other paths - they won't be properly authenticated in production.
+
+### Podcast Monitoring
+
+Automatically monitors podcasts for new episodes and queues them for processing:
+- **Core logic**: `src/lib/monitor.ts` - Functions for adding podcasts, checking for new episodes
+- **Cron trigger**: Runs every 8 hours (configured in `wrangler.toml`)
+- **Admin UI**: `/profile/podcasts` - Add/remove podcasts, configure settings, manual check
+- **Episode deduplication**: Tracks processed episode GUIDs per podcast to avoid re-processing
 
 ### Summary Templates
 
