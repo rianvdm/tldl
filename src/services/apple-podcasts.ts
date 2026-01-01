@@ -5,6 +5,7 @@
 
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
+import { getCorrectedFeedUrl } from "../lib/feed-corrections";
 import type { ParsedAppleUrl } from "../lib/url-parser";
 import type { Env } from "../types";
 import { fetchAndParseFeed, findEpisodeInFeed } from "./rss";
@@ -693,7 +694,7 @@ async function getEpisodeFromPodcastIndex(
             }
         }
 
-        // Step 4: Find the specific episode
+        // Step 4: Find the specific episode in Podcast Index data
         const episode = findEpisodeByAppleId(
             episodes,
             parsedUrl.episodeId,
@@ -701,37 +702,159 @@ async function getEpisodeFromPodcastIndex(
             options.expectedDate
         );
 
-        if (!episode) {
-            return null;
+        if (episode) {
+            // Step 5: Validate duration if limit specified
+            if (options.maxMinutes !== undefined && episode.duration > 0) {
+                validateDuration(episode.duration, options.maxMinutes);
+            }
+
+            // Convert Unix timestamp to ISO date
+            const episodeDate = new Date(episode.datePublished * 1000).toISOString();
+
+            console.log(JSON.stringify({
+                event: "podcast_index_metadata_success",
+                podcastId: parsedUrl.podcastId,
+                episodeId: parsedUrl.episodeId,
+                episodeTitle: episode.title,
+                hasTranscript: !!episode.transcriptUrl,
+            }));
+
+            return {
+                podcastName: podcast.title,
+                episodeTitle: episode.title,
+                episodeDuration: episode.duration,
+                episodeDate,
+                audioUrl: episode.enclosureUrl,
+                feedUrl: podcast.url,
+                ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
+                ...(podcast.author && { podcastAuthor: podcast.author }),
+                ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
+            };
         }
 
-        // Step 4: Validate duration if limit specified
-        if (options.maxMinutes !== undefined && episode.duration > 0) {
-            validateDuration(episode.duration, options.maxMinutes);
-        }
-
-        // Convert Unix timestamp to ISO date
-        const episodeDate = new Date(episode.datePublished * 1000).toISOString();
-
+        // Step 5: Podcast Index doesn't have the episode - try fetching RSS feed directly
+        // This handles cases where Podcast Index is behind (stale data)
         console.log(JSON.stringify({
-            event: "podcast_index_metadata_success",
+            event: "podcast_index_fallback_to_rss",
             podcastId: parsedUrl.podcastId,
             episodeId: parsedUrl.episodeId,
-            episodeTitle: episode.title,
-            hasTranscript: !!episode.transcriptUrl,
+            feedUrl: podcast.url,
+            reason: "episode_not_in_podcast_index",
         }));
 
-        return {
-            podcastName: podcast.title,
-            episodeTitle: episode.title,
-            episodeDuration: episode.duration,
-            episodeDate,
-            audioUrl: episode.enclosureUrl,
-            feedUrl: podcast.url,
-            ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
-            ...(podcast.author && { podcastAuthor: podcast.author }),
-            ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
-        };
+        try {
+            const feed = await fetchAndParseFeed(podcast.url);
+            const rssEpisode = findEpisodeInFeed(feed, parsedUrl.episodeId, {
+                expectedTitle: titleForMatching,
+                expectedDate: options.expectedDate,
+            });
+
+            if (rssEpisode) {
+                // Validate duration if limit specified
+                if (options.maxMinutes !== undefined && rssEpisode.duration > 0) {
+                    validateDuration(rssEpisode.duration, options.maxMinutes);
+                }
+
+                console.log(JSON.stringify({
+                    event: "rss_fallback_metadata_success",
+                    podcastId: parsedUrl.podcastId,
+                    episodeId: parsedUrl.episodeId,
+                    episodeTitle: rssEpisode.title,
+                    hasTranscript: !!rssEpisode.transcriptUrl,
+                }));
+
+                return {
+                    podcastName: feed.title,
+                    episodeTitle: rssEpisode.title,
+                    episodeDuration: rssEpisode.duration,
+                    episodeDate: rssEpisode.pubDate,
+                    audioUrl: rssEpisode.audioUrl,
+                    feedUrl: podcast.url,
+                    ...(rssEpisode.transcriptUrl && { transcriptUrl: rssEpisode.transcriptUrl }),
+                    ...(rssEpisode.transcriptType && { transcriptType: rssEpisode.transcriptType }),
+                    ...(podcast.author && { podcastAuthor: podcast.author }),
+                    ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
+                };
+            }
+
+            console.log(JSON.stringify({
+                event: "rss_fallback_no_match",
+                podcastId: parsedUrl.podcastId,
+                episodeId: parsedUrl.episodeId,
+            }));
+        } catch (rssError) {
+            console.log(JSON.stringify({
+                event: "rss_fallback_error",
+                podcastId: parsedUrl.podcastId,
+                episodeId: parsedUrl.episodeId,
+                feedUrl: podcast.url,
+                error: rssError instanceof Error ? rssError.message : String(rssError),
+            }));
+
+            // Last resort: check if we have a known feed correction for this podcast
+            // This handles cases where Podcast Index has stale/dead feed URLs
+            const correctedFeedUrl = getCorrectedFeedUrl(parsedUrl.podcastId);
+            if (correctedFeedUrl && correctedFeedUrl !== podcast.url) {
+                console.log(JSON.stringify({
+                    event: "known_feed_correction_start",
+                    podcastId: parsedUrl.podcastId,
+                    episodeId: parsedUrl.episodeId,
+                    correctedFeedUrl,
+                    staleFeedUrl: podcast.url,
+                }));
+
+                try {
+                    const correctedFeed = await fetchAndParseFeed(correctedFeedUrl);
+                    const correctedEpisode = findEpisodeInFeed(correctedFeed, parsedUrl.episodeId, {
+                        expectedTitle: titleForMatching,
+                        expectedDate: options.expectedDate,
+                    });
+
+                    if (correctedEpisode) {
+                        // Validate duration if limit specified
+                        if (options.maxMinutes !== undefined && correctedEpisode.duration > 0) {
+                            validateDuration(correctedEpisode.duration, options.maxMinutes);
+                        }
+
+                        console.log(JSON.stringify({
+                            event: "known_feed_correction_success",
+                            podcastId: parsedUrl.podcastId,
+                            episodeId: parsedUrl.episodeId,
+                            episodeTitle: correctedEpisode.title,
+                            hasTranscript: !!correctedEpisode.transcriptUrl,
+                        }));
+
+                        return {
+                            podcastName: correctedFeed.title,
+                            episodeTitle: correctedEpisode.title,
+                            episodeDuration: correctedEpisode.duration,
+                            episodeDate: correctedEpisode.pubDate,
+                            audioUrl: correctedEpisode.audioUrl,
+                            feedUrl: correctedFeedUrl,
+                            ...(correctedEpisode.transcriptUrl && { transcriptUrl: correctedEpisode.transcriptUrl }),
+                            ...(correctedEpisode.transcriptType && { transcriptType: correctedEpisode.transcriptType }),
+                            ...(podcast.author && { podcastAuthor: podcast.author }),
+                            ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
+                        };
+                    }
+
+                    console.log(JSON.stringify({
+                        event: "known_feed_correction_no_match",
+                        podcastId: parsedUrl.podcastId,
+                        episodeId: parsedUrl.episodeId,
+                    }));
+                } catch (correctionError) {
+                    console.log(JSON.stringify({
+                        event: "known_feed_correction_error",
+                        podcastId: parsedUrl.podcastId,
+                        episodeId: parsedUrl.episodeId,
+                        error: correctionError instanceof Error ? correctionError.message : String(correctionError),
+                    }));
+                }
+            }
+        }
+
+        return null;
     } catch (error) {
         // Log the error and fall back to iTunes for ALL errors including rate limits
         // This ensures the job continues even when Podcast Index is unavailable

@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
+import { stripTruncationSuffix } from "../lib/title-utils";
 
 // ============================================================================
 // Types
@@ -264,10 +265,15 @@ function normalizeForMatching(text: string): string {
 /**
  * Check if two titles match (fuzzy)
  * Returns true if one title starts with or contains the other
+ * Handles truncated titles from Apple pages (ending with "…")
  */
 function titlesMatch(title1: string, title2: string): boolean {
-    const norm1 = normalizeForMatching(title1);
-    const norm2 = normalizeForMatching(title2);
+    // First, handle potential truncation in either title
+    const clean1 = stripTruncationSuffix(title1);
+    const clean2 = stripTruncationSuffix(title2);
+
+    const norm1 = normalizeForMatching(clean1);
+    const norm2 = normalizeForMatching(clean2);
 
     // Exact match
     if (norm1 === norm2) return true;
@@ -355,7 +361,9 @@ export function findEpisodeByAppleId(
         appleEpisodeId,
         expectedTitle,
         expectedDate,
-        normalizedExpected: expectedTitle ? normalizeForMatching(expectedTitle) : undefined,
+        cleanedExpected: expectedTitle ? stripTruncationSuffix(expectedTitle) : undefined,
+        normalizedExpected: expectedTitle ? normalizeForMatching(stripTruncationSuffix(expectedTitle)) : undefined,
+        sampleEpisodeTitles: episodes.slice(0, 5).map(ep => ep.title),
     }));
 
     return null;

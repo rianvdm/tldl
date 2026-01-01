@@ -6,6 +6,7 @@
 import { XMLParser } from "fast-xml-parser";
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
+import { stripTruncationSuffix, isTruncatedTitle } from "../lib/title-utils";
 
 /**
  * Episode data extracted from RSS feed
@@ -382,23 +383,24 @@ export function findEpisodeInFeed(
     // Strategy 3: Title similarity match (high confidence)
     if (options.expectedTitle) {
         // First check for truncated titles (ending with ellipsis)
-        // Apple pages often truncate long titles with "…" or "..."
-        const truncatedMatch = options.expectedTitle.match(/^(.+?)[…\.]{1,3}$/);
-        if (truncatedMatch) {
-            const prefix = normalizeText(truncatedMatch[1]);
+        // Apple pages often truncate long titles with "…" or "..." mid-word
+        if (isTruncatedTitle(options.expectedTitle)) {
+            const cleanedPrefix = stripTruncationSuffix(options.expectedTitle);
+            const normalizedPrefix = normalizeText(cleanedPrefix);
             console.log(JSON.stringify({
                 event: "episode_truncated_prefix_matching",
                 originalTitle: options.expectedTitle,
-                normalizedPrefix: prefix,
+                cleanedPrefix: cleanedPrefix,
+                normalizedPrefix: normalizedPrefix,
             }));
 
             for (const episode of feed.episodes) {
                 const normalizedEpisodeTitle = normalizeText(episode.title);
-                if (normalizedEpisodeTitle.startsWith(prefix)) {
+                if (normalizedEpisodeTitle.startsWith(normalizedPrefix)) {
                     console.log(JSON.stringify({
                         event: "episode_matched_truncated_prefix",
                         title: episode.title,
-                        prefix,
+                        prefix: normalizedPrefix,
                     }));
                     return episode;
                 }
