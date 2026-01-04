@@ -1584,6 +1584,18 @@ h4 {
     margin-bottom: 0;
 }
 
+.section-header-with-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.section-header-with-action h2 {
+    margin-bottom: 0;
+}
+
 /* ============================================================================
    Pagination
    ============================================================================ */

@@ -170,6 +170,39 @@ api.get("/templates", (c) => {
 });
 
 // ============================================================================
+// GET /api/episode/:episodeId/transcript.txt - Download transcript as text file
+// ============================================================================
+
+api.get("/episode/:episodeId/transcript.txt", async (c) => {
+    const episodeId = c.req.param("episodeId");
+
+    // Fetch episode for filename
+    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (!episode) {
+        return c.json({ error: "Episode not found" }, 404);
+    }
+
+    // Fetch transcript
+    const transcript = await getTranscript(c.env.TLDL_DATA, episodeId);
+    if (!transcript) {
+        return c.json({ error: "Transcript not found" }, 404);
+    }
+
+    // Create a safe filename from episode title
+    const safeTitle = episode.episodeTitle
+        .replace(/[^a-zA-Z0-9\s-]/g, "") // Remove special characters
+        .replace(/\s+/g, "-") // Replace spaces with dashes
+        .substring(0, 100); // Limit length
+    const filename = `${safeTitle}-transcript.txt`;
+
+    // Return as downloadable text file
+    c.header("Content-Type", "text/plain; charset=utf-8");
+    c.header("Content-Disposition", `attachment; filename="${filename}"`);
+
+    return c.body(transcript.text);
+});
+
+// ============================================================================
 // DELETE /api/job/:jobId - Delete a job (for stuck/failed jobs)
 // ============================================================================
 
