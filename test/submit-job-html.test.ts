@@ -266,23 +266,29 @@ describe("Homepage submit button", () => {
         await clearTestData();
     });
 
-    it("shows submit button in empty state", async () => {
+    it("shows disabled submit button for logged-out users in empty state", async () => {
         const response = await SELF.fetch("http://localhost/");
         const html = await response.text();
 
+        // Submit link exists (hidden for logged-out users, visible for logged-in)
         expect(html).toContain('href="/submit"');
-        expect(html).toContain("Submit Your First Episode");
+        // Disabled submit button shown for logged-out users
+        expect(html).toContain("nav-submit-disabled");
+        expect(html).toContain("Submissions are invite-only");
     });
 
-    it("shows submit button in header when episodes exist", async () => {
+    it("shows submit button in nav when episodes exist", async () => {
         const episode = createSampleEpisode();
         await saveEpisode(env.TLDL_DATA, episode);
 
         const response = await SELF.fetch("http://localhost/");
         const html = await response.text();
 
+        // Submit link exists in nav (for logged-in users)
         expect(html).toContain('href="/submit"');
-        expect(html).toContain("Submit Episode");
+        expect(html).toContain('class="nav-submit-btn auth-logged-in hidden"');
+        // Disabled button shown for logged-out users
+        expect(html).toContain("nav-submit-disabled");
     });
 });
 
