@@ -221,7 +221,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
     const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate, submittedBy } = ctx;
     const kv = env.TLDL_DATA;
-    const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 80;
+    const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 121;
 
     // Step 1: Quick check for existing episode and transcript (fast path)
     // Don't update status yet - check silently first

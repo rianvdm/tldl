@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents when working with code in this repository.
 
 ## Build and Development Commands
 
@@ -219,7 +219,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 - `TURNSTILE_SECRET` - Cloudflare Turnstile secret key (spam protection)
 
 **Environment Variables**:
-- `MAX_EPISODE_MINUTES` - Max duration (default: 106)
+- `MAX_EPISODE_MINUTES` - Max duration (default: 121)
 - `ENVIRONMENT` - `production` or `development`
 - `CACHE_TTL_DAYS` - Content cache TTL (default: 365)
 - `DEFAULT_TEMPLATE` - Default summary template (default: `key-takeaways`)

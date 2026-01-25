@@ -214,7 +214,7 @@ Sitemap: https://tldl-pod.com/sitemap.xml
         }
 
         try {
-            const metadata = await getEpisodeMetadata(parsed, { maxMinutes: 80, env: c.env });
+            const metadata = await getEpisodeMetadata(parsed, { maxMinutes: 121, env: c.env });
             return c.json({
                 success: true,
                 storageId: deriveEpisodeId(parsed.podcastId, parsed.episodeId),
