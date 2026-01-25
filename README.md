@@ -165,7 +165,7 @@ src/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAX_EPISODE_MINUTES` | 106 | Maximum episode duration |
+| `MAX_EPISODE_MINUTES` | 121 | Maximum episode duration (2 hours) |
 | `CACHE_TTL_DAYS` | 365 | How long to cache content |
 | `DEFAULT_TEMPLATE` | key-takeaways | Default summary template |
 | `TURNSTILE_SITE_KEY` | — | Turnstile widget site key |
@@ -312,7 +312,7 @@ To add/remove tags:
 
 ## More Documentation
 
-See `CLAUDE.md` for detailed architecture documentation, including:
+See `AGENTS.md` for detailed architecture documentation, including:
 - Complete route reference
 - All KV key patterns
 - Durable Object implementation
