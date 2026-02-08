@@ -1838,10 +1838,11 @@ function buildRssFeed(
             ? ep.tags.map((tag) => `        <category>${escapeXml(tag)}</category>`).join("\n")
             : "";
         
-        // Use summary as description if available, otherwise fall back to podcast name + duration
+        // Build description with podcast info header and summary (converted to HTML)
+        const podcastInfo = `${ep.podcastName} • ${formatDuration(ep.episodeDuration)}`;
         const description = ep.summaryText
-            ? `<![CDATA[${ep.summaryText}]]>`
-            : escapeXml(`${ep.podcastName} • ${formatDuration(ep.episodeDuration)}`);
+            ? `<![CDATA[<p><strong>${escapeHtml(podcastInfo)}</strong></p>${renderMarkdown(ep.summaryText)}]]>`
+            : escapeXml(podcastInfo);
 
         return `    <item>
       <title>${escapeXml(ep.episodeTitle)}</title>
