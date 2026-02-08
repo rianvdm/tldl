@@ -1805,10 +1805,17 @@ function toRfc822Date(isoDate: string): string {
 }
 
 /**
- * Build RSS 2.0 feed XML
+ * Episode with summary for RSS feed
+ */
+interface EpisodeWithSummary extends EpisodeIndexEntry {
+    summaryText?: string;
+}
+
+/**
+ * Build RSS 2.0 feed XML with summaries
  */
 function buildRssFeed(
-    episodes: EpisodeIndexEntry[],
+    episodes: EpisodeWithSummary[],
     tagFilter: string | undefined,
     baseUrl: string
 ): string {
@@ -1830,13 +1837,18 @@ function buildRssFeed(
         const categories = ep.tags
             ? ep.tags.map((tag) => `        <category>${escapeXml(tag)}</category>`).join("\n")
             : "";
+        
+        // Use summary as description if available, otherwise fall back to podcast name + duration
+        const description = ep.summaryText
+            ? `<![CDATA[${ep.summaryText}]]>`
+            : escapeXml(`${ep.podcastName} • ${formatDuration(ep.episodeDuration)}`);
 
         return `    <item>
       <title>${escapeXml(ep.episodeTitle)}</title>
       <link>${itemLink}</link>
       <guid isPermaLink="true">${itemLink}</guid>
       <pubDate>${toRfc822Date(ep.createdAt)}</pubDate>
-      <description>${escapeXml(ep.podcastName)} • ${formatDuration(ep.episodeDuration)}</description>
+      <description>${description}</description>
       <source url="${baseUrl}/feed">${escapeXml(ep.podcastName)}</source>
 ${categories}
     </item>`;
@@ -2150,12 +2162,25 @@ publicRoutes.get("/feed", async (c) => {
         tag: tagFilter || undefined,
     });
 
+    // Fetch summaries for each episode in parallel
+    const episodesWithSummaries = await Promise.all(
+        episodes.map(async (ep) => {
+            const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, ep.id);
+            // Use the first (most recent) summary, or the default template if available
+            const summary = summaries.find(s => s.templateId === c.env.DEFAULT_TEMPLATE) || summaries[0];
+            return {
+                ...ep,
+                summaryText: summary?.text,
+            };
+        })
+    );
+
     // Build the base URL from the request
     const url = new URL(c.req.url);
     const baseUrl = `${url.protocol}//${url.host}`;
 
     // Generate RSS feed
-    const xml = buildRssFeed(episodes, tagFilter || undefined, baseUrl);
+    const xml = buildRssFeed(episodesWithSummaries, tagFilter || undefined, baseUrl);
 
     // Return with proper content type and caching (1 hour cache)
     return c.text(xml, {
