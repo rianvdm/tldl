@@ -1,7 +1,11 @@
 /**
- * Transcription service using OpenAI Whisper API
+ * Transcription service supporting multiple providers (OpenAI Whisper, Groq Whisper)
  * Handles audio validation and transcription for podcast episodes
  * Supports chunked transcription for files over 25MB
+ *
+ * Provider switching is controlled via the TRANSCRIPTION_PROVIDER env var.
+ * Groq's API is OpenAI-compatible, so both share the same code path
+ * with different base URLs, model names, and API keys.
  */
 
 import { AppError } from "../lib/errors";
@@ -12,6 +16,7 @@ import {
     requiresChunking,
     estimateTranscriptionTime,
 } from "../lib/audio";
+import type { TranscriptionProvider } from "../types";
 
 // Use centralized constant for Whisper size limit
 const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
@@ -23,9 +28,41 @@ const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
  */
 const AUDIO_HEADER_SIZE_BYTES = 512;
 
+// ============================================================================
+// Provider Configuration
+// ============================================================================
+
+interface ProviderConfig {
+    baseUrl: string;
+    model: string;
+    name: TranscriptionProvider;
+}
+
+const PROVIDER_CONFIGS: Record<TranscriptionProvider, ProviderConfig> = {
+    openai: {
+        baseUrl: "https://api.openai.com/v1/audio/transcriptions",
+        model: "whisper-1",
+        name: "openai",
+    },
+    groq: {
+        baseUrl: "https://api.groq.com/openai/v1/audio/transcriptions",
+        model: "whisper-large-v3-turbo",
+        name: "groq",
+    },
+};
+
+/**
+ * Resolve provider config from env var string.
+ * Defaults to "openai" for backwards compatibility.
+ */
+export function getProviderConfig(provider?: string): ProviderConfig {
+    if (provider === "groq") return PROVIDER_CONFIGS.groq;
+    return PROVIDER_CONFIGS.openai;
+}
+
 export interface TranscriptionResult {
     text: string;
-    source: "openai";
+    source: TranscriptionProvider;
 }
 
 export interface AudioValidation {
@@ -146,22 +183,25 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
 }
 
 /**
- * Call OpenAI Whisper API to transcribe audio.
+ * Call Whisper-compatible API to transcribe audio.
+ * Works with both OpenAI and Groq (same API shape).
  * 
  * @param audioBuffer - Audio data as ArrayBuffer
- * @param apiKey - OpenAI API key
+ * @param apiKey - API key for the provider
+ * @param provider - Provider config (OpenAI or Groq)
  * @returns Transcribed text
  * @throws AppError with TRANSCRIPTION_FAILED or RATE_LIMITED
  */
 async function callWhisperApi(
     audioBuffer: ArrayBuffer,
     apiKey: string,
+    provider: ProviderConfig = PROVIDER_CONFIGS.openai,
 ): Promise<string> {
     // Create form data with audio file
     const formData = new FormData();
     const audioBlob = new Blob([audioBuffer], { type: "audio/mpeg" });
     formData.append("file", audioBlob, "audio.mp3");
-    formData.append("model", "whisper-1");
+    formData.append("model", provider.model);
     formData.append("response_format", "text");
 
     const controller = new AbortController();
@@ -171,13 +211,15 @@ async function callWhisperApi(
     console.log(
         JSON.stringify({
             event: "whisper_api_call_start",
+            provider: provider.name,
+            model: provider.model,
             audioSizeMB: Math.round(audioBuffer.byteLength / 1024 / 1024 * 100) / 100,
         })
     );
 
     let response: Response;
     try {
-        response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        response = await fetch(provider.baseUrl, {
             method: "POST",
             headers: {
                 Authorization: `Bearer ${apiKey}`,
@@ -193,19 +235,21 @@ async function callWhisperApi(
             console.error(
                 JSON.stringify({
                     event: "whisper_api_timeout",
+                    provider: provider.name,
                     elapsedMs: elapsed,
                     timeoutMs: TIMEOUTS.WHISPER_API_MS,
                 })
             );
             throw new AppError(
                 ERROR_CODES.TRANSCRIPTION_FAILED,
-                `Whisper API timed out after ${Math.round(elapsed / 1000)}s`,
+                `${provider.name} Whisper API timed out after ${Math.round(elapsed / 1000)}s`,
             );
         }
 
         console.error(
             JSON.stringify({
                 event: "whisper_api_network_error",
+                provider: provider.name,
                 elapsedMs: elapsed,
                 error: error instanceof Error ? error.message : "Unknown error",
             })
@@ -232,6 +276,7 @@ async function callWhisperApi(
         console.error(
             JSON.stringify({
                 event: "whisper_api_error",
+                provider: provider.name,
                 status,
                 elapsedMs: elapsed,
                 error: errorText,
@@ -239,13 +284,14 @@ async function callWhisperApi(
         );
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
-            `Whisper API error: ${errorText}`,
+            `${provider.name} Whisper API error: ${errorText}`,
         );
     }
 
     console.log(
         JSON.stringify({
             event: "whisper_api_call_complete",
+            provider: provider.name,
             elapsedMs: elapsed,
             elapsedSeconds: Math.round(elapsed / 1000),
         })
@@ -256,30 +302,62 @@ async function callWhisperApi(
 }
 
 /**
- * Transcribe audio from URL using OpenAI Whisper API.
+ * Options for configuring the transcription provider
+ */
+export interface TranscribeOptions {
+    /** API key for the transcription provider */
+    apiKey: string;
+    /** Provider name: "openai" or "groq" (defaults to "openai") */
+    provider?: string;
+    /** Optional callback for progress updates (chunk number, total chunks) */
+    onProgress?: (currentChunk: number, totalChunks: number) => void;
+}
+
+/**
+ * Transcribe audio from URL using a Whisper-compatible API.
+ * Supports OpenAI and Groq as providers (controlled via options.provider).
  * Automatically handles large files by chunking them into smaller segments.
  * 
  * @param audioUrl - URL of the audio file to transcribe
- * @param openaiApiKey - OpenAI API key
- * @param onProgress - Optional callback for progress updates (chunk number, total chunks)
+ * @param options - Transcription options (apiKey, provider, onProgress)
  * @returns Transcription result with text and source
  * @throws AppError with AUDIO_UNAVAILABLE, TRANSCRIPTION_FAILED, or RATE_LIMITED
  * 
  * @example
  * ```typescript
- * const result = await transcribeAudio(
- *   "https://example.com/podcast.mp3",
- *   process.env.OPENAI_API_KEY,
- *   (current, total) => console.log(`Processing chunk ${current}/${total}`)
- * );
- * console.log(result.text);
+ * // Using OpenAI (default)
+ * const result = await transcribeAudio("https://example.com/podcast.mp3", {
+ *   apiKey: env.OPENAI_API_KEY,
+ * });
+ *
+ * // Using Groq
+ * const result = await transcribeAudio("https://example.com/podcast.mp3", {
+ *   apiKey: env.GROQ_API_KEY,
+ *   provider: "groq",
+ * });
  * ```
  */
 export async function transcribeAudio(
     audioUrl: string,
-    openaiApiKey: string,
+    options: TranscribeOptions | string,
     onProgress?: (currentChunk: number, totalChunks: number) => void,
 ): Promise<TranscriptionResult> {
+    // Support legacy call signature: transcribeAudio(url, apiKey, onProgress?)
+    const opts: TranscribeOptions = typeof options === "string"
+        ? { apiKey: options, provider: "openai", onProgress }
+        : options;
+
+    const providerConfig = getProviderConfig(opts.provider);
+    const progressCallback = opts.onProgress || onProgress;
+
+    console.log(
+        JSON.stringify({
+            event: "transcription_start",
+            provider: providerConfig.name,
+            model: providerConfig.model,
+        })
+    );
+
     // Step 1: Validate audio URL and check size
     const validation = await validateAudioUrl(audioUrl);
 
@@ -289,6 +367,7 @@ export async function transcribeAudio(
         console.log(
             JSON.stringify({
                 event: "chunked_transcription_start",
+                provider: providerConfig.name,
                 contentLength: validation.contentLength,
                 contentLengthMB: Math.round(validation.contentLength / 1024 / 1024),
             })
@@ -296,8 +375,9 @@ export async function transcribeAudio(
         return await transcribeWithChunking(
             audioUrl,
             validation.contentLength,
-            openaiApiKey,
-            onProgress
+            opts.apiKey,
+            providerConfig,
+            progressCallback,
         );
     }
 
@@ -317,14 +397,15 @@ export async function transcribeAudio(
         return await transcribeWithChunking(
             audioUrl,
             audioBuffer.byteLength,
-            openaiApiKey,
-            onProgress
+            opts.apiKey,
+            providerConfig,
+            progressCallback,
         );
     }
 
     // Step 3: Call Whisper API with retry for transient errors
     const text = await withRetry(
-        () => callWhisperApi(audioBuffer, openaiApiKey),
+        () => callWhisperApi(audioBuffer, opts.apiKey, providerConfig),
         {
             maxRetries: 3,
             baseDelayMs: 1000,
@@ -334,7 +415,7 @@ export async function transcribeAudio(
 
     return {
         text: text.trim(),
-        source: "openai",
+        source: providerConfig.name,
     };
 }
 
@@ -350,14 +431,16 @@ export async function transcribeAudio(
  * 
  * @param audioUrl - URL of the audio file
  * @param contentLength - Total file size in bytes
- * @param openaiApiKey - OpenAI API key
+ * @param apiKey - API key for the transcription provider
+ * @param provider - Provider config (OpenAI or Groq)
  * @param onProgress - Optional progress callback
  * @returns Combined transcription result
  */
 async function transcribeWithChunking(
     audioUrl: string,
     contentLength: number,
-    openaiApiKey: string,
+    apiKey: string,
+    provider: ProviderConfig,
     onProgress?: (currentChunk: number, totalChunks: number) => void,
 ): Promise<TranscriptionResult> {
     // Calculate chunk ranges
@@ -443,7 +526,7 @@ async function transcribeWithChunking(
 
             // Transcribe the chunk
             const text = await withRetry(
-                () => callWhisperApi(bufferToTranscribe, openaiApiKey),
+                () => callWhisperApi(bufferToTranscribe, apiKey, provider),
                 {
                     maxRetries: 3,
                     baseDelayMs: 1000,
@@ -502,7 +585,7 @@ async function transcribeWithChunking(
 
     return {
         text: combinedText,
-        source: "openai",
+        source: provider.name,
     };
 }
 

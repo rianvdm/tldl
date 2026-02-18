@@ -35,6 +35,22 @@ export interface ItunesEpisodeInfo {
 }
 
 /**
+ * Decode common HTML entities in a string.
+ * Apple Podcasts page titles often contain entities like &amp; &quot; etc.
+ */
+function decodeHtmlEntities(text: string): string {
+    return text
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'")
+        .replace(/&#x27;/g, "'")
+        .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)));
+}
+
+/**
  * Extract episode title by fetching the Apple Podcasts page HTML
  * The page <title> tag contains the actual episode title in format:
  * "Episode Title - Podcast Name - Apple Podcasts"
@@ -77,7 +93,8 @@ async function getEpisodeTitleFromApplePage(
             // Handle truncated titles with "…" 
             const parts = fullTitle.split(' - ');
             if (parts.length >= 2) {
-                const episodeTitle = parts[0].trim();
+                // Decode HTML entities (e.g. &amp; → &, &quot; → ")
+                const episodeTitle = decodeHtmlEntities(parts[0].trim());
                 console.log(JSON.stringify({
                     event: "apple_page_title_extracted",
                     fullTitle,
@@ -91,11 +108,13 @@ async function getEpisodeTitleFromApplePage(
         const ogMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
             html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
         if (ogMatch) {
+            // Decode HTML entities
+            const ogTitle = decodeHtmlEntities(ogMatch[1].trim());
             console.log(JSON.stringify({
                 event: "apple_page_og_title_extracted",
-                title: ogMatch[1],
+                title: ogTitle,
             }));
-            return ogMatch[1].trim();
+            return ogTitle;
         }
 
         console.log(JSON.stringify({

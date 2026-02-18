@@ -1,11 +1,12 @@
 /**
- * Tests for Transcription Service (OpenAI Whisper API)
+ * Tests for Transcription Service (OpenAI Whisper & Groq Whisper)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
     transcribeAudio,
     validateAudioUrl,
+    getProviderConfig,
 } from "../src/services/transcription";
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
@@ -338,6 +339,177 @@ describe("withRetry", () => {
         }
 
         expect(fn).toHaveBeenCalledTimes(1); // No retries
+    });
+});
+
+describe("getProviderConfig", () => {
+    it("should return OpenAI config by default", () => {
+        const config = getProviderConfig();
+        expect(config.name).toBe("openai");
+        expect(config.baseUrl).toBe("https://api.openai.com/v1/audio/transcriptions");
+        expect(config.model).toBe("whisper-1");
+    });
+
+    it("should return OpenAI config for undefined provider", () => {
+        const config = getProviderConfig(undefined);
+        expect(config.name).toBe("openai");
+    });
+
+    it("should return OpenAI config for 'openai' provider", () => {
+        const config = getProviderConfig("openai");
+        expect(config.name).toBe("openai");
+        expect(config.model).toBe("whisper-1");
+    });
+
+    it("should return Groq config for 'groq' provider", () => {
+        const config = getProviderConfig("groq");
+        expect(config.name).toBe("groq");
+        expect(config.baseUrl).toBe("https://api.groq.com/openai/v1/audio/transcriptions");
+        expect(config.model).toBe("whisper-large-v3-turbo");
+    });
+
+    it("should default to OpenAI for unknown provider strings", () => {
+        const config = getProviderConfig("unknown");
+        expect(config.name).toBe("openai");
+    });
+});
+
+describe("transcribeAudio with options object", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("should use OpenAI when provider is 'openai'", async () => {
+        const mockAudioBuffer = new ArrayBuffer(1024);
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": "1024",
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 200 })
+            )
+            .mockResolvedValueOnce(
+                new Response("OpenAI transcription.", { status: 200 })
+            );
+
+        const result = await transcribeAudio(
+            "https://example.com/audio.mp3",
+            { apiKey: "openai-key", provider: "openai" }
+        );
+
+        expect(result.text).toBe("OpenAI transcription.");
+        expect(result.source).toBe("openai");
+
+        // Verify the Whisper API was called with OpenAI URL
+        const whisperCall = fetchSpy.mock.calls[2];
+        expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
+    });
+
+    it("should use Groq when provider is 'groq'", async () => {
+        const mockAudioBuffer = new ArrayBuffer(1024);
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": "1024",
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 200 })
+            )
+            .mockResolvedValueOnce(
+                new Response("Groq transcription.", { status: 200 })
+            );
+
+        const result = await transcribeAudio(
+            "https://example.com/audio.mp3",
+            { apiKey: "groq-key", provider: "groq" }
+        );
+
+        expect(result.text).toBe("Groq transcription.");
+        expect(result.source).toBe("groq");
+
+        // Verify the Whisper API was called with Groq URL
+        const whisperCall = fetchSpy.mock.calls[2];
+        expect(whisperCall[0]).toBe("https://api.groq.com/openai/v1/audio/transcriptions");
+    });
+
+    it("should default to OpenAI when provider is not specified in options", async () => {
+        const mockAudioBuffer = new ArrayBuffer(1024);
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": "1024",
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 200 })
+            )
+            .mockResolvedValueOnce(
+                new Response("Default provider transcription.", { status: 200 })
+            );
+
+        const result = await transcribeAudio(
+            "https://example.com/audio.mp3",
+            { apiKey: "some-key" }
+        );
+
+        expect(result.text).toBe("Default provider transcription.");
+        expect(result.source).toBe("openai");
+
+        // Verify it used OpenAI URL
+        const whisperCall = fetchSpy.mock.calls[2];
+        expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
+    });
+
+    it("should support legacy string API key argument", async () => {
+        const mockAudioBuffer = new ArrayBuffer(1024);
+
+        vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": "1024",
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 200 })
+            )
+            .mockResolvedValueOnce(
+                new Response("Legacy call transcription.", { status: 200 })
+            );
+
+        // Legacy call signature: transcribeAudio(url, apiKeyString)
+        const result = await transcribeAudio(
+            "https://example.com/audio.mp3",
+            "test-api-key"
+        );
+
+        expect(result.text).toBe("Legacy call transcription.");
+        expect(result.source).toBe("openai");
     });
 });
 

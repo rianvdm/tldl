@@ -29,6 +29,11 @@ vi.mock("../src/services/rss", () => ({
 
 vi.mock("../src/services/transcription", () => ({
     transcribeAudio: vi.fn(),
+    getProviderConfig: vi.fn().mockReturnValue({
+        baseUrl: "https://api.openai.com/v1/audio/transcriptions",
+        model: "whisper-1",
+        name: "openai",
+    }),
 }));
 
 vi.mock("../src/services/summarization", () => ({
@@ -53,6 +58,7 @@ function getTestEnv(): Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
+        TRANSCRIPTION_PROVIDER: "openai",
     } as Env;
 }
 

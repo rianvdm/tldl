@@ -32,7 +32,7 @@ import {
 } from "../lib/job-status-do";
 import { getEpisodeMetadata } from "../services/apple-podcasts";
 import { fetchTranscript as fetchRssTranscript } from "../services/rss";
-import { transcribeAudio } from "../services/transcription";
+import { transcribeAudio, getProviderConfig } from "../services/transcription";
 import { generateSummary } from "../services/summarization";
 
 // ============================================================================
@@ -326,16 +326,22 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const estimatedTranscriptionSeconds = Math.round((durationMinutes / 15) * 90);
         await updateJobEstimateBoth(env, kv, jobId, estimatedTranscriptionSeconds + 30);
 
+        // Resolve transcription provider from env (defaults to "openai")
+        const providerConfig = getProviderConfig(env.TRANSCRIPTION_PROVIDER);
+        const transcriptionApiKey = providerConfig.name === "groq"
+            ? env.GROQ_API_KEY
+            : env.OPENAI_API_KEY;
+
         const transcriptionResult = await transcribeAudio(
             metadata.audioUrl,
-            env.OPENAI_API_KEY
+            { apiKey: transcriptionApiKey, provider: providerConfig.name },
         );
 
-        transcriptSource = "openai";
+        transcriptSource = transcriptionResult.source;
         transcript = {
             episodeId,
             text: transcriptionResult.text,
-            source: "openai",
+            source: transcriptionResult.source,
             createdAt: new Date().toISOString(),
         };
         await saveTranscript(kv, transcript);
