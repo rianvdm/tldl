@@ -137,8 +137,12 @@ Sitemap: https://tldl-pod.com/sitemap.xml
         });
     });
 
-    // Debug route for URL parsing (will be removed in production)
+    // Debug route for URL parsing (disabled in production)
     app.get("/debug/parse", (c) => {
+        if (c.env.ENVIRONMENT !== "development") {
+            return c.json({ error: "Debug routes are disabled in production" }, 403);
+        }
+
         const url = c.req.query("url");
         if (!url) {
             return c.json({ error: "Missing url query parameter" }, 400);
@@ -150,8 +154,12 @@ Sitemap: https://tldl-pod.com/sitemap.xml
         return c.json({ parsed, storageId });
     });
 
-    // Debug route for audio validation (will be removed in production)
+    // Debug route for audio validation (disabled in production)
     app.get("/debug/validate-audio", async (c) => {
+        if (c.env.ENVIRONMENT !== "development") {
+            return c.json({ error: "Debug routes are disabled in production" }, 403);
+        }
+
         const audioUrl = c.req.query("url");
         if (!audioUrl) {
             return c.json({ error: "Missing url query parameter" }, 400);
