@@ -573,9 +573,22 @@ describe("detectAudioFormat", () => {
         expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("mp3");
     });
 
-    it("should detect MP3 via MPEG sync word", () => {
+    it("should detect MP3 via MPEG sync word (Layer III)", () => {
+        // 0xFB = 1111_1011 → layer bits = (0xFB >> 1) & 0x03 = 01 (Layer III = MP3)
         const buffer = new Uint8Array([0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00]).buffer;
         expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("mp3");
+    });
+
+    it("should detect ADTS AAC via MPEG sync word (Layer 00)", () => {
+        // 0xF1 = 1111_0001 → layer bits = (0xF1 >> 1) & 0x03 = 00 (ADTS AAC)
+        const buffer = new Uint8Array([0xFF, 0xF1, 0x50, 0x80, 0x00, 0x00, 0x00, 0x00]).buffer;
+        expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("m4a");
+    });
+
+    it("should detect ADTS AAC with MPEG-2 ID bit", () => {
+        // 0xF9 = 1111_1001 → layer bits = (0xF9 >> 1) & 0x03 = 00 (ADTS AAC, MPEG-2 variant)
+        const buffer = new Uint8Array([0xFF, 0xF9, 0x50, 0x80, 0x00, 0x00, 0x00, 0x00]).buffer;
+        expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("m4a");
     });
 
     it("should detect M4A via ftyp box", () => {

@@ -88,8 +88,18 @@ export function detectAudioFormat(buffer: ArrayBuffer, contentType: string): str
             return "mp3";
         }
 
-        // MP3: MPEG sync word (0xFF followed by 0xE0+ mask)
+        // MPEG audio sync word: 0xFF followed by 0xE0+ mask
+        // Both MP3 and ADTS AAC use this sync pattern — the layer bits distinguish them:
+        //   layer bits ((byte1 >> 1) & 0x03):
+        //     00 = ADTS AAC (raw AAC stream, common in podcasts)
+        //     01 = MPEG Layer III (MP3)
+        //     10 = MPEG Layer II
+        //     11 = MPEG Layer I
         if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) {
+            const layerBits = (bytes[1] >> 1) & 0x03;
+            if (layerBits === 0x00) {
+                return "m4a"; // ADTS AAC — use m4a as the closest supported format
+            }
             return "mp3";
         }
 
