@@ -307,12 +307,18 @@ async function callWhisperApi(
     const ext = detectAudioFormat(audioBuffer, contentType);
     const blobMime = mimeFromExtension(ext);
 
+    // Log first 16 bytes as hex for debugging format detection
+    const preview = new Uint8Array(audioBuffer, 0, Math.min(16, audioBuffer.byteLength));
+    const hexBytes = Array.from(preview).map(b => b.toString(16).padStart(2, "0")).join(" ");
+
     console.log(
         JSON.stringify({
             event: "audio_format_detected",
             detectedExtension: ext,
             blobMime,
             headerContentType: contentType,
+            bufferSizeBytes: audioBuffer.byteLength,
+            firstBytesHex: hexBytes,
         })
     );
 
@@ -779,6 +785,18 @@ async function fetchAudioChunkOnce(
                 `Failed to fetch audio chunk: HTTP ${response.status}`,
             );
         }
+
+        const chunkContentType = response.headers.get("content-type") || "unknown";
+        const chunkContentLength = response.headers.get("content-length") || "unknown";
+        console.log(
+            JSON.stringify({
+                event: "chunk_fetch_response",
+                status: response.status,
+                contentType: chunkContentType,
+                contentLength: chunkContentLength,
+                rangeRequested: `bytes=${startByte}-${endByte}`,
+            })
+        );
 
         return await response.arrayBuffer();
     } catch (error) {
