@@ -40,7 +40,7 @@ interface ResponsesApiResponse {
 // ============================================================================
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const MODEL = "gpt-5.2";
+const MODEL = "gpt-5.4";
 
 /**
  * Build the tag generation prompt

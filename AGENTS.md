@@ -49,7 +49,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI gpt-4o-mini-transcribe for transcription (with chunking for >25MB files)
    - Generates summary via OpenAI GPT-5.4
-   - Generates 1-4 AI tags using GPT-5.2 (non-critical: continues if fails)
+   - Generates 1-4 AI tags using GPT-5.4 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
 3. **View** (`GET /episode/:id`): Serves cached episodes with summary, transcript, and tags
 
@@ -65,7 +65,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
   - Job status page uses `getJobWithFallback()` for immediate status visibility
   - Both auto-refresh when jobs are active (home: 10s, job page: 5s)
 - **Styling**: All CSS is in `src/lib/styles.ts` (not a `.css` file) — Cloudflare Workers can't read from the filesystem, so styles are embedded in TypeScript
-- **Episode Tags**: AI-generated using GPT-5.2 Responses API during queue processing (1-4 tags per episode)
+- **Episode Tags**: AI-generated using GPT-5.4 Responses API during queue processing (1-4 tags per episode)
   - Tags stored inline in both Episode and EpisodeIndexEntry for efficient filtering
   - Predefined tag list in `src/lib/constants.ts` (EPISODE_TAGS)
   - Tag generation is non-critical: empty tags don't fail jobs
@@ -258,7 +258,7 @@ src/
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI gpt-4o-mini-transcribe
 │   ├── summarization.ts  # OpenAI GPT-5.4
-│   └── tag-generation.ts # OpenAI GPT-5.2 for episode tags
+│   └── tag-generation.ts # OpenAI GPT-5.4 for episode tags
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages
 │   ├── api.ts            # JSON API
@@ -280,7 +280,7 @@ src/
 
 ## Important Notes
 
-- **GPT-5.4 exists**: The project uses OpenAI GPT-5.4 for summarization and GPT-5.2 for tag generation. These are real models - do not change references to GPT-4o or other models unless explicitly instructed.
+- **GPT-5.4 exists**: The project uses OpenAI GPT-5.4 for both summarization and tag generation. This is a real model - do not change references to GPT-4o or other models unless explicitly instructed.
 
 ## How to Restore Transcripts on Episode Pages
 

@@ -90,7 +90,7 @@ src/
 │   ├── rss.ts               # RSS parsing + episode matching
 │   ├── transcription.ts     # OpenAI gpt-4o-mini-transcribe integration
 │   ├── summarization.ts     # GPT-5.4 summary generation
-│   └── tag-generation.ts    # GPT-5.2 tag generation
+│   └── tag-generation.ts    # GPT-5.4 tag generation
 ├── routes/
 │   ├── public.ts            # Public pages (home, episodes, podcasts)
 │   ├── api.ts               # JSON API endpoints
@@ -117,7 +117,7 @@ src/
    - Check for existing transcript in RSS feed
    - Transcribe with OpenAI gpt-4o-mini-transcribe (chunking for >25MB)
    - Generate summary with GPT-5.4
-   - Generate 1-4 tags with GPT-5.2 (non-critical)
+   - Generate 1-4 tags with GPT-5.4 (non-critical)
    - Store in KV with 365-day TTL
 
 3. **View** (`GET /episode/:id`): Serve cached episode with summary
