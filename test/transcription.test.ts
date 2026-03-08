@@ -8,6 +8,7 @@ import {
     validateAudioUrl,
     getProviderConfig,
     extensionFromMime,
+    detectAudioFormat,
 } from "../src/services/transcription";
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
@@ -562,5 +563,39 @@ describe("extensionFromMime", () => {
     it("should fall back to mp3 for unknown types", () => {
         expect(extensionFromMime("application/octet-stream")).toBe("mp3");
         expect(extensionFromMime("unknown")).toBe("mp3");
+    });
+});
+
+describe("detectAudioFormat", () => {
+    it("should detect MP3 via ID3 tag header", () => {
+        // ID3v2 header: 0x49 0x44 0x33
+        const buffer = new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00]).buffer;
+        expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("mp3");
+    });
+
+    it("should detect MP3 via MPEG sync word", () => {
+        const buffer = new Uint8Array([0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00]).buffer;
+        expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("mp3");
+    });
+
+    it("should detect M4A via ftyp box", () => {
+        // ftyp at bytes 4-7: 0x66 0x74 0x79 0x70
+        const buffer = new Uint8Array([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x4D, 0x34, 0x41, 0x20]).buffer;
+        expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("m4a");
+    });
+
+    it("should detect WAV via RIFF header", () => {
+        const buffer = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00]).buffer;
+        expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("wav");
+    });
+
+    it("should fall back to content-type header when bytes are unrecognized", () => {
+        const buffer = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).buffer;
+        expect(detectAudioFormat(buffer, "audio/mp4")).toBe("m4a");
+    });
+
+    it("should fall back to mp3 for unrecognized bytes and generic header", () => {
+        const buffer = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).buffer;
+        expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("mp3");
     });
 });

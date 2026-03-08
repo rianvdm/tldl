@@ -72,6 +72,57 @@ function mimeFromExtension(ext: string): string {
     return EXTENSION_TO_MIME[ext] ?? "audio/mpeg";
 }
 
+/**
+ * Detect audio format from the actual binary content (magic bytes).
+ * Much more reliable than trusting CDN content-type headers, which
+ * often return application/octet-stream for M4A files.
+ *
+ * Falls back to the content-type header if magic bytes are unrecognized.
+ */
+export function detectAudioFormat(buffer: ArrayBuffer, contentType: string): string {
+    const bytes = new Uint8Array(buffer, 0, Math.min(12, buffer.byteLength));
+
+    if (bytes.length >= 4) {
+        // MP3: ID3 tag header (ID3v2)
+        if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+            return "mp3";
+        }
+
+        // MP3: MPEG sync word (0xFF followed by 0xE0+ mask)
+        if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) {
+            return "mp3";
+        }
+
+        // M4A/MP4: ftyp box — bytes 4-7 are "ftyp" (0x66 0x74 0x79 0x70)
+        if (bytes.length >= 8 &&
+            bytes[4] === 0x66 && bytes[5] === 0x74 &&
+            bytes[6] === 0x79 && bytes[7] === 0x70) {
+            return "m4a";
+        }
+
+        // WAV: RIFF header
+        if (bytes[0] === 0x52 && bytes[1] === 0x49 &&
+            bytes[2] === 0x46 && bytes[3] === 0x46) {
+            return "wav";
+        }
+
+        // OGG: OggS header
+        if (bytes[0] === 0x4F && bytes[1] === 0x67 &&
+            bytes[2] === 0x67 && bytes[3] === 0x53) {
+            return "ogg";
+        }
+
+        // WebM/MKV: EBML header
+        if (bytes[0] === 0x1A && bytes[1] === 0x45 &&
+            bytes[2] === 0xDF && bytes[3] === 0xA3) {
+            return "webm";
+        }
+    }
+
+    // Fallback to content-type header
+    return extensionFromMime(contentType);
+}
+
 // ============================================================================
 // Provider Configuration
 // ============================================================================
@@ -242,9 +293,18 @@ async function callWhisperApi(
     provider: ProviderConfig = PROVIDER_CONFIGS.openai,
     contentType: string = "audio/mpeg",
 ): Promise<string> {
-    // Derive correct MIME type and extension from the actual audio content type
-    const ext = extensionFromMime(contentType);
+    // Detect format from actual bytes (magic bytes), falling back to content-type header
+    const ext = detectAudioFormat(audioBuffer, contentType);
     const blobMime = mimeFromExtension(ext);
+
+    console.log(
+        JSON.stringify({
+            event: "audio_format_detected",
+            detectedExtension: ext,
+            blobMime,
+            headerContentType: contentType,
+        })
+    );
 
     const formData = new FormData();
     const audioBlob = new Blob([audioBuffer], { type: blobMime });
