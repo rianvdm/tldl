@@ -1,5 +1,5 @@
 /**
- * Summarization Service - GPT-5.2 Responses API
+ * Summarization Service - GPT-5.4 Responses API
  *
  * Generates AI-powered summaries of podcast transcripts using
  * configurable templates (key-takeaways, narrative-summary, eli5).
@@ -43,7 +43,7 @@ interface ResponsesApiResponse {
 // ============================================================================
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const MODEL = "gpt-5.2";
+const MODEL = "gpt-5.4";
 
 // ============================================================================
 // Main Functions
@@ -81,7 +81,7 @@ export async function generateSummary(
         );
     }
 
-    // Call GPT-5.2 Responses API with retry logic
+    // Call GPT-5.4 Responses API with retry logic
     // Only retry on 5xx server errors, NOT on rate limits (429)
     const result = await withRetry(
         () => callResponsesApi(transcript, template.prompt, openaiApiKey),
