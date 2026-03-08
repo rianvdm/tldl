@@ -48,7 +48,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI gpt-4o-mini-transcribe for transcription (with chunking for >25MB files)
-   - Generates summary via OpenAI GPT-5.2
+   - Generates summary via OpenAI GPT-5.4
    - Generates 1-4 AI tags using GPT-5.2 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
 3. **View** (`GET /episode/:id`): Serves cached episodes with summary, transcript, and tags
@@ -257,7 +257,7 @@ src/
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI gpt-4o-mini-transcribe
-│   ├── summarization.ts  # OpenAI GPT-5.2
+│   ├── summarization.ts  # OpenAI GPT-5.4
 │   └── tag-generation.ts # OpenAI GPT-5.2 for episode tags
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages
@@ -280,7 +280,7 @@ src/
 
 ## Important Notes
 
-- **GPT-5.2 exists**: The project uses OpenAI GPT-5.2 for both summarization and tag generation. This is a real model - do not change references to GPT-4o or other models unless explicitly instructed.
+- **GPT-5.4 exists**: The project uses OpenAI GPT-5.4 for summarization and GPT-5.2 for tag generation. These are real models - do not change references to GPT-4o or other models unless explicitly instructed.
 
 ## How to Restore Transcripts on Episode Pages
 

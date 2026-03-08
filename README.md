@@ -12,7 +12,7 @@ AI-powered podcast summaries from Apple Podcasts URLs. Paste an episode link, ge
 | Storage | Cloudflare KV + Durable Objects |
 | Podcast Data | [Podcast Index API](https://podcastindex.org) |
 | Transcription | OpenAI gpt-4o-mini-transcribe |
-| Summarization | OpenAI GPT-5.2 |
+| Summarization | OpenAI GPT-5.4 |
 | Authentication | Cloudflare Access (Email OTP) |
 | Spam Protection | Cloudflare Turnstile |
 
@@ -89,7 +89,7 @@ src/
 │   ├── podcast-index.ts     # Podcast Index API client
 │   ├── rss.ts               # RSS parsing + episode matching
 │   ├── transcription.ts     # OpenAI gpt-4o-mini-transcribe integration
-│   ├── summarization.ts     # GPT-5.2 summary generation
+│   ├── summarization.ts     # GPT-5.4 summary generation
 │   └── tag-generation.ts    # GPT-5.2 tag generation
 ├── routes/
 │   ├── public.ts            # Public pages (home, episodes, podcasts)
@@ -116,7 +116,7 @@ src/
    - Fetch episode metadata via Podcast Index + RSS
    - Check for existing transcript in RSS feed
    - Transcribe with OpenAI gpt-4o-mini-transcribe (chunking for >25MB)
-   - Generate summary with GPT-5.2
+   - Generate summary with GPT-5.4
    - Generate 1-4 tags with GPT-5.2 (non-critical)
    - Store in KV with 365-day TTL
 
