@@ -47,7 +47,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
 2. **Queue Consumer** (`src/queue/consumer.ts`): Processes jobs in background:
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
-   - Falls back to OpenAI Whisper for transcription (with chunking for >25MB files)
+   - Falls back to OpenAI gpt-4o-mini-transcribe for transcription (with chunking for >25MB files)
    - Generates summary via OpenAI GPT-5.2
    - Generates 1-4 AI tags using GPT-5.2 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
@@ -256,7 +256,7 @@ src/
 │   ├── apple-podcasts.ts # iTunes API + page scraping
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
-│   ├── transcription.ts  # OpenAI Whisper
+│   ├── transcription.ts  # OpenAI gpt-4o-mini-transcribe
 │   ├── summarization.ts  # OpenAI GPT-5.2
 │   └── tag-generation.ts # OpenAI GPT-5.2 for episode tags
 ├── routes/               # Hono route handlers

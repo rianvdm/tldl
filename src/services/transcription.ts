@@ -1,5 +1,5 @@
 /**
- * Transcription service supporting multiple providers (OpenAI Whisper, Groq Whisper)
+ * Transcription service supporting multiple providers (OpenAI, Groq)
  * Handles audio validation and transcription for podcast episodes
  * Supports chunked transcription for files over 25MB
  *
@@ -29,6 +29,50 @@ const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
 const AUDIO_HEADER_SIZE_BYTES = 512;
 
 // ============================================================================
+// MIME Type Handling
+// ============================================================================
+
+/** Map content-type to the file extension expected by the transcription API */
+const MIME_TO_EXTENSION: Record<string, string> = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/aac": "m4a",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+};
+
+/** Map file extension to MIME type for the Blob constructor */
+const EXTENSION_TO_MIME: Record<string, string> = {
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    wav: "audio/wav",
+    webm: "audio/webm",
+    ogg: "audio/ogg",
+};
+
+/**
+ * Derive the correct file extension from a content-type header.
+ * Falls back to "mp3" for unknown/generic types (most podcasts are MP3).
+ */
+export function extensionFromMime(contentType: string): string {
+    // Strip parameters like "; charset=utf-8"
+    const base = contentType.split(";")[0].trim().toLowerCase();
+    return MIME_TO_EXTENSION[base] ?? "mp3";
+}
+
+/**
+ * Get the correct MIME type for a file extension.
+ * Used when constructing the Blob sent to the API.
+ */
+function mimeFromExtension(ext: string): string {
+    return EXTENSION_TO_MIME[ext] ?? "audio/mpeg";
+}
+
+// ============================================================================
 // Provider Configuration
 // ============================================================================
 
@@ -41,7 +85,7 @@ interface ProviderConfig {
 const PROVIDER_CONFIGS: Record<TranscriptionProvider, ProviderConfig> = {
     openai: {
         baseUrl: "https://api.openai.com/v1/audio/transcriptions",
-        model: "whisper-1",
+        model: "gpt-4o-mini-transcribe",
         name: "openai",
     },
     groq: {
@@ -196,11 +240,15 @@ async function callWhisperApi(
     audioBuffer: ArrayBuffer,
     apiKey: string,
     provider: ProviderConfig = PROVIDER_CONFIGS.openai,
+    contentType: string = "audio/mpeg",
 ): Promise<string> {
-    // Create form data with audio file
+    // Derive correct MIME type and extension from the actual audio content type
+    const ext = extensionFromMime(contentType);
+    const blobMime = mimeFromExtension(ext);
+
     const formData = new FormData();
-    const audioBlob = new Blob([audioBuffer], { type: "audio/mpeg" });
-    formData.append("file", audioBlob, "audio.mp3");
+    const audioBlob = new Blob([audioBuffer], { type: blobMime });
+    formData.append("file", audioBlob, `audio.${ext}`);
     formData.append("model", provider.model);
     formData.append("response_format", "text");
 
@@ -378,6 +426,7 @@ export async function transcribeAudio(
             opts.apiKey,
             providerConfig,
             progressCallback,
+            validation.contentType,
         );
     }
 
@@ -400,12 +449,13 @@ export async function transcribeAudio(
             opts.apiKey,
             providerConfig,
             progressCallback,
+            validation.contentType,
         );
     }
 
-    // Step 3: Call Whisper API with retry for transient errors
+    // Step 3: Call transcription API with retry for transient errors
     const text = await withRetry(
-        () => callWhisperApi(audioBuffer, opts.apiKey, providerConfig),
+        () => callWhisperApi(audioBuffer, opts.apiKey, providerConfig, validation.contentType),
         {
             maxRetries: 3,
             baseDelayMs: 1000,
@@ -442,6 +492,7 @@ async function transcribeWithChunking(
     apiKey: string,
     provider: ProviderConfig,
     onProgress?: (currentChunk: number, totalChunks: number) => void,
+    contentType: string = "audio/mpeg",
 ): Promise<TranscriptionResult> {
     // Calculate chunk ranges
     const chunks = calculateChunkRanges(contentLength);
@@ -526,7 +577,7 @@ async function transcribeWithChunking(
 
             // Transcribe the chunk
             const text = await withRetry(
-                () => callWhisperApi(bufferToTranscribe, apiKey, provider),
+                () => callWhisperApi(bufferToTranscribe, apiKey, provider, contentType),
                 {
                     maxRetries: 3,
                     baseDelayMs: 1000,

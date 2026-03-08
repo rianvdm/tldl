@@ -11,7 +11,7 @@ AI-powered podcast summaries from Apple Podcasts URLs. Paste an episode link, ge
 | Background Jobs | Cloudflare Queues |
 | Storage | Cloudflare KV + Durable Objects |
 | Podcast Data | [Podcast Index API](https://podcastindex.org) |
-| Transcription | OpenAI Whisper |
+| Transcription | OpenAI gpt-4o-mini-transcribe |
 | Summarization | OpenAI GPT-5.2 |
 | Authentication | Cloudflare Access (Email OTP) |
 | Spam Protection | Cloudflare Turnstile |
@@ -88,7 +88,7 @@ src/
 │   ├── apple-podcasts.ts    # Episode metadata lookup
 │   ├── podcast-index.ts     # Podcast Index API client
 │   ├── rss.ts               # RSS parsing + episode matching
-│   ├── transcription.ts     # OpenAI Whisper integration
+│   ├── transcription.ts     # OpenAI gpt-4o-mini-transcribe integration
 │   ├── summarization.ts     # GPT-5.2 summary generation
 │   └── tag-generation.ts    # GPT-5.2 tag generation
 ├── routes/
@@ -115,7 +115,7 @@ src/
 2. **Queue Consumer** (`src/queue/consumer.ts`): Background processing
    - Fetch episode metadata via Podcast Index + RSS
    - Check for existing transcript in RSS feed
-   - Transcribe with OpenAI Whisper (chunking for >25MB)
+   - Transcribe with OpenAI gpt-4o-mini-transcribe (chunking for >25MB)
    - Generate summary with GPT-5.2
    - Generate 1-4 tags with GPT-5.2 (non-critical)
    - Store in KV with 365-day TTL
@@ -130,7 +130,7 @@ src/
 
 **Embedded CSS**: Workers can't read from filesystem. All styles are in `src/lib/styles.ts`.
 
-**MP3 Frame-Aware Chunking**: OpenAI Whisper has a 25MB limit. Large files are split at MP3 frame boundaries to avoid audio corruption.
+**Chunked Transcription**: OpenAI's transcription API has a 25MB limit. Large files are split into chunks with byte-range requests.
 
 **Non-Critical Tag Generation**: If tag generation fails, the job continues. Empty tags are acceptable.
 
@@ -156,7 +156,7 @@ src/
 
 | Secret | Description |
 |--------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key for Whisper + GPT |
+| `OPENAI_API_KEY` | OpenAI API key for transcription + GPT |
 | `PODCAST_INDEX_KEY` | Podcast Index API key |
 | `PODCAST_INDEX_SECRET` | Podcast Index API secret |
 | `TURNSTILE_SECRET` | Cloudflare Turnstile secret key |
@@ -183,7 +183,7 @@ npm run test:watch            # Watch mode
 Tests are organized to mirror `src/`:
 - `test/kv.test.ts` — KV storage operations
 - `test/rss.test.ts` — RSS parsing and episode matching
-- `test/transcription.test.ts` — Whisper integration
+- `test/transcription.test.ts` — Transcription integration
 - `test/integration/` — End-to-end flows
 
 **Note**: Durable Object tests may show "Isolated storage" warnings. This is a Vitest pool infrastructure issue, not a test failure.

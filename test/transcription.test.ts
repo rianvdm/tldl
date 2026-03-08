@@ -1,5 +1,5 @@
 /**
- * Tests for Transcription Service (OpenAI Whisper & Groq Whisper)
+ * Tests for Transcription Service (OpenAI gpt-4o-mini-transcribe & Groq Whisper)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -7,6 +7,7 @@ import {
     transcribeAudio,
     validateAudioUrl,
     getProviderConfig,
+    extensionFromMime,
 } from "../src/services/transcription";
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
@@ -347,7 +348,7 @@ describe("getProviderConfig", () => {
         const config = getProviderConfig();
         expect(config.name).toBe("openai");
         expect(config.baseUrl).toBe("https://api.openai.com/v1/audio/transcriptions");
-        expect(config.model).toBe("whisper-1");
+        expect(config.model).toBe("gpt-4o-mini-transcribe");
     });
 
     it("should return OpenAI config for undefined provider", () => {
@@ -358,7 +359,7 @@ describe("getProviderConfig", () => {
     it("should return OpenAI config for 'openai' provider", () => {
         const config = getProviderConfig("openai");
         expect(config.name).toBe("openai");
-        expect(config.model).toBe("whisper-1");
+        expect(config.model).toBe("gpt-4o-mini-transcribe");
     });
 
     it("should return Groq config for 'groq' provider", () => {
@@ -530,5 +531,36 @@ describe("error predicates", () => {
         expect(isTransientError(new Error("HTTP 429"))).toBe(true);
         expect(isTransientError(new Error("HTTP 500"))).toBe(true);
         expect(isTransientError(new Error("HTTP 400"))).toBe(false);
+    });
+});
+
+describe("extensionFromMime", () => {
+    it("should map audio/mpeg to mp3", () => {
+        expect(extensionFromMime("audio/mpeg")).toBe("mp3");
+    });
+
+    it("should map audio/mp4 to m4a", () => {
+        expect(extensionFromMime("audio/mp4")).toBe("m4a");
+    });
+
+    it("should map audio/x-m4a to m4a", () => {
+        expect(extensionFromMime("audio/x-m4a")).toBe("m4a");
+    });
+
+    it("should map audio/aac to m4a", () => {
+        expect(extensionFromMime("audio/aac")).toBe("m4a");
+    });
+
+    it("should map audio/wav to wav", () => {
+        expect(extensionFromMime("audio/wav")).toBe("wav");
+    });
+
+    it("should strip parameters from content-type", () => {
+        expect(extensionFromMime("audio/mpeg; charset=utf-8")).toBe("mp3");
+    });
+
+    it("should fall back to mp3 for unknown types", () => {
+        expect(extensionFromMime("application/octet-stream")).toBe("mp3");
+        expect(extensionFromMime("unknown")).toBe("mp3");
     });
 });
