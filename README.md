@@ -117,7 +117,7 @@ src/
    - Check for existing transcript in RSS feed
    - Transcribe with OpenAI gpt-4o-mini-transcribe (chunking for >25MB)
    - Generate summary with GPT-5.4
-   - Generate 1-4 tags with GPT-5.4 (non-critical)
+   - Generate 2-3 tags with GPT-5.4 (non-critical)
    - Store in KV with 365-day TTL
 
 3. **View** (`GET /episode/:id`): Serve cached episode with summary

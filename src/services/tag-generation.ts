@@ -1,7 +1,7 @@
 /**
  * Tag Generation Service
  *
- * Generates AI-powered episode tags using GPT-5.2 based on
+ * Generates AI-powered episode tags using GPT-5.4 based on
  * the episode transcript and summary.
  */
 
@@ -49,13 +49,13 @@ function buildTagPrompt(): string {
     const validTags = getValidTags();
     const tagList = validTags.map(tag => `- ${tag}`).join('\n');
 
-    return `Analyze the following podcast episode content and select 1-2 most relevant tags from the list below. Choose tags that best describe the primary themes and subject matter of the episode.
+    return `Analyze the following podcast episode content and select 2-3 most relevant tags from the list below. Choose tags that best describe the primary themes and subject matter of the episode.
 
 AVAILABLE TAGS:
 ${tagList}
 
 INSTRUCTIONS:
-- Select between 1 and 2 tags
+- Select between 2 and 3 tags
 - Choose tags that best represent the episode's main topics
 - Return ONLY a comma-separated list of tags, nothing else
 - Tags must be from the list above (lowercase with hyphens)
@@ -74,7 +74,7 @@ Return the tags as a simple comma-separated list.`;
  * @param summary - The episode summary text
  * @param transcript - Optional full transcript (will use first 8000 chars if provided)
  * @param openaiApiKey - OpenAI API key
- * @returns Array of 1-2 tags
+ * @returns Array of 2-3 tags
  */
 export async function generateEpisodeTags(
     summary: string,
@@ -90,7 +90,7 @@ export async function generateEpisodeTags(
         content += `\n\nTRANSCRIPT (excerpt):\n${transcriptSample}`;
     }
 
-    // Call GPT-5.2 with retry logic
+    // Call GPT-5.4 with retry logic
     const result = await withRetry(
         () => callTagGenerationApi(content, openaiApiKey),
         {
@@ -216,7 +216,7 @@ function extractTextFromResponse(data: ResponsesApiResponse): string | null {
 
 /**
  * Parse comma-separated tags from API response
- * Validates against allowed tags and returns 1-4 tags
+ * Validates against allowed tags and returns 2-3 tags
  */
 function parseTags(text: string): string[] {
     const validTags = getValidTags();
@@ -238,6 +238,6 @@ function parseTags(text: string): string[] {
         return validatedTags; // Return empty array
     }
 
-    // Take only first 4 if more were returned
-    return validatedTags.slice(0, 4);
+    // Take only first 3 if more were returned
+    return validatedTags.slice(0, 3);
 }

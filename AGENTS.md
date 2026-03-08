@@ -49,7 +49,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI gpt-4o-mini-transcribe for transcription (with chunking for >25MB files)
    - Generates summary via OpenAI GPT-5.4
-   - Generates 1-4 AI tags using GPT-5.4 (non-critical: continues if fails)
+   - Generates 2-3 AI tags using GPT-5.4 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
 3. **View** (`GET /episode/:id`): Serves cached episodes with summary, transcript, and tags
 
@@ -65,7 +65,7 @@ TLDL is a Cloudflare Workers application that generates AI summaries from Apple 
   - Job status page uses `getJobWithFallback()` for immediate status visibility
   - Both auto-refresh when jobs are active (home: 10s, job page: 5s)
 - **Styling**: All CSS is in `src/lib/styles.ts` (not a `.css` file) — Cloudflare Workers can't read from the filesystem, so styles are embedded in TypeScript
-- **Episode Tags**: AI-generated using GPT-5.4 Responses API during queue processing (1-4 tags per episode)
+- **Episode Tags**: AI-generated using GPT-5.4 Responses API during queue processing (2-3 tags per episode)
   - Tags stored inline in both Episode and EpisodeIndexEntry for efficient filtering
   - Predefined tag list in `src/lib/constants.ts` (EPISODE_TAGS)
   - Tag generation is non-critical: empty tags don't fail jobs
@@ -198,7 +198,7 @@ Defined in `src/lib/constants.ts` (EPISODE_TAGS array):
 - Tags are alphabetically sorted for consistency
 - Easy to add/remove tags - just edit the EPISODE_TAGS array
 - After removing tags, use "Cleanup Invalid Tags" admin tool to remove them from existing episodes
-- Tags generated automatically during episode processing (1-4 tags per episode)
+- Tags generated automatically during episode processing (2-3 tags per episode)
 - Admin can manually edit tags via profile page
 
 ### Maintenance Mode
