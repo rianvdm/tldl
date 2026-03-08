@@ -18,7 +18,7 @@ const MP3_SYNC_MASK = 0xe0; // First 3 bits of second byte must be 111
 /**
  * Target chunk size for transcription (under 25MB Whisper limit)
  */
-export const TARGET_CHUNK_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
+export const TARGET_CHUNK_SIZE_BYTES = 10 * 1024 * 1024; // 10MB (gpt-4o-mini-transcribe rejects ~15-20MB)
 
 /**
  * Overlap between chunks to avoid losing words at boundaries
