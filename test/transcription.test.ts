@@ -567,9 +567,37 @@ describe("extensionFromMime", () => {
 });
 
 describe("detectAudioFormat", () => {
-    it("should detect MP3 via ID3 tag header", () => {
-        // ID3v2 header: 0x49 0x44 0x33
-        const buffer = new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00]).buffer;
+    it("should detect MP3 after parsing ID3 tag (ID3 + MP3 frames)", () => {
+        // ID3v2.4 header with tag size = 4 (syncsafe), followed by 4 filler bytes, then MP3 sync (0xFF 0xFB)
+        // bytes 0-9: ID3 header (10 bytes), bytes 10-13: tag body (4 bytes), bytes 14+: audio frames
+        const buf = new Uint8Array(20);
+        buf[0] = 0x49; buf[1] = 0x44; buf[2] = 0x33; // "ID3"
+        buf[3] = 0x04; // version 2.4
+        buf[4] = 0x00; // revision
+        buf[5] = 0x00; // flags
+        buf[6] = 0x00; buf[7] = 0x00; buf[8] = 0x00; buf[9] = 0x04; // size = 4 (syncsafe)
+        // tag body: bytes 10-13 (4 bytes of filler)
+        buf[10] = 0x00; buf[11] = 0x00; buf[12] = 0x00; buf[13] = 0x00;
+        // audio frames start at byte 14: MP3 Layer III sync (0xFF 0xFB)
+        buf[14] = 0xFF; buf[15] = 0xFB;
+        expect(detectAudioFormat(buf.buffer, "application/octet-stream")).toBe("mp3");
+    });
+
+    it("should detect AAC after parsing ID3 tag (ID3 + ADTS AAC frames)", () => {
+        // Same ID3 header, but audio frames are ADTS AAC (0xFF 0xF1, layer=00)
+        const buf = new Uint8Array(20);
+        buf[0] = 0x49; buf[1] = 0x44; buf[2] = 0x33;
+        buf[3] = 0x04; buf[4] = 0x00; buf[5] = 0x00;
+        buf[6] = 0x00; buf[7] = 0x00; buf[8] = 0x00; buf[9] = 0x04; // tag size = 4
+        buf[10] = 0x00; buf[11] = 0x00; buf[12] = 0x00; buf[13] = 0x00;
+        // ADTS AAC sync at byte 14 (0xFF 0xF1 → layer=00)
+        buf[14] = 0xFF; buf[15] = 0xF1;
+        expect(detectAudioFormat(buf.buffer, "application/octet-stream")).toBe("m4a");
+    });
+
+    it("should fall back to mp3 when ID3 tag extends beyond buffer", () => {
+        // ID3 header with tag size larger than remaining buffer
+        const buffer = new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]).buffer;
         expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("mp3");
     });
 

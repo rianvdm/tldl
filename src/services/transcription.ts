@@ -80,53 +80,82 @@ function mimeFromExtension(ext: string): string {
  * Falls back to the content-type header if magic bytes are unrecognized.
  */
 export function detectAudioFormat(buffer: ArrayBuffer, contentType: string): string {
-    const bytes = new Uint8Array(buffer, 0, Math.min(12, buffer.byteLength));
+    const fullBytes = new Uint8Array(buffer);
 
-    if (bytes.length >= 4) {
-        // MP3: ID3 tag header (ID3v2)
-        if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    if (fullBytes.length < 4) {
+        return extensionFromMime(contentType);
+    }
+
+    let offset = 0;
+
+    // ID3v2 tag: skip past it to find the actual audio frames.
+    // ID3 tags are codec-agnostic — podcast hosts commonly add them to AAC files.
+    if (fullBytes[0] === 0x49 && fullBytes[1] === 0x44 && fullBytes[2] === 0x33) {
+        if (fullBytes.length >= 10) {
+            // Parse ID3v2 tag size (bytes 6-9, syncsafe integer — each byte uses 7 bits)
+            const size =
+                ((fullBytes[6] & 0x7F) << 21) |
+                ((fullBytes[7] & 0x7F) << 14) |
+                ((fullBytes[8] & 0x7F) << 7) |
+                (fullBytes[9] & 0x7F);
+            offset = 10 + size; // 10-byte header + tag body
+
+            console.log(
+                JSON.stringify({
+                    event: "id3_tag_parsed",
+                    id3Version: `2.${fullBytes[3]}`,
+                    tagBodySize: size,
+                    audioStartOffset: offset,
+                })
+            );
+        }
+
+        // If we can't read past the ID3 tag, fall back to mp3 (most common with ID3)
+        if (offset + 2 > fullBytes.length) {
             return "mp3";
         }
+    }
 
-        // MPEG audio sync word: 0xFF followed by 0xE0+ mask
-        // Both MP3 and ADTS AAC use this sync pattern — the layer bits distinguish them:
-        //   layer bits ((byte1 >> 1) & 0x03):
-        //     00 = ADTS AAC (raw AAC stream, common in podcasts)
-        //     01 = MPEG Layer III (MP3)
-        //     10 = MPEG Layer II
-        //     11 = MPEG Layer I
-        if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) {
-            const layerBits = (bytes[1] >> 1) & 0x03;
-            if (layerBits === 0x00) {
-                return "m4a"; // ADTS AAC — use m4a as the closest supported format
-            }
-            return "mp3";
-        }
+    const bytes = fullBytes.subarray(offset, offset + 12);
 
-        // M4A/MP4: ftyp box — bytes 4-7 are "ftyp" (0x66 0x74 0x79 0x70)
-        if (bytes.length >= 8 &&
-            bytes[4] === 0x66 && bytes[5] === 0x74 &&
-            bytes[6] === 0x79 && bytes[7] === 0x70) {
-            return "m4a";
+    // MPEG audio sync word: 0xFF followed by 0xE0+ mask
+    // Both MP3 and ADTS AAC use this sync pattern — the layer bits distinguish them:
+    //   layer bits ((byte1 >> 1) & 0x03):
+    //     00 = ADTS AAC (raw AAC stream, common in podcasts)
+    //     01 = MPEG Layer III (MP3)
+    //     10 = MPEG Layer II
+    //     11 = MPEG Layer I
+    if (bytes.length >= 2 && bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) {
+        const layerBits = (bytes[1] >> 1) & 0x03;
+        if (layerBits === 0x00) {
+            return "m4a"; // ADTS AAC — use m4a as the closest supported format
         }
+        return "mp3";
+    }
 
-        // WAV: RIFF header
-        if (bytes[0] === 0x52 && bytes[1] === 0x49 &&
-            bytes[2] === 0x46 && bytes[3] === 0x46) {
-            return "wav";
-        }
+    // M4A/MP4: ftyp box — bytes 4-7 are "ftyp" (0x66 0x74 0x79 0x70)
+    if (bytes.length >= 8 &&
+        bytes[4] === 0x66 && bytes[5] === 0x74 &&
+        bytes[6] === 0x79 && bytes[7] === 0x70) {
+        return "m4a";
+    }
 
-        // OGG: OggS header
-        if (bytes[0] === 0x4F && bytes[1] === 0x67 &&
-            bytes[2] === 0x67 && bytes[3] === 0x53) {
-            return "ogg";
-        }
+    // WAV: RIFF header
+    if (bytes[0] === 0x52 && bytes[1] === 0x49 &&
+        bytes[2] === 0x46 && bytes[3] === 0x46) {
+        return "wav";
+    }
 
-        // WebM/MKV: EBML header
-        if (bytes[0] === 0x1A && bytes[1] === 0x45 &&
-            bytes[2] === 0xDF && bytes[3] === 0xA3) {
-            return "webm";
-        }
+    // OGG: OggS header
+    if (bytes[0] === 0x4F && bytes[1] === 0x67 &&
+        bytes[2] === 0x67 && bytes[3] === 0x53) {
+        return "ogg";
+    }
+
+    // WebM/MKV: EBML header
+    if (bytes[0] === 0x1A && bytes[1] === 0x45 &&
+        bytes[2] === 0xDF && bytes[3] === 0xA3) {
+        return "webm";
     }
 
     // Fallback to content-type header
