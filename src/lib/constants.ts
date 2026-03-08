@@ -260,7 +260,7 @@ export const RATE_LIMITS = {
 
 export const AUDIO_LIMITS = {
     MAX_SIZE_BYTES: 25 * 1024 * 1024,   // 25MB (OpenAI API limit)
-    CHUNK_SIZE_BYTES: 10 * 1024 * 1024, // 10MB chunks (gpt-4o-mini-transcribe rejects ~15-20MB despite 25MB doc limit)
+    CHUNK_SIZE_BYTES: 20 * 1024 * 1024, // 20MB chunks for large files
     CHUNK_OVERLAP_BYTES: 32 * 1024,     // 32KB overlap for transcript stitching
 } as const;
 

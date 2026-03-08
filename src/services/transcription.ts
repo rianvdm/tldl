@@ -435,6 +435,75 @@ async function callWhisperApi(
                 error: errorText,
             })
         );
+
+        // Fallback: if gpt-4o-mini-transcribe rejects the file, retry with whisper-1
+        const isCorruptedError = errorText.includes("corrupted or unsupported");
+        const isGpt4oModel = provider.model === "gpt-4o-mini-transcribe";
+        if (status === 400 && isCorruptedError && isGpt4oModel) {
+            console.log(
+                JSON.stringify({
+                    event: "whisper_fallback_start",
+                    reason: "gpt-4o-mini-transcribe rejected file, falling back to whisper-1",
+                    originalModel: provider.model,
+                    fallbackModel: "whisper-1",
+                })
+            );
+
+            // Build a new request with whisper-1
+            const fallbackFormData = new FormData();
+            fallbackFormData.append("file", new Blob([audioBuffer], { type: blobMime }), `audio.${ext}`);
+            fallbackFormData.append("model", "whisper-1");
+            fallbackFormData.append("response_format", "text");
+
+            const fallbackController = new AbortController();
+            const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), TIMEOUTS.WHISPER_API_MS);
+            const fallbackStart = Date.now();
+
+            try {
+                const fallbackResponse = await fetch(provider.baseUrl, {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${apiKey}` },
+                    body: fallbackFormData,
+                    signal: fallbackController.signal,
+                });
+                clearTimeout(fallbackTimeoutId);
+                const fallbackElapsed = Date.now() - fallbackStart;
+
+                if (fallbackResponse.ok) {
+                    console.log(
+                        JSON.stringify({
+                            event: "whisper_fallback_success",
+                            fallbackModel: "whisper-1",
+                            elapsedMs: fallbackElapsed,
+                            elapsedSeconds: Math.round(fallbackElapsed / 1000),
+                        })
+                    );
+                    return await fallbackResponse.text();
+                }
+
+                // Fallback also failed — log and fall through to the original error
+                const fallbackError = await fallbackResponse.text().catch(() => "Unknown");
+                console.error(
+                    JSON.stringify({
+                        event: "whisper_fallback_failed",
+                        fallbackModel: "whisper-1",
+                        status: fallbackResponse.status,
+                        elapsedMs: fallbackElapsed,
+                        error: fallbackError,
+                    })
+                );
+            } catch (fallbackErr) {
+                clearTimeout(fallbackTimeoutId);
+                console.error(
+                    JSON.stringify({
+                        event: "whisper_fallback_error",
+                        fallbackModel: "whisper-1",
+                        error: fallbackErr instanceof Error ? fallbackErr.message : "Unknown",
+                    })
+                );
+            }
+        }
+
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
             `${provider.name} Whisper API error: ${errorText}`,
