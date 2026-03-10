@@ -260,7 +260,10 @@ export const RATE_LIMITS = {
 
 export const AUDIO_LIMITS = {
     MAX_SIZE_BYTES: 25 * 1024 * 1024,   // 25MB (OpenAI API limit)
-    CHUNK_SIZE_BYTES: 20 * 1024 * 1024, // 20MB chunks for large files
+    CHUNK_SIZE_BYTES: 15 * 1024 * 1024, // 15MB chunks — intentionally below the 25MB API limit to avoid
+                                         // gpt-4o-mini-transcribe token budget errors on dense audio.
+                                         // NOTE: this value is not used in code; the actual chunk size is
+                                         // TARGET_CHUNK_SIZE_BYTES in src/lib/audio.ts. Keep them in sync.
     CHUNK_OVERLAP_BYTES: 32 * 1024,     // 32KB overlap for transcript stitching
 } as const;
 

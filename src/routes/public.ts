@@ -754,10 +754,13 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
         .join("");
 
     // Build summary content
+    const transcribeModelLabel = transcript?.model
+        ? `Audio transcribed with ${escapeHtml(transcript.model)}. `
+        : "";
     const summaryContent = activeSummary
         ? `
         <div class="summary-header">
-            <div class="summary-model">Generated with ${escapeHtml(activeSummary.model)}</div>
+            <div class="summary-model">${transcribeModelLabel}Summary generated with ${escapeHtml(activeSummary.model)}</div>
         </div>
         <div class="prose">
             ${renderMarkdown(activeSummary.text)}

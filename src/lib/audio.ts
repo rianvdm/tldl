@@ -18,7 +18,7 @@ const MP3_SYNC_MASK = 0xe0; // First 3 bits of second byte must be 111
 /**
  * Target chunk size for transcription (under 25MB Whisper limit)
  */
-export const TARGET_CHUNK_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
+export const TARGET_CHUNK_SIZE_BYTES = 15 * 1024 * 1024; // 15MB
 
 /**
  * Overlap between chunks to avoid losing words at boundaries
@@ -241,7 +241,10 @@ export function estimateTranscriptionTime(
  * Check if a file size requires chunking.
  * 
  * @param contentLength - File size in bytes
- * @param whisperLimit - Whisper API limit (default 25MB)
+ * @param whisperLimit - Whisper API limit (default 25MB). Note: this threshold is not used
+ *   in practice — all callers rely on the default. The actual chunk size is controlled by
+ *   TARGET_CHUNK_SIZE_BYTES (currently 15MB), which is intentionally smaller than this
+ *   limit to avoid gpt-4o-mini-transcribe's token budget constraints.
  * @returns true if chunking is required
  */
 export function requiresChunking(

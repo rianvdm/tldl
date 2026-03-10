@@ -197,6 +197,7 @@ export function getProviderConfig(provider?: string): ProviderConfig {
 export interface TranscriptionResult {
     text: string;
     source: TranscriptionProvider;
+    model: string;
 }
 
 export interface AudioValidation {
@@ -331,7 +332,7 @@ async function callWhisperApi(
     apiKey: string,
     provider: ProviderConfig = PROVIDER_CONFIGS.openai,
     contentType: string = "audio/mpeg",
-): Promise<string> {
+): Promise<{ text: string; model: string }> {
     // Detect format from actual bytes (magic bytes), falling back to content-type header
     const ext = detectAudioFormat(audioBuffer, contentType);
     const blobMime = mimeFromExtension(ext);
@@ -436,14 +437,18 @@ async function callWhisperApi(
             })
         );
 
-        // Fallback: if gpt-4o-mini-transcribe rejects the file, retry with whisper-1
+        // Fallback: if gpt-4o-mini-transcribe rejects the file (corrupted/unsupported or input too large), retry with whisper-1
         const isCorruptedError = errorText.includes("corrupted or unsupported");
+        const isInputTooLarge = errorText.includes("input_too_large") || errorText.includes("too large for this model");
         const isGpt4oModel = provider.model === "gpt-4o-mini-transcribe";
-        if (status === 400 && isCorruptedError && isGpt4oModel) {
+        if (status === 400 && (isCorruptedError || isInputTooLarge) && isGpt4oModel) {
+            const reason = isInputTooLarge
+                ? "gpt-4o-mini-transcribe chunk too large, falling back to whisper-1"
+                : "gpt-4o-mini-transcribe rejected file, falling back to whisper-1";
             console.log(
                 JSON.stringify({
                     event: "whisper_fallback_start",
-                    reason: "gpt-4o-mini-transcribe rejected file, falling back to whisper-1",
+                    reason,
                     originalModel: provider.model,
                     fallbackModel: "whisper-1",
                 })
@@ -478,7 +483,7 @@ async function callWhisperApi(
                             elapsedSeconds: Math.round(fallbackElapsed / 1000),
                         })
                     );
-                    return await fallbackResponse.text();
+                    return { text: await fallbackResponse.text(), model: "whisper-1" };
                 }
 
                 // Fallback also failed — log and fall through to the original error
@@ -520,7 +525,7 @@ async function callWhisperApi(
     );
 
     // Response format is plain text when response_format=text
-    return await response.text();
+    return { text: await response.text(), model: provider.model };
 }
 
 /**
@@ -628,7 +633,7 @@ export async function transcribeAudio(
     }
 
     // Step 3: Call transcription API with retry for transient errors
-    const text = await withRetry(
+    const result = await withRetry(
         () => callWhisperApi(audioBuffer, opts.apiKey, providerConfig, validation.contentType),
         {
             maxRetries: 3,
@@ -638,8 +643,9 @@ export async function transcribeAudio(
     );
 
     return {
-        text: text.trim(),
+        text: result.text.trim(),
         source: providerConfig.name,
+        model: result.model,
     };
 }
 
@@ -750,7 +756,7 @@ async function transcribeWithChunking(
             }
 
             // Transcribe the chunk
-            const text = await withRetry(
+            const chunkResult = await withRetry(
                 () => callWhisperApi(bufferToTranscribe, apiKey, provider, contentType),
                 {
                     maxRetries: 3,
@@ -760,7 +766,7 @@ async function transcribeWithChunking(
             );
 
             transcriptions.push({
-                text: text.trim(),
+                text: chunkResult.text.trim(),
                 isFirst: chunk.isFirst,
                 isLast: chunk.isLast,
                 overlapBytes: chunk.overlapBytes,
@@ -771,7 +777,7 @@ async function transcribeWithChunking(
                     event: "chunk_completed",
                     chunkIndex: i + 1,
                     totalChunks,
-                    textLength: text.length,
+                    textLength: chunkResult.text.length,
                 })
             );
         } catch (error) {
@@ -811,6 +817,7 @@ async function transcribeWithChunking(
     return {
         text: combinedText,
         source: provider.name,
+        model: provider.model,
     };
 }
 

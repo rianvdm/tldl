@@ -342,6 +342,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             episodeId,
             text: transcriptionResult.text,
             source: transcriptionResult.source,
+            model: transcriptionResult.model,
             createdAt: new Date().toISOString(),
         };
         await saveTranscript(kv, transcript);
