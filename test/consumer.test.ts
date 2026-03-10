@@ -58,7 +58,6 @@ function getTestEnv(): Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
-        TRANSCRIPTION_PROVIDER: "openai",
     } as Env;
 }
 
@@ -173,6 +172,7 @@ describe("Queue Consumer - process_episode", () => {
         vi.mocked(transcribeAudio).mockResolvedValue({
             text: "This is the transcribed text from Whisper.",
             source: "openai",
+            model: "gpt-4o-mini-transcribe",
         });
 
         vi.mocked(generateSummary).mockResolvedValue({
@@ -319,7 +319,7 @@ describe("Queue Consumer - process_episode", () => {
         vi.mocked(transcribeAudio).mockImplementation(async () => {
             const job = await getJob(env.TLDL_DATA, "test-job-123");
             statusUpdates.push(job?.status || "unknown");
-            return { text: "Transcript", source: "openai" };
+            return { text: "Transcript", source: "openai", model: "gpt-4o-mini-transcribe" };
         });
 
         vi.mocked(generateSummary).mockImplementation(async () => {
@@ -408,6 +408,7 @@ describe("Queue Consumer - process_episode", () => {
         vi.mocked(transcribeAudio).mockResolvedValue({
             text: "Transcript",
             source: "openai",
+            model: "gpt-4o-mini-transcribe",
         });
 
         vi.mocked(generateSummary).mockRejectedValue(

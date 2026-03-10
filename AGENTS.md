@@ -214,7 +214,6 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 
 **Secrets** (set via `wrangler secret put`):
 - `OPENAI_API_KEY` - OpenAI API key
-- `GROQ_API_KEY` - Groq API key (only needed if `TRANSCRIPTION_PROVIDER=groq`)
 - `PODCAST_INDEX_KEY` - Podcast Index API key
 - `PODCAST_INDEX_SECRET` - Podcast Index API secret
 - `TURNSTILE_SECRET` - Cloudflare Turnstile secret key (spam protection)
@@ -225,7 +224,6 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 - `CACHE_TTL_DAYS` - Content cache TTL (default: 365)
 - `DEFAULT_TEMPLATE` - Default summary template (default: `key-takeaways`)
 - `TURNSTILE_SITE_KEY` - Cloudflare Turnstile site key (spam protection)
-- `TRANSCRIPTION_PROVIDER` - `openai` (default) or `groq` — see `docs/groq-transcription-setup.md`
 
 ## Testing
 

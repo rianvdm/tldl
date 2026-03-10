@@ -1,5 +1,5 @@
 /**
- * Tests for Transcription Service (OpenAI gpt-4o-mini-transcribe & Groq Whisper)
+ * Tests for Transcription Service (OpenAI gpt-4o-mini-transcribe)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -148,8 +148,12 @@ describe("transcribeAudio", () => {
     });
 
     it("should use chunked transcription for files over 25MB", async () => {
-        const largeSize = 30 * 1024 * 1024; // 30MB - will be split into 2 chunks
-        const mockAudioBuffer = new ArrayBuffer(20 * 1024 * 1024); // Mock chunk size
+        // 30MB with 15MB chunks (TARGET_CHUNK_SIZE_BYTES) produces 3 chunks:
+        //   chunk 1: 0–15MB
+        //   chunk 2: 15MB-32KB to 30MB-32KB
+        //   chunk 3: small trailing chunk
+        const largeSize = 30 * 1024 * 1024; // 30MB
+        const mockChunkBuffer = new ArrayBuffer(15 * 1024 * 1024); // 15MB
 
         vi.spyOn(globalThis, "fetch")
             // HEAD request for validation
@@ -166,21 +170,29 @@ describe("transcribeAudio", () => {
             .mockResolvedValueOnce(
                 new Response(new ArrayBuffer(512), { status: 206 })
             )
-            // First chunk fetch (Range request)
+            // Chunk 1 fetch
             .mockResolvedValueOnce(
-                new Response(mockAudioBuffer, { status: 206 })
+                new Response(mockChunkBuffer, { status: 206 })
             )
-            // First chunk Whisper transcription
+            // Chunk 1 Whisper transcription
             .mockResolvedValueOnce(
                 new Response("This is the first part of the transcript.", { status: 200 })
             )
-            // Second chunk fetch
+            // Chunk 2 fetch
             .mockResolvedValueOnce(
-                new Response(mockAudioBuffer, { status: 206 })
+                new Response(mockChunkBuffer, { status: 206 })
             )
-            // Second chunk Whisper transcription
+            // Chunk 2 Whisper transcription
             .mockResolvedValueOnce(
                 new Response("And this is the second part.", { status: 200 })
+            )
+            // Chunk 3 fetch
+            .mockResolvedValueOnce(
+                new Response(new ArrayBuffer(1024 * 1024), { status: 206 })
+            )
+            // Chunk 3 Whisper transcription
+            .mockResolvedValueOnce(
+                new Response("And the third part.", { status: 200 })
             );
 
         const result = await transcribeAudio(
@@ -363,14 +375,7 @@ describe("getProviderConfig", () => {
         expect(config.model).toBe("gpt-4o-mini-transcribe");
     });
 
-    it("should return Groq config for 'groq' provider", () => {
-        const config = getProviderConfig("groq");
-        expect(config.name).toBe("groq");
-        expect(config.baseUrl).toBe("https://api.groq.com/openai/v1/audio/transcriptions");
-        expect(config.model).toBe("whisper-large-v3-turbo");
-    });
-
-    it("should default to OpenAI for unknown provider strings", () => {
+    it("should return OpenAI config for any string (Groq removed)", () => {
         const config = getProviderConfig("unknown");
         expect(config.name).toBe("openai");
     });
@@ -416,39 +421,6 @@ describe("transcribeAudio with options object", () => {
         // Verify the Whisper API was called with OpenAI URL
         const whisperCall = fetchSpy.mock.calls[2];
         expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
-    });
-
-    it("should use Groq when provider is 'groq'", async () => {
-        const mockAudioBuffer = new ArrayBuffer(1024);
-
-        const fetchSpy = vi.spyOn(globalThis, "fetch")
-            .mockResolvedValueOnce(
-                new Response(null, {
-                    status: 200,
-                    headers: {
-                        "content-length": "1024",
-                        "content-type": "audio/mpeg",
-                    },
-                })
-            )
-            .mockResolvedValueOnce(
-                new Response(mockAudioBuffer, { status: 200 })
-            )
-            .mockResolvedValueOnce(
-                new Response("Groq transcription.", { status: 200 })
-            );
-
-        const result = await transcribeAudio(
-            "https://example.com/audio.mp3",
-            { apiKey: "groq-key", provider: "groq" }
-        );
-
-        expect(result.text).toBe("Groq transcription.");
-        expect(result.source).toBe("groq");
-
-        // Verify the Whisper API was called with Groq URL
-        const whisperCall = fetchSpy.mock.calls[2];
-        expect(whisperCall[0]).toBe("https://api.groq.com/openai/v1/audio/transcriptions");
     });
 
     it("should default to OpenAI when provider is not specified in options", async () => {

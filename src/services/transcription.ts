@@ -1,11 +1,8 @@
 /**
- * Transcription service supporting multiple providers (OpenAI, Groq)
- * Handles audio validation and transcription for podcast episodes
- * Supports chunked transcription for files over 25MB
- *
- * Provider switching is controlled via the TRANSCRIPTION_PROVIDER env var.
- * Groq's API is OpenAI-compatible, so both share the same code path
- * with different base URLs, model names, and API keys.
+ * Transcription service using OpenAI gpt-4o-mini-transcribe.
+ * Handles audio validation and transcription for podcast episodes.
+ * Supports chunked transcription for files over 25MB.
+ * Automatically falls back to whisper-1 for files gpt-4o-mini-transcribe rejects.
  */
 
 import { AppError } from "../lib/errors";
@@ -16,7 +13,7 @@ import {
     requiresChunking,
     estimateTranscriptionTime,
 } from "../lib/audio";
-import type { TranscriptionProvider } from "../types";
+
 
 // Use centralized constant for Whisper size limit
 const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
@@ -169,34 +166,28 @@ export function detectAudioFormat(buffer: ArrayBuffer, contentType: string): str
 interface ProviderConfig {
     baseUrl: string;
     model: string;
-    name: TranscriptionProvider;
+    name: "openai";
 }
 
-const PROVIDER_CONFIGS: Record<TranscriptionProvider, ProviderConfig> = {
+const PROVIDER_CONFIGS = {
     openai: {
         baseUrl: "https://api.openai.com/v1/audio/transcriptions",
         model: "gpt-4o-mini-transcribe",
-        name: "openai",
-    },
-    groq: {
-        baseUrl: "https://api.groq.com/openai/v1/audio/transcriptions",
-        model: "whisper-large-v3-turbo",
-        name: "groq",
+        name: "openai" as const,
     },
 };
 
 /**
- * Resolve provider config from env var string.
- * Defaults to "openai" for backwards compatibility.
+ * Returns the OpenAI provider config.
+ * Kept for backwards compatibility with call sites that pass an env var string.
  */
-export function getProviderConfig(provider?: string): ProviderConfig {
-    if (provider === "groq") return PROVIDER_CONFIGS.groq;
+export function getProviderConfig(_provider?: string): ProviderConfig {
     return PROVIDER_CONFIGS.openai;
 }
 
 export interface TranscriptionResult {
     text: string;
-    source: TranscriptionProvider;
+    source: "openai";
     model: string;
 }
 
@@ -318,13 +309,13 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
 }
 
 /**
- * Call Whisper-compatible API to transcribe audio.
- * Works with both OpenAI and Groq (same API shape).
+ * Call OpenAI transcription API.
+ * Uses gpt-4o-mini-transcribe as primary model with automatic whisper-1 fallback.
  * 
  * @param audioBuffer - Audio data as ArrayBuffer
- * @param apiKey - API key for the provider
- * @param provider - Provider config (OpenAI or Groq)
- * @returns Transcribed text
+ * @param apiKey - OpenAI API key
+ * @param provider - Provider config
+ * @returns Transcribed text and model used
  * @throws AppError with TRANSCRIPTION_FAILED or RATE_LIMITED
  */
 async function callWhisperApi(
@@ -454,51 +445,75 @@ async function callWhisperApi(
                 })
             );
 
-            // Build a new request with whisper-1
-            const fallbackFormData = new FormData();
-            fallbackFormData.append("file", new Blob([audioBuffer], { type: blobMime }), `audio.${ext}`);
-            fallbackFormData.append("model", "whisper-1");
-            fallbackFormData.append("response_format", "text");
-
-            const fallbackController = new AbortController();
-            const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), TIMEOUTS.WHISPER_API_MS);
+            // Fallback to whisper-1 with retry for transient errors (5xx, 429).
+            // Always uses the OpenAI base URL — whisper-1 is an OpenAI model.
             const fallbackStart = Date.now();
+            const attemptWhisper1 = async (): Promise<string> => {
+                const fallbackFormData = new FormData();
+                fallbackFormData.append("file", new Blob([audioBuffer], { type: blobMime }), `audio.${ext}`);
+                fallbackFormData.append("model", "whisper-1");
+                fallbackFormData.append("response_format", "text");
 
-            try {
-                const fallbackResponse = await fetch(provider.baseUrl, {
-                    method: "POST",
-                    headers: { Authorization: `Bearer ${apiKey}` },
-                    body: fallbackFormData,
-                    signal: fallbackController.signal,
-                });
+                const fallbackController = new AbortController();
+                const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), TIMEOUTS.WHISPER_API_MS);
+
+                let fallbackResponse: Response;
+                try {
+                    fallbackResponse = await fetch(PROVIDER_CONFIGS.openai.baseUrl, {
+                        method: "POST",
+                        headers: { Authorization: `Bearer ${apiKey}` },
+                        body: fallbackFormData,
+                        signal: fallbackController.signal,
+                    });
+                } catch (err) {
+                    clearTimeout(fallbackTimeoutId);
+                    throw err;
+                }
                 clearTimeout(fallbackTimeoutId);
-                const fallbackElapsed = Date.now() - fallbackStart;
 
-                if (fallbackResponse.ok) {
-                    console.log(
-                        JSON.stringify({
-                            event: "whisper_fallback_success",
-                            fallbackModel: "whisper-1",
-                            elapsedMs: fallbackElapsed,
-                            elapsedSeconds: Math.round(fallbackElapsed / 1000),
-                        })
-                    );
-                    return { text: await fallbackResponse.text(), model: "whisper-1" };
+                if (fallbackResponse.status === 429) {
+                    throw new Error("Rate limited: HTTP 429");
+                }
+                if (fallbackResponse.status >= 500) {
+                    throw new Error(`Server error: HTTP ${fallbackResponse.status}`);
                 }
 
-                // Fallback also failed — log and fall through to the original error
-                const fallbackError = await fallbackResponse.text().catch(() => "Unknown");
-                console.error(
+                if (!fallbackResponse.ok) {
+                    const fallbackError = await fallbackResponse.text().catch(() => "Unknown");
+                    const fallbackElapsed = Date.now() - fallbackStart;
+                    console.error(
+                        JSON.stringify({
+                            event: "whisper_fallback_failed",
+                            fallbackModel: "whisper-1",
+                            status: fallbackResponse.status,
+                            elapsedMs: fallbackElapsed,
+                            error: fallbackError,
+                        })
+                    );
+                    // Non-retryable — throw a plain error so withRetry won't retry
+                    throw new Error(`whisper-1 error: ${fallbackError}`);
+                }
+
+                return fallbackResponse.text();
+            };
+
+            try {
+                const fallbackText = await withRetry(attemptWhisper1, {
+                    maxRetries: 3,
+                    baseDelayMs: 1000,
+                    shouldRetry: isTransientError,
+                });
+                const fallbackElapsed = Date.now() - fallbackStart;
+                console.log(
                     JSON.stringify({
-                        event: "whisper_fallback_failed",
+                        event: "whisper_fallback_success",
                         fallbackModel: "whisper-1",
-                        status: fallbackResponse.status,
                         elapsedMs: fallbackElapsed,
-                        error: fallbackError,
+                        elapsedSeconds: Math.round(fallbackElapsed / 1000),
                     })
                 );
+                return { text: fallbackText, model: "whisper-1" };
             } catch (fallbackErr) {
-                clearTimeout(fallbackTimeoutId);
                 console.error(
                     JSON.stringify({
                         event: "whisper_fallback_error",
@@ -529,38 +544,31 @@ async function callWhisperApi(
 }
 
 /**
- * Options for configuring the transcription provider
+ * Options for configuring the transcription call
  */
 export interface TranscribeOptions {
-    /** API key for the transcription provider */
+    /** OpenAI API key */
     apiKey: string;
-    /** Provider name: "openai" or "groq" (defaults to "openai") */
+    /** Ignored — kept for backwards compatibility with old call sites */
     provider?: string;
     /** Optional callback for progress updates (chunk number, total chunks) */
     onProgress?: (currentChunk: number, totalChunks: number) => void;
 }
 
 /**
- * Transcribe audio from URL using a Whisper-compatible API.
- * Supports OpenAI and Groq as providers (controlled via options.provider).
+ * Transcribe audio from URL using OpenAI gpt-4o-mini-transcribe.
+ * Automatically falls back to whisper-1 for files the primary model rejects.
  * Automatically handles large files by chunking them into smaller segments.
  * 
  * @param audioUrl - URL of the audio file to transcribe
- * @param options - Transcription options (apiKey, provider, onProgress)
+ * @param options - Transcription options (apiKey, onProgress)
  * @returns Transcription result with text and source
  * @throws AppError with AUDIO_UNAVAILABLE, TRANSCRIPTION_FAILED, or RATE_LIMITED
  * 
  * @example
  * ```typescript
- * // Using OpenAI (default)
  * const result = await transcribeAudio("https://example.com/podcast.mp3", {
  *   apiKey: env.OPENAI_API_KEY,
- * });
- *
- * // Using Groq
- * const result = await transcribeAudio("https://example.com/podcast.mp3", {
- *   apiKey: env.GROQ_API_KEY,
- *   provider: "groq",
  * });
  * ```
  */
@@ -662,7 +670,7 @@ export async function transcribeAudio(
  * @param audioUrl - URL of the audio file
  * @param contentLength - Total file size in bytes
  * @param apiKey - API key for the transcription provider
- * @param provider - Provider config (OpenAI or Groq)
+ * @param provider - Provider config
  * @param onProgress - Optional progress callback
  * @returns Combined transcription result
  */

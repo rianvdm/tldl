@@ -17,12 +17,7 @@ export type JobStatus =
 /**
  * Source of the transcript - determines how we obtained it
  */
-export type TranscriptSource = "apple" | "rss" | "openai" | "groq";
-
-/**
- * Supported transcription providers
- */
-export type TranscriptionProvider = "openai" | "groq";
+export type TranscriptSource = "apple" | "rss" | "openai";
 
 /**
  * Job record - tracks the processing state of a submitted episode
@@ -152,7 +147,6 @@ export interface Env {
 
     // Secrets (set via wrangler secret put)
     OPENAI_API_KEY: string;
-    GROQ_API_KEY: string;          // Optional: only needed if TRANSCRIPTION_PROVIDER=groq
     PODCAST_INDEX_KEY: string;
     PODCAST_INDEX_SECRET: string;
     TURNSTILE_SECRET: string;
@@ -163,7 +157,6 @@ export interface Env {
     CACHE_TTL_DAYS: string;
     DEFAULT_TEMPLATE: string;
     ENVIRONMENT: string;           // "production" or "development"
-    TRANSCRIPTION_PROVIDER: string; // "openai" (default) or "groq"
 }
 
 /**
