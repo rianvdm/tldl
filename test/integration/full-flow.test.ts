@@ -8,6 +8,7 @@ import {
     getEpisode,
     getTranscript,
     getSummary,
+    appendActivityEvent,
 } from "../../src/lib/kv";
 import type { Episode, Transcript, Summary } from "../../src/types";
 
@@ -261,5 +262,243 @@ describe("Integration: Error Handling", () => {
         expect(response.status).toBe(404);
         const html = await response.text();
         expect(html).toContain("Episode Not Found");
+    });
+
+    it("empty URL on admin submit shows validation error", async () => {
+        const formData = new FormData();
+        formData.append("appleUrl", "");
+        formData.append("templateId", "key-takeaways");
+
+        const response = await SELF.fetch("http://localhost/admin/submit", {
+            method: "POST",
+            body: formData,
+        });
+
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("Please enter an Apple Podcasts URL");
+    });
+
+    it("invalid template ID on admin submit shows error", async () => {
+        const response = await SELF.fetch("http://localhost/admin/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                appleUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+                templateId: "nonexistent-template",
+            }),
+        });
+
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("Invalid summary template");
+    });
+});
+
+// ============================================================================
+// Admin CRUD Flow Tests
+// ============================================================================
+
+describe("Integration: Admin CRUD Flow", () => {
+    beforeEach(async () => {
+        await clearTestData();
+        await env.TLDL_DATA.delete("activity:log");
+    });
+
+    it("full admin lifecycle: create → view → edit tags → edit summary → delete", async () => {
+        // Step 1: Create episode data (simulating what the queue consumer would produce)
+        // Use ID "123_456" to match deriveEpisodeId("123", "456") from the apple URL
+        const episode = createSampleEpisode({
+            id: "123_456",
+            appleUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        });
+        const transcript = createSampleTranscript({ episodeId: episode.id });
+        const summary = createSampleSummary({ episodeId: episode.id });
+
+        await saveEpisode(env.TLDL_DATA, episode);
+        await saveTranscript(env.TLDL_DATA, transcript);
+        await saveSummary(env.TLDL_DATA, summary);
+
+        // Step 2: Episode appears on admin dashboard
+        const dashboardResponse = await SELF.fetch("http://localhost/admin");
+        expect(dashboardResponse.status).toBe(200);
+        const dashboardHtml = await dashboardResponse.text();
+        expect(dashboardHtml).toContain("Integration Test Podcast");
+        expect(dashboardHtml).toContain("Integration Test Episode");
+
+        // Step 3: Episode appears on public home page
+        const homeResponse = await SELF.fetch("http://localhost/");
+        expect(homeResponse.status).toBe(200);
+        const homeHtml = await homeResponse.text();
+        expect(homeHtml).toContain("Integration Test Episode");
+
+        // Step 4: Edit tags via admin API
+        const tagResponse = await SELF.fetch(
+            `http://localhost/admin/episodes/${episode.id}/tags`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tags: ["technology", "ai"] }),
+            }
+        );
+        expect(tagResponse.status).toBe(200);
+        const tagData = await tagResponse.json() as { success: boolean; tags: string[] };
+        expect(tagData.tags).toEqual(["technology", "ai"]);
+
+        // Step 5: Get summaries via admin API
+        const summariesResponse = await SELF.fetch(
+            `http://localhost/admin/episodes/${episode.id}/summaries`
+        );
+        expect(summariesResponse.status).toBe(200);
+        const summariesData = await summariesResponse.json() as {
+            summaries: Array<{ templateId: string; text: string }>;
+        };
+        expect(summariesData.summaries).toHaveLength(1);
+        expect(summariesData.summaries[0].templateId).toBe("key-takeaways");
+
+        // Step 6: Edit summary text via admin API
+        const editResponse = await SELF.fetch(
+            `http://localhost/admin/episodes/${episode.id}/summaries/key-takeaways`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text: "Updated summary content" }),
+            }
+        );
+        expect(editResponse.status).toBe(200);
+
+        // Verify the summary was actually updated
+        const updatedSummary = await getSummary(env.TLDL_DATA, episode.id, "key-takeaways");
+        expect(updatedSummary).not.toBeNull();
+        expect(updatedSummary!.text).toBe("Updated summary content");
+
+        // Step 7: Submit same episode URL → should redirect to existing episode
+        const resubmitResponse = await SELF.fetch("http://localhost/admin/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                appleUrl: episode.appleUrl,
+                templateId: "key-takeaways",
+            }),
+            redirect: "manual",
+        });
+        expect(resubmitResponse.status).toBe(302);
+        expect(resubmitResponse.headers.get("Location")).toBe(`/episode/${episode.id}`);
+
+        // Step 8: Delete episode via admin
+        const deleteResponse = await SELF.fetch(
+            `http://localhost/admin/episodes/${episode.id}/delete`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+            }
+        );
+        expect(deleteResponse.status).toBe(200);
+
+        // Step 9: Verify everything is gone
+        expect(await getEpisode(env.TLDL_DATA, episode.id)).toBeNull();
+        expect(await getTranscript(env.TLDL_DATA, episode.id)).toBeNull();
+        expect(await getSummary(env.TLDL_DATA, episode.id, "key-takeaways")).toBeNull();
+
+        // Step 10: Public page no longer shows the episode
+        const homeAfterDelete = await SELF.fetch("http://localhost/");
+        const homeAfterHtml = await homeAfterDelete.text();
+        expect(homeAfterHtml).not.toContain("Integration Test Episode");
+    });
+
+    it("admin dashboard shows stats and activity together", async () => {
+        // Create some episodes
+        await saveEpisode(env.TLDL_DATA, createSampleEpisode({ id: "ep1", podcastName: "Podcast A" }));
+        await saveEpisode(env.TLDL_DATA, createSampleEpisode({ id: "ep2", podcastName: "Podcast B" }));
+
+        // Add activity events
+        await appendActivityEvent(env.TLDL_DATA, {
+            type: "episode_completed",
+            timestamp: new Date().toISOString(),
+            title: "Podcast A: Great Episode",
+            episodeId: "ep1",
+        });
+        await appendActivityEvent(env.TLDL_DATA, {
+            type: "monitor_check",
+            timestamp: new Date().toISOString(),
+            title: "Monitoring check: 3 podcasts, 0 new episodes",
+        });
+
+        // Dashboard should show both stats and activity
+        const response = await SELF.fetch("http://localhost/admin");
+        expect(response.status).toBe(200);
+        const html = await response.text();
+
+        // Stats
+        expect(html).toContain("Episodes");
+        expect(html).toContain("Podcasts");
+
+        // Activity
+        expect(html).toContain("Recent Activity");
+        expect(html).toContain("Podcast A: Great Episode");
+        expect(html).toContain("Monitoring check: 3 podcasts, 0 new episodes");
+
+        // Episode list
+        expect(html).toContain("Podcast A");
+        expect(html).toContain("Podcast B");
+    });
+});
+
+// ============================================================================
+// Public vs Admin Access Flow Tests
+// ============================================================================
+
+describe("Integration: Public vs Admin Access", () => {
+    beforeEach(async () => {
+        await clearTestData();
+    });
+
+    it("public pages work, removed routes 404, admin routes accessible", async () => {
+        // Create test data
+        const episode = createSampleEpisode();
+        await saveEpisode(env.TLDL_DATA, episode);
+        await saveSummary(env.TLDL_DATA, createSampleSummary({ episodeId: episode.id }));
+
+        // Public pages work
+        expect((await SELF.fetch("http://localhost/")).status).toBe(200);
+        expect((await SELF.fetch("http://localhost/about")).status).toBe(200);
+        expect((await SELF.fetch("http://localhost/podcasts")).status).toBe(200);
+        expect((await SELF.fetch(`http://localhost/episode/${episode.id}`)).status).toBe(200);
+        expect((await SELF.fetch("http://localhost/feed")).status).toBe(200);
+
+        // Removed routes return 404
+        expect((await SELF.fetch("http://localhost/submit")).status).toBe(404);
+        expect((await SELF.fetch("http://localhost/waitlist")).status).toBe(404);
+        expect((await SELF.fetch("http://localhost/profile")).status).toBe(404);
+        expect((await SELF.fetch("http://localhost/job/test-id")).status).toBe(404);
+
+        // Admin routes work (dev mode = auto-authenticated)
+        expect((await SELF.fetch("http://localhost/admin")).status).toBe(200);
+        expect((await SELF.fetch("http://localhost/admin/submit")).status).toBe(200);
+        expect((await SELF.fetch("http://localhost/admin/podcasts")).status).toBe(200);
+
+        // Admin trailing slash redirects
+        const slashResponse = await SELF.fetch("http://localhost/admin/", { redirect: "manual" });
+        expect(slashResponse.status).toBe(301);
+        expect(slashResponse.headers.get("Location")).toBe("/admin");
+    });
+
+    it("public nav has no login, submit, or auth elements", async () => {
+        const response = await SELF.fetch("http://localhost/");
+        const html = await response.text();
+
+        // Should NOT contain auth elements
+        expect(html).not.toContain('id="nav-auth-link"');
+        expect(html).not.toContain("auth-logged-out");
+        expect(html).not.toContain("auth-logged-in");
+        expect(html).not.toContain('href="/submit"');
+        expect(html).not.toContain('href="/profile"');
+        expect(html).not.toContain('href="/waitlist"');
+        expect(html).not.toContain("__authCheck");
+        expect(html).not.toContain("tldl-auth");
+
+        // Should contain public nav links
+        expect(html).toContain('href="/podcasts"');
+        expect(html).toContain('href="/about"');
     });
 });
