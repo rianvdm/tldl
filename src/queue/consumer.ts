@@ -24,6 +24,7 @@ import {
     saveTranscript,
     saveSummary,
     addToEpisodeIndex,
+    appendActivityEvent,
 } from "../lib/kv";
 import {
     updateJobStatusDO,
@@ -99,6 +100,21 @@ const queueHandler = {
             try {
                 await processMessage(message.body, env);
                 message.ack();
+
+                // Log successful completion to activity log
+                try {
+                    const episode = await getEpisode(env.TLDL_DATA, message.body.episodeId);
+                    await appendActivityEvent(env.TLDL_DATA, {
+                        type: "episode_completed",
+                        timestamp: new Date().toISOString(),
+                        title: episode
+                            ? `${episode.podcastName}: ${episode.episodeTitle}`
+                            : `Episode ${message.body.episodeId}`,
+                        episodeId: message.body.episodeId,
+                    });
+                } catch {
+                    // Activity log is non-critical — don't fail the job
+                }
             } catch (error) {
                 // Log the error with context
                 console.error(
@@ -129,6 +145,22 @@ const queueHandler = {
                                 errorMessage,
                             })
                         );
+
+                        // Log failure to activity log
+                        try {
+                            const episode = await getEpisode(env.TLDL_DATA, message.body.episodeId);
+                            await appendActivityEvent(env.TLDL_DATA, {
+                                type: "episode_failed",
+                                timestamp: new Date().toISOString(),
+                                title: episode
+                                    ? `${episode.podcastName}: ${episode.episodeTitle}`
+                                    : `Episode ${message.body.episodeId}`,
+                                details: errorMessage,
+                                episodeId: message.body.episodeId,
+                            });
+                        } catch {
+                            // Activity log is non-critical
+                        }
                     } catch (updateError) {
                         console.error("Failed to update job status:", updateError);
                     }

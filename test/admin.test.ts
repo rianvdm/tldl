@@ -11,6 +11,8 @@ import {
     saveSummary,
     getSummary,
     listSummariesForEpisode,
+    appendActivityEvent,
+    getActivityLog,
 } from "../src/lib/kv";
 import type { Episode, Transcript, Summary, Job } from "../src/types";
 
@@ -815,6 +817,115 @@ describe("DELETE /admin/jobs/:id", () => {
         expect(response.status).toBe(200);
         const data = (await response.json()) as { success: boolean };
         expect(data.success).toBe(true);
+    });
+});
+
+// ============================================================================
+// Activity Log
+// ============================================================================
+
+describe("Activity Log", () => {
+    beforeEach(async () => {
+        await clearTestData();
+        // Also clear activity log
+        await env.TLDL_DATA.delete("activity:log");
+    });
+
+    it("appends and retrieves activity events", async () => {
+        await appendActivityEvent(env.TLDL_DATA, {
+            type: "episode_completed",
+            timestamp: "2025-01-01T10:00:00Z",
+            title: "Test Podcast: Episode 1",
+            episodeId: "ep1",
+        });
+
+        await appendActivityEvent(env.TLDL_DATA, {
+            type: "monitor_check",
+            timestamp: "2025-01-01T11:00:00Z",
+            title: "Monitoring check: 5 podcasts, 1 new episode",
+        });
+
+        const log = await getActivityLog(env.TLDL_DATA);
+        expect(log).toHaveLength(2);
+        // Newest first
+        expect(log[0].type).toBe("monitor_check");
+        expect(log[1].type).toBe("episode_completed");
+    });
+
+    it("respects limit parameter", async () => {
+        for (let i = 0; i < 5; i++) {
+            await appendActivityEvent(env.TLDL_DATA, {
+                type: "episode_completed",
+                timestamp: new Date(Date.now() + i * 1000).toISOString(),
+                title: `Episode ${i}`,
+            });
+        }
+
+        const limited = await getActivityLog(env.TLDL_DATA, 3);
+        expect(limited).toHaveLength(3);
+    });
+
+    it("caps at 50 entries", async () => {
+        for (let i = 0; i < 55; i++) {
+            await appendActivityEvent(env.TLDL_DATA, {
+                type: "episode_completed",
+                timestamp: new Date(Date.now() + i * 1000).toISOString(),
+                title: `Episode ${i}`,
+            });
+        }
+
+        const log = await getActivityLog(env.TLDL_DATA);
+        expect(log).toHaveLength(50);
+        // Most recent should be Episode 54
+        expect(log[0].title).toBe("Episode 54");
+    });
+
+    it("returns empty array when no log exists", async () => {
+        const log = await getActivityLog(env.TLDL_DATA);
+        expect(log).toHaveLength(0);
+    });
+
+    it("handles corrupted log data gracefully", async () => {
+        await env.TLDL_DATA.put("activity:log", "not valid json");
+        const log = await getActivityLog(env.TLDL_DATA);
+        expect(log).toHaveLength(0);
+    });
+
+    it("activity shows on admin dashboard", async () => {
+        await appendActivityEvent(env.TLDL_DATA, {
+            type: "episode_completed",
+            timestamp: new Date().toISOString(),
+            title: "Test Podcast: Great Episode",
+            episodeId: "ep1",
+        });
+
+        const response = await SELF.fetch("http://localhost/admin");
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("Recent Activity");
+        expect(html).toContain("Test Podcast: Great Episode");
+    });
+});
+
+// ============================================================================
+// Dashboard Stats
+// ============================================================================
+
+describe("Dashboard Stats", () => {
+    beforeEach(async () => {
+        await clearTestData();
+    });
+
+    it("shows episode and podcast counts", async () => {
+        await saveEpisode(env.TLDL_DATA, createSampleEpisode({ id: "ep1", podcastName: "Podcast A" }));
+        await saveEpisode(env.TLDL_DATA, createSampleEpisode({ id: "ep2", podcastName: "Podcast B" }));
+
+        const response = await SELF.fetch("http://localhost/admin");
+        const html = await response.text();
+
+        // Stats should show counts
+        expect(html).toContain("Episodes");
+        expect(html).toContain("Podcasts");
     });
 });
 

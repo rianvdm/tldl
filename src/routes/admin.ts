@@ -24,11 +24,14 @@ import {
     getMonitoredPodcast,
     deleteMonitoredPodcast,
     updateEpisodeTags,
+    getActivityLog,
+    getPodcastList,
 } from "../lib/kv";
 import {
     createJobDO,
     deleteJobDO,
     getJobDO,
+    listActiveJobsWithDO,
 } from "../lib/job-status-do";
 import {
     enqueueJob,
@@ -101,6 +104,21 @@ function formatDuration(seconds: number): string {
     return `${minutes}m`;
 }
 
+function formatRelativeTime(isoDate: string): string {
+    const now = Date.now();
+    const then = new Date(isoDate).getTime();
+    const diffMs = now - then;
+    const diffMinutes = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMinutes < 1) return "just now";
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(isoDate));
+}
+
 function formatDate(dateString: string): string {
     const date = new Date(dateString);
     return new Intl.DateTimeFormat("en-US", {
@@ -125,9 +143,26 @@ admin.get("/", async (c) => {
     const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
     const pageSize = 10;
 
-    const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
+    // Fetch dashboard data in parallel
+    const [result, podcasts, activityLog, activeJobs] = await Promise.all([
+        listEpisodes(c.env.TLDL_DATA, { page, pageSize }),
+        getPodcastList(c.env.TLDL_DATA),
+        getActivityLog(c.env.TLDL_DATA, 8),
+        listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
+    ]);
+
     const episodes = result.episodes;
     const totalPages = result.totalPages;
+
+    // Compute stats
+    const totalEpisodes = result.total;
+    const totalPodcasts = podcasts.length;
+    const monitoredPodcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
+    const errorCount = monitoredPodcasts.filter(p => p.status === "error").length;
+    const lastChecked = monitoredPodcasts.reduce((latest, p) => {
+        if (!p.lastChecked) return latest;
+        return !latest || p.lastChecked > latest ? p.lastChecked : latest;
+    }, "" as string);
 
     // Build episode cards with admin controls
     const episodeCards = await Promise.all(
@@ -224,18 +259,84 @@ admin.get("/", async (c) => {
         </nav>
     ` : "";
 
+    // Build activity log HTML
+    const activityHtml = activityLog.length > 0
+        ? activityLog.map(event => {
+            const icon = event.type === "episode_completed"
+                ? `<span class="activity-icon activity-icon-success">✓</span>`
+                : event.type === "episode_failed"
+                    ? `<span class="activity-icon activity-icon-error">✗</span>`
+                    : event.type === "monitor_error"
+                        ? `<span class="activity-icon activity-icon-error">!</span>`
+                        : `<span class="activity-icon activity-icon-info">↻</span>`;
+
+            const detailsHtml = event.details
+                ? `<span class="activity-details">${escapeHtml(event.details)}</span>`
+                : "";
+
+            return `<div class="activity-item">
+                ${icon}
+                <div class="activity-content">
+                    <span class="activity-title">${escapeHtml(event.title)}</span>
+                    ${detailsHtml}
+                </div>
+                <span class="activity-time">${formatRelativeTime(event.timestamp)}</span>
+            </div>`;
+        }).join("")
+        : `<p class="text-muted">No recent activity.</p>`;
+
+    // Active jobs section
+    const activeJobsHtml = activeJobs.length > 0
+        ? `<div class="activity-item">
+            <span class="activity-icon activity-icon-info">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spinner">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+            </span>
+            <div class="activity-content">
+                <span class="activity-title">${activeJobs.length} active job${activeJobs.length !== 1 ? "s" : ""}</span>
+            </div>
+        </div>`
+        : "";
+
     const content = `
         <div class="page-header">
             <h1>Admin Dashboard</h1>
             <p class="page-subtitle">${escapeHtml(userEmail)} <span class="badge">Admin</span></p>
-            <div style="display: flex; gap: 0.5rem;">
-                <a href="/admin/submit" class="button button-primary">Submit Episode</a>
-                <a href="/admin/podcasts" class="button button-secondary">Manage Podcasts</a>
-                <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F" class="button button-secondary">Log Out</a>
+        </div>
+
+        <div class="admin-stats-grid">
+            <div class="admin-stat-card">
+                <span class="admin-stat-number">${totalEpisodes}</span>
+                <span class="admin-stat-label">Episodes</span>
+            </div>
+            <div class="admin-stat-card">
+                <span class="admin-stat-number">${totalPodcasts}</span>
+                <span class="admin-stat-label">Podcasts</span>
+            </div>
+            <div class="admin-stat-card ${errorCount > 0 ? "admin-stat-error" : ""}">
+                <span class="admin-stat-number">${errorCount}</span>
+                <span class="admin-stat-label">Errors</span>
+            </div>
+            <div class="admin-stat-card">
+                <span class="admin-stat-number">${lastChecked ? formatRelativeTime(lastChecked) : "—"}</span>
+                <span class="admin-stat-label">Last check</span>
             </div>
         </div>
 
-        <div class="divider"></div>
+        <div class="admin-quick-actions">
+            <a href="/admin/submit" class="button button-primary">Submit Episode</a>
+            <a href="/admin/podcasts" class="button">Manage Podcasts</a>
+            <button type="button" class="button" onclick="checkAllNow()">Check All Now</button>
+            <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F" class="button" style="margin-left: auto;">Log Out</a>
+        </div>
+        <div id="check-all-status" class="alert" style="display: none; margin-bottom: 1rem;"></div>
+
+        <section class="card admin-activity-section">
+            <h2 style="margin-top: 0;">Recent Activity</h2>
+            ${activeJobsHtml}
+            ${activityHtml}
+        </section>
 
         <section class="section">
             <h2>All Episodes</h2>
@@ -699,6 +800,34 @@ async function backfillPodcastInfo() {
         statusEl.textContent = 'Failed to backfill podcast info';
         button.disabled = false;
         button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
+    }
+}
+
+async function checkAllNow() {
+    var status = document.getElementById('check-all-status');
+    status.className = 'alert alert-info';
+    status.textContent = 'Checking all podcasts...';
+    status.style.display = 'block';
+
+    try {
+        var response = await fetch('/admin/podcasts/check-now', {
+            method: 'POST',
+            credentials: 'include',
+        });
+        var data = await response.json();
+        if (response.ok) {
+            status.className = 'alert alert-success';
+            status.textContent = 'Checked ' + data.checked + ' podcasts. ' + data.totalNewEpisodes + ' new episode(s) queued.';
+            if (data.totalNewEpisodes > 0) {
+                setTimeout(function() { window.location.reload(); }, 2000);
+            }
+        } else {
+            status.className = 'alert alert-error';
+            status.textContent = data.error || 'Failed to check podcasts';
+        }
+    } catch (err) {
+        status.className = 'alert alert-error';
+        status.textContent = 'Failed to check podcasts';
     }
 }
 </script>

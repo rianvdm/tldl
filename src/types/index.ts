@@ -198,3 +198,26 @@ export interface MonitorSettings {
     maxEpisodesPerCheck: number;   // Default: 5
     enabled: boolean;              // Global enable/disable
 }
+
+/**
+ * Activity event type for the admin dashboard activity log
+ */
+export type ActivityEventType =
+    | "episode_completed"
+    | "episode_failed"
+    | "monitor_check"
+    | "monitor_error";
+
+/**
+ * A single entry in the admin activity log
+ * Stored as part of a JSON array in KV with key: activity:log
+ * TTL: 30 days, capped at 50 entries
+ */
+export interface ActivityEvent {
+    type: ActivityEventType;
+    timestamp: string;             // ISO 8601
+    title: string;                 // Human-readable summary
+    details?: string;              // Error message or extra context
+    episodeId?: string;            // For episode events
+    podcastId?: string;            // For monitoring events
+}

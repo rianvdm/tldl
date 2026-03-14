@@ -15,6 +15,7 @@ import publicRoutes from "./routes/public";
 import queueConsumer from "./queue/consumer";
 import { Footer } from "./lib/components";
 import { checkAllPodcasts } from "./lib/monitor";
+import { appendActivityEvent } from "./lib/kv";
 import type { Env } from "./types";
 
 // ============================================================================
@@ -444,11 +445,39 @@ async function scheduledHandler(
             totalNewEpisodes: result.totalNewEpisodes,
             errors: result.errors.length,
         }));
+
+        // Log monitoring check to activity log
+        if (result.errors.length > 0) {
+            await appendActivityEvent(env.TLDL_DATA, {
+                type: "monitor_error",
+                timestamp: new Date().toISOString(),
+                title: `Monitoring check: ${result.errors.length} error(s) in ${result.checked} podcasts`,
+                details: result.errors.join("; "),
+            });
+        } else {
+            await appendActivityEvent(env.TLDL_DATA, {
+                type: "monitor_check",
+                timestamp: new Date().toISOString(),
+                title: `Monitoring check: ${result.checked} podcasts, ${result.totalNewEpisodes} new episode(s)`,
+            });
+        }
     } catch (error) {
         console.error(JSON.stringify({
             event: "scheduled_handler_error",
             error: error instanceof Error ? error.message : String(error),
         }));
+
+        // Log the error to activity log (best effort)
+        try {
+            await appendActivityEvent(env.TLDL_DATA, {
+                type: "monitor_error",
+                timestamp: new Date().toISOString(),
+                title: "Monitoring check failed",
+                details: error instanceof Error ? error.message : String(error),
+            });
+        } catch {
+            // Activity log is non-critical
+        }
     }
 }
 

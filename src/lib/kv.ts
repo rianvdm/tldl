@@ -3,7 +3,7 @@
  * Provides typed helpers for all KV operations with consistent key schemas and TTLs.
  */
 
-import type { Job, JobStatus, Episode, Transcript, Summary, EpisodeIndexEntry, MonitoredPodcast, MonitorSettings } from "../types";
+import type { Job, JobStatus, Episode, Transcript, Summary, EpisodeIndexEntry, MonitoredPodcast, MonitorSettings, ActivityEvent } from "../types";
 
 // Key generation functions for consistent naming
 export const KV_KEYS = {
@@ -18,13 +18,17 @@ export const KV_KEYS = {
     monitoredList: "monitored:list",
     monitoredPodcast: (podcastId: string) => `monitored:${podcastId}`,
     monitoredProcessed: (podcastId: string) => `monitored:processed:${podcastId}`,
+    activityLog: "activity:log",
 };
 
 // TTL constants in seconds
 export const TTL = {
     JOB: 1 * 24 * 60 * 60, // 1 day
     CONTENT: 365 * 24 * 60 * 60, // 365 days
+    ACTIVITY_LOG: 30 * 24 * 60 * 60, // 30 days
 };
+
+const ACTIVITY_LOG_MAX_ENTRIES = 50;
 
 // ============================================================================
 // Job Operations
@@ -806,5 +810,61 @@ export async function updateMonitoredPodcastStatus(
     }
 
     await saveMonitoredPodcast(kv, updated);
+}
+
+// ============================================================================
+// Activity Log Operations
+// ============================================================================
+
+/**
+ * Append an event to the activity log.
+ * The log is a capped array (max 50 entries) stored as a single KV value.
+ * Newest entries are prepended so the array is sorted newest-first.
+ */
+export async function appendActivityEvent(
+    kv: KVNamespace,
+    event: ActivityEvent
+): Promise<void> {
+    const existing = await kv.get(KV_KEYS.activityLog);
+    let log: ActivityEvent[] = [];
+
+    if (existing) {
+        try {
+            log = JSON.parse(existing);
+        } catch {
+            // Corrupted log — start fresh
+            log = [];
+        }
+    }
+
+    // Prepend new event (newest first)
+    log.unshift(event);
+
+    // Cap at max entries
+    if (log.length > ACTIVITY_LOG_MAX_ENTRIES) {
+        log = log.slice(0, ACTIVITY_LOG_MAX_ENTRIES);
+    }
+
+    await kv.put(KV_KEYS.activityLog, JSON.stringify(log), {
+        expirationTtl: TTL.ACTIVITY_LOG,
+    });
+}
+
+/**
+ * Read the activity log, optionally limited to the most recent N entries.
+ */
+export async function getActivityLog(
+    kv: KVNamespace,
+    limit?: number
+): Promise<ActivityEvent[]> {
+    const data = await kv.get(KV_KEYS.activityLog);
+    if (!data) return [];
+
+    try {
+        const log: ActivityEvent[] = JSON.parse(data);
+        return limit ? log.slice(0, limit) : log;
+    } catch {
+        return [];
+    }
 }
 
