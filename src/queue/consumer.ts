@@ -14,6 +14,7 @@ import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
 import { generateEpisodeTags } from "../services/tag-generation";
 import { parseApplePodcastsUrl } from "../lib/url-parser";
+import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
 import {
     getJob,
     updateJobStatus,
@@ -146,20 +147,28 @@ const queueHandler = {
                             })
                         );
 
-                        // Log failure to activity log
+                        // Log failure to activity log and notify Discord
                         try {
                             const episode = await getEpisode(env.TLDL_DATA, message.body.episodeId);
+                            const episodeLabel = episode
+                                ? `${episode.podcastName}: ${episode.episodeTitle}`
+                                : `Episode ${message.body.episodeId}`;
+
                             await appendActivityEvent(env.TLDL_DATA, {
                                 type: "episode_failed",
                                 timestamp: new Date().toISOString(),
-                                title: episode
-                                    ? `${episode.podcastName}: ${episode.episodeTitle}`
-                                    : `Episode ${message.body.episodeId}`,
+                                title: episodeLabel,
                                 details: errorMessage,
                                 episodeId: message.body.episodeId,
                             });
+
+                            await notifyDiscord(env.DISCORD_WEBHOOK_URL, {
+                                title: "🔴 Episode processing failed",
+                                description: `**${episodeLabel}**\n\n${errorMessage}`,
+                                color: DISCORD_COLORS.ERROR,
+                            });
                         } catch {
-                            // Activity log is non-critical
+                            // Activity log and Discord are non-critical
                         }
                     } catch (updateError) {
                         console.error("Failed to update job status:", updateError);

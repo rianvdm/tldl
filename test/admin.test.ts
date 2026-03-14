@@ -776,7 +776,7 @@ describe("GET /admin/podcasts", () => {
         const html = await response.text();
         expect(html).toContain("Monitor Podcasts");
         expect(html).toContain("Add Podcast");
-        expect(html).toContain("Global Settings");
+        expect(html).toContain("Settings");
     });
 });
 

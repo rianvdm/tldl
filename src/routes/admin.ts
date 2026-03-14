@@ -1597,6 +1597,28 @@ admin.get("/podcasts", async (c) => {
     const settings = await getMonitorSettings(c.env.TLDL_DATA);
     const podcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
 
+    // Status summary
+    const activeCount = podcasts.filter(p => p.status === "active").length;
+    const errorCount = podcasts.filter(p => p.status === "error").length;
+    const pausedCount = podcasts.filter(p => p.status === "paused").length;
+    const lastCheckedGlobal = podcasts.reduce((latest, p) => {
+        if (!p.lastChecked) return latest;
+        return !latest || p.lastChecked > latest ? p.lastChecked : latest;
+    }, "" as string);
+
+    const statusSummaryHtml = `
+        <div class="card" style="margin-bottom: 1rem;">
+            <div style="display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap;">
+                <span>Monitoring: <strong>${settings.enabled ? "● Active" : "○ Paused"}</strong></span>
+                <span>${podcasts.length} podcast${podcasts.length !== 1 ? "s" : ""}</span>
+                ${activeCount > 0 ? `<span class="status-badge status-active">${activeCount} active</span>` : ""}
+                ${errorCount > 0 ? `<span class="status-badge status-error">${errorCount} error</span>` : ""}
+                ${pausedCount > 0 ? `<span class="status-badge status-paused">${pausedCount} paused</span>` : ""}
+                ${lastCheckedGlobal ? `<span>Last check: ${formatRelativeTime(lastCheckedGlobal)}</span>` : ""}
+            </div>
+        </div>
+    `;
+
     const podcastCards = podcasts.length === 0
         ? `<div class="empty-state">No podcasts are being monitored yet.</div>`
         : podcasts.map(podcast => `
@@ -1608,9 +1630,10 @@ admin.get("/podcasts", async (c) => {
                 <div class="podcast-meta">
                     <span>Template: ${escapeHtml(podcast.templateId)}</span>
                     <span>Episodes: ${podcast.episodesProcessed}</span>
-                    ${podcast.lastChecked ? `<span>Last checked: ${new Date(podcast.lastChecked).toLocaleString()}</span>` : ""}
+                    ${podcast.lastChecked ? `<span>Checked: ${formatRelativeTime(podcast.lastChecked)}</span>` : `<span>Never checked</span>`}
+                    <a href="https://podcasts.apple.com/us/podcast/id${escapeHtml(podcast.id)}" target="_blank" rel="noopener" style="color: var(--muted-foreground);">Apple Podcasts ↗</a>
                 </div>
-                ${podcast.lastError ? `<div class="alert alert-error">${escapeHtml(podcast.lastError)}</div>` : ""}
+                ${podcast.lastError ? `<div class="alert alert-error" style="margin-top: 0.5rem; font-size: 0.875rem;">${escapeHtml(podcast.lastError)}</div>` : ""}
                 <div class="podcast-actions">
                     <button class="button" onclick="checkPodcast('${escapeHtml(podcast.id)}')">Check Now</button>
                     <button class="button button-danger" onclick="removePodcast('${escapeHtml(podcast.id)}')">Remove</button>
@@ -1631,26 +1654,20 @@ admin.get("/podcasts", async (c) => {
 
         <section class="section">
             <div class="card">
-                <h2>Global Settings</h2>
-                <form id="settings-form" class="monitor-settings-form">
-                    <div class="form-group">
-                        <label class="form-label" for="checkInterval">Check interval (hours)</label>
-                        <input type="number" id="checkInterval" name="checkInterval" class="form-input" value="${settings.checkIntervalHours}" min="1" max="24" style="max-width: 120px;" />
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="maxEpisodes">Max episodes per check</label>
-                        <input type="number" id="maxEpisodes" name="maxEpisodes" class="form-input" value="${settings.maxEpisodesPerCheck}" min="1" max="10" style="max-width: 120px;" />
-                    </div>
-                    <div class="form-group checkbox-group">
+                <h2 style="margin-top: 0;">Settings</h2>
+                <form id="settings-form" style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div class="form-group checkbox-group" style="margin: 0;">
                         <input type="checkbox" id="enabled" name="enabled" ${settings.enabled ? "checked" : ""} />
-                        <label for="enabled">Enable automatic monitoring</label>
+                        <label for="enabled">Auto-check (every 8h)</label>
                     </div>
-                    <div class="button-group">
-                        <button type="submit" class="button button-primary">Save Settings</button>
-                        <button type="button" class="button" onclick="checkAllNow()">Check All Now</button>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <label class="form-label" for="maxEpisodes" style="margin: 0; white-space: nowrap;">Max episodes/check:</label>
+                        <input type="number" id="maxEpisodes" name="maxEpisodes" class="form-input" value="${settings.maxEpisodesPerCheck}" min="1" max="10" style="width: 60px; padding: 0.375rem 0.5rem;" />
                     </div>
+                    <button type="submit" class="button button-primary">Save</button>
+                    <button type="button" class="button" onclick="checkAllNow()">Check All Now</button>
                 </form>
-                <div id="settings-message" class="alert" style="display: none; margin-top: 1rem;"></div>
+                <div id="settings-message" class="alert" style="display: none; margin-top: 0.75rem;"></div>
             </div>
         </section>
 
@@ -1682,6 +1699,7 @@ admin.get("/podcasts", async (c) => {
 
         <section class="section">
             <h2>Monitored Podcasts</h2>
+            ${statusSummaryHtml}
             <div id="podcasts-list">
                 ${podcastCards}
             </div>
@@ -1820,7 +1838,6 @@ admin.get("/podcasts", async (c) => {
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
                         body: JSON.stringify({
-                            checkIntervalHours: parseInt(document.getElementById('checkInterval').value),
                             maxEpisodesPerCheck: parseInt(document.getElementById('maxEpisodes').value),
                             enabled: document.getElementById('enabled').checked,
                         }),

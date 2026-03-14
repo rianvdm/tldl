@@ -16,6 +16,7 @@ import queueConsumer from "./queue/consumer";
 import { Footer } from "./lib/components";
 import { checkAllPodcasts } from "./lib/monitor";
 import { appendActivityEvent } from "./lib/kv";
+import { notifyDiscord, DISCORD_COLORS } from "./lib/discord";
 import type { Env } from "./types";
 
 // ============================================================================
@@ -301,6 +302,8 @@ Disallow: /debug/
     // Admin Routes (protected by Cloudflare Access in production)
     // ============================================================================
 
+    // Redirect /admin/ (trailing slash) to /admin for consistent URLs
+    app.get("/admin/", (c) => c.redirect("/admin", 301));
     app.route("/admin", admin);
 
     // ============================================================================
@@ -446,13 +449,19 @@ async function scheduledHandler(
             errors: result.errors.length,
         }));
 
-        // Log monitoring check to activity log
+        // Log monitoring check to activity log and notify Discord on errors
         if (result.errors.length > 0) {
+            const errorSummary = result.errors.join("; ");
             await appendActivityEvent(env.TLDL_DATA, {
                 type: "monitor_error",
                 timestamp: new Date().toISOString(),
                 title: `Monitoring check: ${result.errors.length} error(s) in ${result.checked} podcasts`,
-                details: result.errors.join("; "),
+                details: errorSummary,
+            });
+            await notifyDiscord(env.DISCORD_WEBHOOK_URL, {
+                title: `⚠ Monitoring: ${result.errors.length} error(s)`,
+                description: `Checked ${result.checked} podcasts.\n\n${errorSummary}`,
+                color: DISCORD_COLORS.WARNING,
             });
         } else {
             await appendActivityEvent(env.TLDL_DATA, {
@@ -462,21 +471,27 @@ async function scheduledHandler(
             });
         }
     } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
         console.error(JSON.stringify({
             event: "scheduled_handler_error",
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMsg,
         }));
 
-        // Log the error to activity log (best effort)
+        // Log the error to activity log and notify Discord (best effort)
         try {
             await appendActivityEvent(env.TLDL_DATA, {
                 type: "monitor_error",
                 timestamp: new Date().toISOString(),
                 title: "Monitoring check failed",
-                details: error instanceof Error ? error.message : String(error),
+                details: errorMsg,
+            });
+            await notifyDiscord(env.DISCORD_WEBHOOK_URL, {
+                title: "🔴 Monitoring check failed",
+                description: errorMsg,
+                color: DISCORD_COLORS.ERROR,
             });
         } catch {
-            // Activity log is non-critical
+            // Activity log and Discord are non-critical
         }
     }
 }

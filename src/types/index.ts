@@ -150,6 +150,7 @@ export interface Env {
     PODCAST_INDEX_KEY: string;
     PODCAST_INDEX_SECRET: string;
     TURNSTILE_SECRET: string;
+    DISCORD_WEBHOOK_URL?: string;  // Optional — notifications disabled if not set
 
     // Environment variables (from wrangler.toml [vars])
     TURNSTILE_SITE_KEY: string;
