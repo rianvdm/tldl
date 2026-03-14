@@ -10,10 +10,8 @@ import {
     getEpisode,
     getTranscript,
     listSummariesForEpisode,
-    deleteJob,
 } from "../lib/kv";
 import { TEMPLATES, getTemplate } from "../lib/constants";
-import { deleteJobDO, getJobDO } from "../lib/job-status-do";
 
 const api = new Hono<HonoEnv>();
 
@@ -200,36 +198,6 @@ api.get("/episode/:episodeId/transcript.txt", async (c) => {
     c.header("Content-Disposition", `attachment; filename="${filename}"`);
 
     return c.body(transcript.text);
-});
-
-// ============================================================================
-// DELETE /api/job/:jobId - Delete a job (for stuck/failed jobs)
-// ============================================================================
-
-api.delete("/job/:jobId", async (c) => {
-    const jobId = c.req.param("jobId");
-
-    // Check if job exists
-    const job = await getJobDO(c.env, jobId);
-    
-    console.log(
-        JSON.stringify({
-            event: "job_delete_request",
-            jobId,
-            exists: !!job,
-            status: job?.status,
-        })
-    );
-
-    // Delete from both DO and KV
-    await deleteJobDO(c.env, jobId);
-    await deleteJob(c.env.TLDL_DATA, jobId);
-
-    return c.json({ 
-        success: true, 
-        message: `Job ${jobId} deleted`,
-        previousStatus: job?.status || "not found",
-    });
 });
 
 export default api;

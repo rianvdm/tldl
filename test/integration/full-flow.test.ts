@@ -208,8 +208,8 @@ describe("Integration: Delete Episode Flow", () => {
         expect(await getTranscript(env.TLDL_DATA, episode.id)).not.toBeNull();
         expect(await getSummary(env.TLDL_DATA, episode.id, "key-takeaways")).not.toBeNull();
 
-        // Delete via API
-        const deleteResponse = await SELF.fetch(`http://localhost/episode/${episode.id}`, {
+        // Delete via admin API
+        const deleteResponse = await SELF.fetch(`http://localhost/admin/episodes/${episode.id}`, {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
         });
@@ -241,19 +241,19 @@ describe("Integration: Error Handling", () => {
         await clearTestData();
     });
 
-    it("invalid URL shows helpful error message", async () => {
+    it("invalid URL on admin submit shows helpful error", async () => {
         const formData = new FormData();
         formData.append("appleUrl", "https://spotify.com/episode/123");
         formData.append("templateId", "key-takeaways");
 
-        const response = await SELF.fetch("http://localhost/submit", {
+        const response = await SELF.fetch("http://localhost/admin/submit", {
             method: "POST",
             body: formData,
         });
 
-        expect(response.status).toBe(400);
+        expect(response.status).toBe(200); // Admin submit returns HTML error page with 200
         const html = await response.text();
-        expect(html).toContain("valid Apple Podcasts episode URL");
+        expect(html).toContain("Invalid Apple Podcasts episode URL");
     });
 
     it("non-existent episode returns 404 with helpful message", async () => {
@@ -261,12 +261,5 @@ describe("Integration: Error Handling", () => {
         expect(response.status).toBe(404);
         const html = await response.text();
         expect(html).toContain("Episode Not Found");
-    });
-
-    it("non-existent job returns 404", async () => {
-        const response = await SELF.fetch("http://localhost/job/non-existent-job");
-        expect(response.status).toBe(404);
-        const html = await response.text();
-        expect(html).toContain("Job Not Found");
     });
 });

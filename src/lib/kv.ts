@@ -217,37 +217,6 @@ export async function deleteEpisode(
 }
 
 /**
- * List episodes submitted by a specific user
- */
-export async function listEpisodesByUser(
-    kv: KVNamespace,
-    userEmail: string
-): Promise<Episode[]> {
-    const prefix = "episode:";
-    const keys = await kv.list({ prefix });
-
-    if (keys.keys.length === 0) {
-        return [];
-    }
-
-    const allEpisodes = await Promise.all(
-        keys.keys.map(async (key) => {
-            const data = await kv.get(key.name);
-            if (!data) return null;
-            return JSON.parse(data) as Episode;
-        })
-    );
-
-    // Filter to only episodes submitted by this user and sort by createdAt descending
-    return allEpisodes
-        .filter((ep): ep is Episode => ep !== null && ep.submittedBy === userEmail)
-        .sort(
-            (a, b) =>
-                new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-}
-
-/**
  * Update tags for an episode (admin-only operation)
  * Updates both the episode record and the index entry
  */

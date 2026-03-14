@@ -10,7 +10,7 @@ import { CSS } from "./lib/styles";
 import { APPLE_PODCASTS_BADGE, FAVICON_SVG, APPLE_TOUCH_ICON_PNG_BASE64, WEB_MANIFEST } from "./lib/assets";
 import { AppError, logError } from "./lib/errors";
 import api from "./routes/api";
-import authenticated from "./routes/authenticated";
+import admin from "./routes/admin";
 import publicRoutes from "./routes/public";
 import queueConsumer from "./queue/consumer";
 import { Footer } from "./lib/components";
@@ -113,11 +113,8 @@ if (MAINTENANCE_MODE) {
     app.get("/robots.txt", () => {
         const robotsTxt = `User-agent: *
 Allow: /
-Disallow: /job/
-Disallow: /profile/
+Disallow: /admin/
 Disallow: /debug/
-
-Sitemap: https://tldl-pod.com/sitemap.xml
 `;
         return new Response(robotsTxt, {
             headers: {
@@ -300,14 +297,13 @@ Sitemap: https://tldl-pod.com/sitemap.xml
     app.route("/api", api);
 
     // ============================================================================
-    // Authenticated Routes
-    // These routes will be protected by Cloudflare Access in production
+    // Admin Routes (protected by Cloudflare Access in production)
     // ============================================================================
 
-    app.route("/", authenticated);
+    app.route("/admin", admin);
 
     // ============================================================================
-    // Public HTML Routes (must be after authenticated to allow overrides)
+    // Public HTML Routes
     // ============================================================================
 
     app.route("/", publicRoutes);

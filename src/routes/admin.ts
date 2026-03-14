@@ -1,7 +1,7 @@
 /**
- * Authenticated API Routes
- * Protected endpoints for mutations - submit, regenerate, delete, job status
- * These will be protected by Cloudflare Access in production.
+ * Admin Routes
+ * All routes are protected by Cloudflare Access (admin-only emails).
+ * Mounted at /admin in index.ts.
  */
 
 import { Hono } from "hono";
@@ -9,13 +9,12 @@ import type { HonoEnv, Job, EpisodeIndexEntry, MonitorSettings } from "../types"
 import { Layout } from "./public";
 import {
     createJob,
-    updateJobStatus,
     getEpisode,
     getTranscript,
     getSummary,
     saveSummary,
     deleteEpisode,
-    listEpisodesByUser,
+    deleteJob,
     listEpisodes,
     listSummariesForEpisode,
     rebuildEpisodeIndex,
@@ -24,11 +23,14 @@ import {
     listMonitoredPodcasts,
     getMonitoredPodcast,
     deleteMonitoredPodcast,
+    updateEpisodeTags,
 } from "../lib/kv";
 import {
     createJobDO,
     getJobWithFallback,
     updateJobStatusDO,
+    deleteJobDO,
+    getJobDO,
 } from "../lib/job-status-do";
 import {
     enqueueJob,
@@ -36,8 +38,7 @@ import {
     createRegenerateSummaryMessage,
 } from "../lib/queue";
 import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId } from "../lib/url-parser";
-import { isValidTemplateId, RATE_LIMITS, getValidTags, validateTags, TEMPLATES } from "../lib/constants";
-import { updateEpisodeTags } from "../lib/kv";
+import { isValidTemplateId, getValidTags, validateTags, TEMPLATES, isBlockedPodcast } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { generateEpisodeTags } from "../services/tag-generation";
 import { getUserEmailFromJwt, escapeHtml, isAdminUser } from "../lib/auth";
@@ -47,65 +48,18 @@ import {
     checkPodcastForNewEpisodes,
 } from "../lib/monitor";
 
-const authenticated = new Hono<HonoEnv>();
+const admin = new Hono<HonoEnv>();
 
 // ============================================================================
-// Rate Limiting Helper
-// ============================================================================
-
-interface RateLimitData {
-    count: number;
-}
-
-/**
- * Check and update rate limit for a user.
- * Returns the current count and whether the limit is exceeded.
- */
-async function checkRateLimit(
-    kv: KVNamespace,
-    userEmail: string
-): Promise<{ count: number; exceeded: boolean }> {
-    const hour = Math.floor(Date.now() / (RATE_LIMITS.WINDOW_SECONDS * 1000));
-    const key = `ratelimit:${userEmail}:${hour}`;
-
-    const current = await kv.get<RateLimitData>(key, "json");
-    const count = (current?.count || 0) + 1;
-
-    // Update the count
-    await kv.put(key, JSON.stringify({ count }), {
-        expirationTtl: RATE_LIMITS.WINDOW_SECONDS,
-    });
-
-    return {
-        count,
-        exceeded: count > RATE_LIMITS.MAX_SUBMISSIONS_PER_HOUR,
-    };
-}
-
-/**
- * Add rate limit headers to response.
- */
-function setRateLimitHeaders(
-    c: { res: { headers: Headers } },
-    count: number
-): void {
-    const hour = Math.floor(Date.now() / (RATE_LIMITS.WINDOW_SECONDS * 1000));
-    c.res.headers.set("X-RateLimit-Limit", String(RATE_LIMITS.MAX_SUBMISSIONS_PER_HOUR));
-    c.res.headers.set("X-RateLimit-Remaining", String(Math.max(0, RATE_LIMITS.MAX_SUBMISSIONS_PER_HOUR - count)));
-    c.res.headers.set("X-RateLimit-Reset", String((hour + 1) * RATE_LIMITS.WINDOW_SECONDS));
-}
-
-// ============================================================================
-// Middleware - Auth Check
+// Middleware - Admin Auth Check
 // ============================================================================
 
 /**
- * Auth check helper - validates JWT and extracts user email.
+ * Validates JWT and extracts user email.
  * FAIL-CLOSED: In production, requests without valid JWT are rejected.
- * For local dev, we skip auth checks.
- * Returns null if auth passes, or a Response if auth fails.
+ * For local dev, we mock the admin user.
  */
-async function requireAuth(c: import("hono").Context<HonoEnv>): Promise<Response | null> {
+async function requireAdmin(c: import("hono").Context<HonoEnv>): Promise<Response | null> {
     const cfAccessJwt = c.req.header("Cf-Access-Jwt-Assertion");
     const isDevelopment = c.env.ENVIRONMENT === "development";
 
@@ -114,16 +68,17 @@ async function requireAuth(c: import("hono").Context<HonoEnv>): Promise<Response
         return c.json({ error: "Unauthorized" }, 401);
     }
 
-    // Extract user email for rate limiting (if JWT present)
     if (cfAccessJwt) {
         const userEmail = getUserEmailFromJwt(cfAccessJwt);
         if (userEmail) {
+            // Verify admin access
+            if (!isAdminUser(userEmail)) {
+                return c.json({ error: "Admin access required" }, 403);
+            }
             c.set("userEmail", userEmail);
         }
     } else if (isDevelopment) {
-        // Mock admin user for local development - allows testing all features
-        // Safe because: ENVIRONMENT is only "development" in [env.dev.vars] in wrangler.toml
-        // Production deploys always use ENVIRONMENT="production"
+        // Mock admin user for local development
         c.set("userEmail", "rianvdm@gmail.com");
     }
 
@@ -134,60 +89,9 @@ async function requireAuth(c: import("hono").Context<HonoEnv>): Promise<Response
 // Helper Functions
 // ============================================================================
 
-/**
- * Generate a UUID v4
- */
 function generateUUID(): string {
     return crypto.randomUUID();
 }
-
-// ============================================================================
-// Request/Response Types
-// ============================================================================
-
-interface SubmitRequest {
-    appleUrl: string;
-    templateId: string;
-}
-
-interface SubmitResponse {
-    jobId: string;
-    status: string;
-    episodeId: string;
-    cached: boolean;
-}
-
-interface JobStatusResponse {
-    id: string;
-    status: string;
-    episodeId: string;
-    estimatedSeconds?: number;
-    error?: string;
-    updatedAt: string;
-}
-
-interface RegenerateRequest {
-    templateId: string;
-}
-
-interface RegenerateResponse {
-    jobId: string;
-    status: string;
-    cached: boolean;
-}
-
-interface DeleteResponse {
-    deleted: boolean;
-}
-
-interface RetryResponse {
-    jobId: string;
-    status: string;
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
 
 function formatDuration(seconds: number): string {
     const hours = Math.floor(seconds / 3600);
@@ -207,571 +111,26 @@ function formatDate(dateString: string): string {
     }).format(date);
 }
 
-// escapeHtml imported from ../lib/auth
-
 // ============================================================================
-// GET /profile/auth-check - Quick auth probe for client-side detection
+// GET / - Admin Dashboard
 // ============================================================================
 
-authenticated.get("/profile/auth-check", async (c) => {
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    return c.json({
-        authenticated: true,
-        email: c.get("userEmail") || null
-    });
-});
-
-// ============================================================================
-// POST /profile/rebuild-index - Admin-only: Rebuild episode index
-// ============================================================================
-
-authenticated.post("/profile/rebuild-index", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    // Admin-only check
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
-
-    try {
-        const count = await rebuildEpisodeIndex(c.env.TLDL_DATA);
-        return c.json({
-            success: true,
-            message: "Episode index rebuilt successfully",
-            episodeCount: count,
-        });
-    } catch (error) {
-        return c.json({
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error",
-        }, 500);
-    }
-});
-
-// ============================================================================
-// POST /profile/backfill-tags - Generate tags for episodes without them (admin only)
-// ============================================================================
-
-authenticated.post("/profile/backfill-tags", async (c) => {
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
-
-    try {
-        // Get all episodes from index
-        // Note: This processes up to 1000 episodes. If you have more,
-        // consider implementing pagination or increasing the limit.
-        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, {
-            pageSize: 1000
-        });
-
-        // Filter to episodes without tags
-        const episodesNeedingTags = allEpisodes.episodes.filter(
-            ep => !ep.tags || ep.tags.length === 0
-        );
-
-        let processed = 0;
-        let tagged = 0;
-        let failed = 0;
-
-        // Process in batches
-        for (const ep of episodesNeedingTags) {
-            try {
-                processed++;
-
-                // Read existing data from KV
-                const [transcript, summary] = await Promise.all([
-                    getTranscript(c.env.TLDL_DATA, ep.id),
-                    getSummary(c.env.TLDL_DATA, ep.id, "key-takeaways"), // Use default template
-                ]);
-
-                if (!transcript || !summary) {
-                    console.log(`Skipping ${ep.id}: missing transcript or summary`);
-                    failed++;
-                    continue;
-                }
-
-                // Generate tags
-                const tagResult = await generateEpisodeTags(
-                    summary.text,
-                    transcript.text,
-                    c.env.OPENAI_API_KEY
-                );
-
-                if (tagResult.tags.length === 0) {
-                    console.log(`Warning: No tags generated for ${ep.id}`);
-                    failed++;
-                    continue;
-                }
-
-                // Update episode with tags
-                await updateEpisodeTags(c.env.TLDL_DATA, ep.id, tagResult.tags);
-                tagged++;
-
-                console.log(
-                    JSON.stringify({
-                        event: "episode_tagged",
-                        episodeId: ep.id,
-                        tags: tagResult.tags,
-                    })
-                );
-            } catch (error) {
-                console.error(
-                    JSON.stringify({
-                        event: "backfill_failed",
-                        episodeId: ep.id,
-                        error: error instanceof Error ? error.message : "Unknown error",
-                    })
-                );
-                failed++;
-            }
-        }
-
-        return c.json({
-            success: true,
-            message: `Processed ${processed} episodes: ${tagged} tagged, ${failed} failed`,
-            processed,
-            tagged,
-            failed,
-            totalEpisodes: allEpisodes.episodes.length,
-        });
-    } catch (error) {
-        return c.json(
-            {
-                error: error instanceof Error ? error.message : "Failed to backfill tags",
-            },
-            500
-        );
-    }
-});
-
-// ============================================================================
-// POST /profile/cleanup-invalid-tags - Remove tags that are no longer in EPISODE_TAGS
-// ============================================================================
-
-authenticated.post("/profile/cleanup-invalid-tags", async (c) => {
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
-
-    try {
-        const validTags = getValidTags();
-
-        // Get all episodes from index
-        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, {
-            pageSize: 1000
-        });
-
-        let processed = 0;
-        let cleaned = 0;
-
-        // Process each episode that has tags
-        for (const ep of allEpisodes.episodes) {
-            if (!ep.tags || ep.tags.length === 0) continue;
-
-            processed++;
-
-            // Filter to only valid tags
-            const cleanedTags = ep.tags.filter(tag => validTags.includes(tag));
-
-            // Only update if tags changed
-            if (cleanedTags.length !== ep.tags.length) {
-                await updateEpisodeTags(c.env.TLDL_DATA, ep.id, cleanedTags);
-                cleaned++;
-
-                console.log(
-                    JSON.stringify({
-                        event: "tags_cleaned",
-                        episodeId: ep.id,
-                        before: ep.tags,
-                        after: cleanedTags,
-                    })
-                );
-            }
-        }
-
-        return c.json({
-            success: true,
-            message: `Processed ${processed} episodes with tags: ${cleaned} cleaned`,
-            processed,
-            cleaned,
-            totalEpisodes: allEpisodes.episodes.length,
-        });
-    } catch (error) {
-        return c.json(
-            {
-                error: error instanceof Error ? error.message : "Failed to cleanup tags",
-            },
-            500
-        );
-    }
-});
-
-// ============================================================================
-// POST /profile/backfill-podcast-info - Backfill podcast author and website for all episodes
-// ============================================================================
-
-authenticated.post("/profile/backfill-podcast-info", async (c) => {
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
-
-    try {
-        const { lookupPodcastByItunesId } = await import("../services/podcast-index");
-        const { parseApplePodcastsUrl } = await import("../lib/url-parser");
-        const { getEpisode, saveEpisode } = await import("../lib/kv");
-
-        // Get all episodes from index
-        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, {
-            pageSize: 1000
-        });
-
-        let processed = 0;
-        let updated = 0;
-        let failed = 0;
-        let alreadyHasInfo = 0;
-
-        // Track podcasts we've already looked up (by podcastId)
-        const podcastCache: Map<string, { author?: string; link?: string } | null> = new Map();
-
-        for (const ep of allEpisodes.episodes) {
-            processed++;
-
-            try {
-                // Get full episode data
-                const episode = await getEpisode(c.env.TLDL_DATA, ep.id);
-                if (!episode) {
-                    failed++;
-                    continue;
-                }
-
-                // Helper to detect RSS-like URLs that need cleaning
-                const needsUrlCleaning = (url: string) => {
-                    const lowerPath = new URL(url).pathname.toLowerCase();
-                    return (
-                        lowerPath.endsWith('.xml') ||
-                        lowerPath.endsWith('.rss') ||
-                        lowerPath.endsWith('/feed') ||
-                        lowerPath.endsWith('/feed/') ||
-                        lowerPath.includes('/rss') ||
-                        lowerPath.includes('/feed')
-                    );
-                };
-
-                // Skip if already has both author AND a clean website URL
-                const hasCleanWebsiteUrl = episode.podcastWebsiteUrl &&
-                    !needsUrlCleaning(episode.podcastWebsiteUrl);
-                if (episode.podcastAuthor && hasCleanWebsiteUrl) {
-                    alreadyHasInfo++;
-                    continue;
-                }
-
-                // Parse the Apple URL to get podcast ID
-                const parsed = parseApplePodcastsUrl(episode.appleUrl);
-                if (!parsed) {
-                    failed++;
-                    continue;
-                }
-
-                // Check cache first
-                let podcastInfo = podcastCache.get(parsed.podcastId);
-                if (podcastInfo === undefined) {
-                    // Not in cache - look up podcast
-                    const podcast = await lookupPodcastByItunesId(
-                        parsed.podcastId,
-                        c.env.PODCAST_INDEX_KEY,
-                        c.env.PODCAST_INDEX_SECRET
-                    );
-
-                    if (podcast) {
-                        podcastInfo = { author: podcast.author, link: podcast.link };
-                    } else {
-                        podcastInfo = null;
-                    }
-                    podcastCache.set(parsed.podcastId, podcastInfo);
-                }
-
-                // Helper to clean RSS feed URLs to base website
-                const cleanUrl = (url: string) => {
-                    try {
-                        const parsed = new URL(url);
-                        const lowerPath = parsed.pathname.toLowerCase();
-                        if (
-                            lowerPath.endsWith('.xml') ||
-                            lowerPath.endsWith('.rss') ||
-                            lowerPath.endsWith('/feed') ||
-                            lowerPath.endsWith('/feed/') ||
-                            lowerPath.includes('/rss') ||
-                            lowerPath.includes('/feed')
-                        ) {
-                            return parsed.origin;
-                        }
-                        return url;
-                    } catch {
-                        return url;
-                    }
-                };
-
-                // Update episode if we got info
-                if (podcastInfo && (podcastInfo.author || podcastInfo.link)) {
-                    episode.podcastAuthor = podcastInfo.author;
-                    episode.podcastWebsiteUrl = podcastInfo.link ? cleanUrl(podcastInfo.link) : undefined;
-                    await saveEpisode(c.env.TLDL_DATA, episode);
-                    updated++;
-
-                    console.log(
-                        JSON.stringify({
-                            event: "podcast_info_backfilled",
-                            episodeId: ep.id,
-                            podcastAuthor: podcastInfo.author,
-                            podcastWebsiteUrl: podcastInfo.link,
-                        })
-                    );
-                }
-            } catch (error) {
-                console.error(
-                    JSON.stringify({
-                        event: "backfill_podcast_info_failed",
-                        episodeId: ep.id,
-                        error: error instanceof Error ? error.message : "Unknown error",
-                    })
-                );
-                failed++;
-            }
-        }
-
-        return c.json({
-            success: true,
-            message: `Processed ${processed} episodes: ${updated} updated, ${alreadyHasInfo} already had info, ${failed} failed`,
-            processed,
-            updated,
-            alreadyHasInfo,
-            failed,
-            totalEpisodes: allEpisodes.episodes.length,
-        });
-    } catch (error) {
-        return c.json(
-            {
-                error: error instanceof Error ? error.message : "Failed to backfill podcast info",
-            },
-            500
-        );
-    }
-});
-
-// ============================================================================
-// POST /profile/cleanup-failed-jobs - Admin-only: Clean up all failed jobs
-// ============================================================================
-
-authenticated.post("/profile/cleanup-failed-jobs", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    // Admin-only check
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
-
-    try {
-        const { listActiveJobsWithDO, deleteJobDO } = await import("../lib/job-status-do");
-
-        const jobs = await listActiveJobsWithDO(c.env, c.env.TLDL_DATA);
-        const failedJobs = jobs.filter(job => job.status === "failed");
-
-        const deletedJobs = [];
-        for (const job of failedJobs) {
-            // Delete from both DO and KV
-            await deleteJobDO(c.env, job.id);
-            await c.env.TLDL_DATA.delete(`job:${job.id}`);
-            deletedJobs.push({
-                id: job.id,
-                podcastName: job.podcastName,
-                episodeTitle: job.episodeTitle,
-                error: job.error
-            });
-        }
-
-        return c.json({
-            success: true,
-            message: `Cleaned up ${deletedJobs.length} failed job${deletedJobs.length !== 1 ? 's' : ''}`,
-            deletedCount: deletedJobs.length,
-            deletedJobs
-        });
-    } catch (error) {
-        return c.json({
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error",
-        }, 500);
-    }
-});
-
-// ============================================================================
-// GET /profile/waitlist - Admin view of waitlist entries
-// ============================================================================
-
-interface WaitlistEntry {
-    email: string;
-    createdAt: string;
-}
-
-authenticated.get("/profile/waitlist", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    // Admin-only check
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
-
-    // Check if CSV export requested
-    const format = c.req.query("format");
-
-    // List all waitlist entries
-    const list = await c.env.TLDL_DATA.list({ prefix: "waitlist:" });
-    const entries: WaitlistEntry[] = [];
-
-    for (const key of list.keys) {
-        const data = await c.env.TLDL_DATA.get(key.name);
-        if (data) {
-            try {
-                entries.push(JSON.parse(data) as WaitlistEntry);
-            } catch {
-                // Skip malformed entries
-            }
-        }
-    }
-
-    // Sort by createdAt descending (newest first)
-    entries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-    // Return CSV if requested
-    if (format === "csv") {
-        const csvContent = [
-            "email,createdAt",
-            ...entries.map(e => `${e.email},${e.createdAt}`)
-        ].join("\n");
-
-        return new Response(csvContent, {
-            headers: {
-                "Content-Type": "text/csv",
-                "Content-Disposition": `attachment; filename="waitlist-${new Date().toISOString().split('T')[0]}.csv"`,
-            },
-        });
-    }
-
-    // Render admin page with entries
-    const content = `
-        <div class="page-header">
-            <h1>Waitlist Admin</h1>
-            <p class="page-subtitle">${entries.length} ${entries.length === 1 ? 'signup' : 'signups'} on the waitlist</p>
-        </div>
-
-        <div class="card" style="margin-bottom: 1.5rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <a href="/profile" class="button">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="m15 18-6-6 6-6"/>
-                    </svg>
-                    Back to Profile
-                </a>
-                ${entries.length > 0 ? `
-                <a href="/profile/waitlist?format=csv" class="button button-primary">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" x2="12" y1="15" y2="3"/>
-                    </svg>
-                    Export CSV
-                </a>
-                ` : ''}
-            </div>
-        </div>
-
-        ${entries.length > 0 ? `
-        <div class="card">
-            <table style="width: 100%; border-collapse: collapse;">
-                <thead>
-                    <tr style="border-bottom: 1px solid var(--border);">
-                        <th style="text-align: left; padding: 0.75rem 1rem; font-weight: 600; color: var(--muted-foreground);">Email</th>
-                        <th style="text-align: left; padding: 0.75rem 1rem; font-weight: 600; color: var(--muted-foreground);">Signed Up</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${entries.map(entry => `
-                    <tr style="border-bottom: 1px solid var(--border);">
-                        <td style="padding: 0.75rem 1rem;">${escapeHtml(entry.email)}</td>
-                        <td style="padding: 0.75rem 1rem; color: var(--muted-foreground);">${formatDate(entry.createdAt)}</td>
-                    </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        </div>
-        ` : `
-        <div class="empty-state">
-            <p>No waitlist signups yet.</p>
-        </div>
-        `}
-    `;
-
-    return c.html(Layout({
-        title: "Waitlist Admin",
-        children: content
-    }));
-});
-
-// ============================================================================
-// GET /profile - User Profile Page (shows submitted episodes with delete)
-// ============================================================================
-
-authenticated.get("/profile", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
+admin.get("/", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
 
     const userEmail = c.get("userEmail") || "Unknown User";
-    const isAdmin = isAdminUser(userEmail === "Unknown User" ? undefined : userEmail);
 
-    // Parse pagination for admin view
+    // Parse pagination
     const pageParam = c.req.query("page");
     const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
     const pageSize = 10;
 
-    // Get episodes - admin sees all (paginated), regular users see only their own
-    // Both EpisodeIndexEntry and Episode have the properties we need for display
-    let episodes: EpisodeIndexEntry[];
-    let totalPages = 1;
+    const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
+    const episodes = result.episodes;
+    const totalPages = result.totalPages;
 
-    if (isAdmin) {
-        const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
-        episodes = result.episodes;
-        totalPages = result.totalPages;
-    } else {
-        // listEpisodesByUser returns Episode[], which extends EpisodeIndexEntry
-        episodes = await listEpisodesByUser(c.env.TLDL_DATA, userEmail);
-    }
-
-    // Build episode cards with delete buttons
+    // Build episode cards with admin controls
     const episodeCards = await Promise.all(
         episodes.map(async (episode) => {
             const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episode.id);
@@ -792,7 +151,6 @@ authenticated.get("/profile", async (c) => {
                             <span>${formatDuration(episode.episodeDuration)}</span>
                         </div>
                         ${templateBadges ? `<div class="episode-badges">${templateBadges}</div>` : ""}
-                        ${isAdmin ? `
                         <div class="tag-editor" data-episode-id="${escapeHtml(episode.id)}">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <label class="form-label" style="margin: 0;">Tags:</label>
@@ -815,12 +173,6 @@ authenticated.get("/profile", async (c) => {
                             </div>
                             <div class="tag-editor-message" id="tag-message-${escapeHtml(episode.id)}" style="display: none;"></div>
                         </div>
-                        ` : episode.tags && episode.tags.length > 0 ? `
-                        <div style="margin-top: 0.75rem;">
-                            <span style="font-size: 0.75rem; color: var(--muted-foreground); margin-right: 0.5rem;">Tags:</span>
-                            ${[...episode.tags].sort().map(tag => `<span class="badge">${escapeHtml(tag)}</span>`).join(' ')}
-                        </div>
-                        ` : ''}
                     </div>
                     <button type="button" class="button button-destructive button-sm" onclick="confirmDelete('${escapeHtml(episode.id)}', '${escapeHtml(episode.episodeTitle.replace(/'/g, "\\'"))}')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -828,7 +180,6 @@ authenticated.get("/profile", async (c) => {
                         </svg>
                         Delete
                     </button>
-                    ${isAdmin ? `
                     <button type="button" class="button button-secondary button-sm" onclick="openSummaryEditor('${escapeHtml(episode.id)}', '${escapeHtml(episode.episodeTitle.replace(/'/g, "\\\\'"))}')">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
@@ -836,17 +187,16 @@ authenticated.get("/profile", async (c) => {
                         </svg>
                         Edit Summaries
                     </button>
-                    ` : ''}
                 </div>
             `;
         })
     );
 
-    // Build pagination controls (only for admin with multiple pages)
-    const paginationHtml = isAdmin && totalPages > 1 ? `
+    // Pagination controls
+    const paginationHtml = totalPages > 1 ? `
         <nav class="pagination" aria-label="Episode pagination">
             ${page > 1 ? `
-            <a href="/profile?page=${page - 1}" class="pagination-link pagination-prev">
+            <a href="/admin?page=${page - 1}" class="pagination-link pagination-prev">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m15 18-6-6 6-6"/>
                 </svg>
@@ -860,7 +210,7 @@ authenticated.get("/profile", async (c) => {
             </span>`}
             <span class="pagination-info">Page ${page} of ${totalPages}</span>
             ${page < totalPages ? `
-            <a href="/profile?page=${page + 1}" class="pagination-link pagination-next">
+            <a href="/admin?page=${page + 1}" class="pagination-link pagination-next">
                 Next
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="m9 18 6-6-6-6"/>
@@ -877,19 +227,19 @@ authenticated.get("/profile", async (c) => {
 
     const content = `
         <div class="page-header">
-            <h1>Your Profile</h1>
-            <p class="page-subtitle">${escapeHtml(userEmail)}${isAdmin ? ' <span class="badge">Admin</span>' : ''}</p>
+            <h1>Admin Dashboard</h1>
+            <p class="page-subtitle">${escapeHtml(userEmail)} <span class="badge">Admin</span></p>
             <div style="display: flex; gap: 0.5rem;">
-                ${isAdmin ? `<a href="/profile/podcasts" class="button button-secondary">Monitor Podcasts</a>` : ''}
-                ${isAdmin ? `<a href="/profile/waitlist" class="button button-secondary">Waitlist</a>` : ''}
-                <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F%3FloggedOut%3D1" class="button button-secondary">Log Out</a>
+                <a href="/admin/submit" class="button button-primary">Submit Episode</a>
+                <a href="/admin/podcasts" class="button button-secondary">Manage Podcasts</a>
+                <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F" class="button button-secondary">Log Out</a>
             </div>
         </div>
 
         <div class="divider"></div>
 
         <section class="section">
-            <h2>${isAdmin ? 'All Episodes (Admin View)' : 'Your Submitted Episodes'}</h2>
+            <h2>All Episodes</h2>
             ${episodes.length > 0 ? `
                 <div class="episode-list">
                     ${episodeCards.join("")}
@@ -897,20 +247,19 @@ authenticated.get("/profile", async (c) => {
                 ${paginationHtml}
             ` : `
                 <div class="empty-state">
-                    <p>You haven't submitted any episodes yet.</p>
-                    <a href="/submit" class="button button-primary">Submit Your First Episode</a>
+                    <p>No episodes yet.</p>
+                    <a href="/admin/submit" class="button button-primary">Submit Your First Episode</a>
                 </div>
             `}
         </section>
 
-        ${isAdmin ? `
         <div class="divider"></div>
         <section class="section">
             <h2>Admin Tools</h2>
             <div class="admin-tools">
                 <div class="admin-tool-item">
                     <p class="text-muted">Automatically monitor podcasts for new episodes</p>
-                    <a href="/profile/podcasts" class="button">
+                    <a href="/admin/podcasts" class="button">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
                             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -918,18 +267,6 @@ authenticated.get("/profile", async (c) => {
                             <line x1="8" x2="16" y1="23" y2="23"/>
                         </svg>
                         Monitor Podcasts
-                    </a>
-                </div>
-                <div class="admin-tool-item" style="margin-top: 1.5rem;">
-                    <p class="text-muted">View and export waitlist signups</p>
-                    <a href="/profile/waitlist" class="button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-                            <circle cx="9" cy="7" r="4"/>
-                            <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
-                            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                        </svg>
-                        View Waitlist
                     </a>
                 </div>
                 <div class="admin-tool-item" style="margin-top: 1.5rem;">
@@ -987,7 +324,6 @@ authenticated.get("/profile", async (c) => {
                 </div>
             </div>
         </section>
-        ` : ""}
 
         <div id="delete-modal" class="modal" style="display: none;">
             <div class="modal-backdrop" onclick="hideDeleteModal()"></div>
@@ -1016,8 +352,8 @@ authenticated.get("/profile", async (c) => {
         </div>
 
 <script>
-            let deleteEpisodeId = null;
-            let currentSummaryEpisodeId = null;
+let deleteEpisodeId = null;
+let currentSummaryEpisodeId = null;
 
 function confirmDelete(episodeId, episodeTitle) {
     deleteEpisodeId = episodeId;
@@ -1040,7 +376,7 @@ async function openSummaryEditor(episodeId, episodeTitle) {
     document.getElementById('summary-edit-modal').style.display = 'flex';
 
     try {
-        const response = await fetch('/profile/summaries/' + episodeId, {
+        const response = await fetch('/admin/episodes/' + episodeId + '/summaries', {
             credentials: 'include'
         });
         const data = await response.json();
@@ -1094,7 +430,7 @@ async function saveSummary(templateId) {
     statusEl.style.display = 'block';
 
     try {
-        const response = await fetch('/profile/update-summary/' + currentSummaryEpisodeId + '/' + templateId, {
+        const response = await fetch('/admin/episodes/' + currentSummaryEpisodeId + '/summaries/' + templateId, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -1120,13 +456,12 @@ async function saveSummary(templateId) {
 async function doDelete() {
     if (!deleteEpisodeId) return;
     try {
-        const response = await fetch('/profile/delete/' + deleteEpisodeId, {
+        const response = await fetch('/admin/episodes/' + deleteEpisodeId + '/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include'
         });
         if (response.ok) {
-            // Remove the card from the page
             const card = document.querySelector('[data-episode-id="' + deleteEpisodeId + '"]');
             if (card) card.remove();
             hideDeleteModal();
@@ -1149,7 +484,6 @@ async function saveTagsFor(episodeId) {
     const tags = Array.from(selectedButtons).map(btn => btn.getAttribute('data-tag'));
     const messageEl = document.getElementById('tag-message-' + episodeId);
 
-    // Validate count
     if (tags.length < 1 || tags.length > 4) {
         messageEl.className = 'tag-editor-message alert-error';
         messageEl.textContent = 'Please select 1-4 tags (currently ' + tags.length + ' selected)';
@@ -1158,7 +492,7 @@ async function saveTagsFor(episodeId) {
     }
 
     try {
-        const response = await fetch('/profile/update-tags/' + episodeId, {
+        const response = await fetch('/admin/episodes/' + episodeId + '/tags', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -1194,7 +528,7 @@ async function rebuildIndex() {
     result.style.display = 'none';
 
     try {
-        const response = await fetch('/profile/rebuild-index', {
+        const response = await fetch('/admin/rebuild-index', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include'
@@ -1225,7 +559,7 @@ async function cleanupFailedJobs() {
     result.style.display = 'none';
 
     try {
-        const response = await fetch('/profile/cleanup-failed-jobs', {
+        const response = await fetch('/admin/cleanup-jobs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include'
@@ -1256,7 +590,6 @@ async function backfillTags() {
     const button = document.getElementById('backfill-tags-btn');
     const statusEl = document.getElementById('backfill-status');
 
-    // Show loading state
     button.disabled = true;
     button.textContent = 'Processing...';
     statusEl.style.display = 'block';
@@ -1264,7 +597,7 @@ async function backfillTags() {
     statusEl.textContent = 'Generating tags for episodes...';
 
     try {
-        const response = await fetch('/profile/backfill-tags', {
+        const response = await fetch('/admin/backfill-tags', {
             method: 'POST',
             credentials: 'include',
         });
@@ -1274,11 +607,7 @@ async function backfillTags() {
         if (response.ok) {
             statusEl.className = 'alert alert-success';
             statusEl.textContent = 'Success! ' + data.message;
-
-            // Reload page after 2 seconds to show new tags
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
+            setTimeout(() => { window.location.reload(); }, 2000);
         } else {
             statusEl.className = 'alert alert-error';
             statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
@@ -1301,7 +630,6 @@ async function cleanupInvalidTags() {
     const button = document.getElementById('cleanup-tags-btn');
     const statusEl = document.getElementById('cleanup-tags-status');
 
-    // Show loading state
     button.disabled = true;
     button.textContent = 'Processing...';
     statusEl.style.display = 'block';
@@ -1309,7 +637,7 @@ async function cleanupInvalidTags() {
     statusEl.textContent = 'Cleaning up invalid tags...';
 
     try {
-        const response = await fetch('/profile/cleanup-invalid-tags', {
+        const response = await fetch('/admin/cleanup-tags', {
             method: 'POST',
             credentials: 'include',
         });
@@ -1319,11 +647,7 @@ async function cleanupInvalidTags() {
         if (response.ok) {
             statusEl.className = 'alert alert-success';
             statusEl.textContent = 'Success! ' + data.message;
-
-            // Reload page after 2 seconds to show updated tags
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
+            setTimeout(() => { window.location.reload(); }, 2000);
         } else {
             statusEl.className = 'alert alert-error';
             statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
@@ -1346,7 +670,6 @@ async function backfillPodcastInfo() {
     const button = document.getElementById('backfill-podcast-info-btn');
     const statusEl = document.getElementById('backfill-podcast-info-status');
 
-    // Show loading state
     button.disabled = true;
     button.textContent = 'Fetching...';
     statusEl.style.display = 'block';
@@ -1354,7 +677,7 @@ async function backfillPodcastInfo() {
     statusEl.textContent = 'Fetching podcast info from Podcast Index API...';
 
     try {
-        const response = await fetch('/profile/backfill-podcast-info', {
+        const response = await fetch('/admin/backfill-podcast-info', {
             method: 'POST',
             credentials: 'include',
         });
@@ -1383,139 +706,149 @@ async function backfillPodcastInfo() {
     `;
 
     return c.html(Layout({
-        title: "Profile",
+        title: "Admin Dashboard",
         children: content
     }));
 });
 
 // ============================================================================
-// POST /profile/delete/:episodeId - Delete episode from profile page
+// GET /submit - Admin submit form page
 // ============================================================================
 
-authenticated.post("/profile/delete/:episodeId", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
+admin.get("/submit", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
 
-    const episodeId = c.req.param("episodeId");
-    const userEmail = c.get("userEmail");
+    const defaultTemplate = c.env.DEFAULT_TEMPLATE || "key-takeaways";
 
-    // Verify episode exists
-    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
-    if (!episode) {
-        return c.json({ error: "Episode not found" }, 404);
-    }
+    const templateOptions = Object.values(TEMPLATES).map(t =>
+        `<div class="radio-option">
+            <input type="radio" id="template-${escapeHtml(t.id)}" name="templateId" value="${escapeHtml(t.id)}"
+                ${t.id === defaultTemplate ? 'checked' : ''} />
+            <label for="template-${escapeHtml(t.id)}">
+                <strong>${escapeHtml(t.name)}</strong>
+                <span class="radio-description">${escapeHtml(t.description)}</span>
+            </label>
+        </div>`
+    ).join("");
 
-    // Check authorization: admin can delete any, regular users only their own
-    const isAdmin = isAdminUser(userEmail);
-    if (!isAdmin && episode.submittedBy && episode.submittedBy !== userEmail) {
-        return c.json({ error: "You can only delete episodes you submitted" }, 403);
-    }
+    const content = `
+        <div class="page-header">
+            <h1>Submit Episode</h1>
+            <p class="page-subtitle">Paste an Apple Podcasts episode URL to generate a summary.</p>
+            <a href="/admin" class="button button-secondary">← Back to Dashboard</a>
+        </div>
 
-    // Delete episode and all related data (transcript, summaries)
-    await deleteEpisode(c.env.TLDL_DATA, episodeId);
+        <div class="divider"></div>
 
-    return c.json({ deleted: true });
+        <form method="POST" action="/admin/submit" class="card">
+            <div class="form-group">
+                <label class="form-label" for="appleUrl">Apple Podcasts Episode URL</label>
+                <input type="url" id="appleUrl" name="appleUrl" class="form-input"
+                    placeholder="https://podcasts.apple.com/us/podcast/...?i=..." required />
+                <p class="form-help">Paste the full URL of an episode from Apple Podcasts</p>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Summary Style</label>
+                <div class="radio-group">
+                    ${templateOptions}
+                </div>
+            </div>
+
+            <button type="submit" class="button button-primary">Submit Episode</button>
+        </form>
+    `;
+
+    return c.html(Layout({
+        title: "Submit Episode",
+        children: content,
+    }));
 });
 
 // ============================================================================
-// POST /submit - Submit new episode for processing (JSON API)
-// This only handles JSON requests; form submissions fall through to public routes
+// POST /submit - Process episode submission
 // ============================================================================
 
-authenticated.post("/submit", async (c, next) => {
-    // Check if client is sending JSON
-    const contentType = c.req.header("Content-Type") || "";
-
-    // If not JSON, let the HTML form handler handle it
-    if (!contentType.includes("application/json")) {
-        return next();
-    }
-
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
+admin.post("/submit", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
 
-    // Rate limiting check (only if user email is available)
     const userEmail = c.get("userEmail");
-    if (userEmail) {
-        const rateLimit = await checkRateLimit(c.env.TLDL_DATA, userEmail);
-        setRateLimitHeaders(c, rateLimit.count);
 
-        if (rateLimit.exceeded) {
-            return c.json(
-                { error: "Rate limit exceeded. Maximum 10 submissions per hour." },
-                429
-            );
-        }
+    // Handle both form and JSON submissions
+    const contentType = c.req.header("Content-Type") || "";
+    let appleUrl: string;
+    let templateId: string;
+
+    if (contentType.includes("application/json")) {
+        const body = await c.req.json<{ appleUrl: string; templateId: string }>();
+        appleUrl = body.appleUrl;
+        templateId = body.templateId;
+    } else {
+        const formData = await c.req.parseBody();
+        appleUrl = formData.appleUrl as string;
+        templateId = formData.templateId as string;
     }
-
-    let body: SubmitRequest;
-    try {
-        body = await c.req.json<SubmitRequest>();
-    } catch {
-        return c.json({ error: "Invalid JSON body" }, 400);
-    }
-
-    const { appleUrl, templateId } = body;
 
     // Validate URL
     if (!appleUrl) {
-        return c.json({ error: "Missing appleUrl field" }, 400);
+        return c.html(Layout({
+            title: "Error",
+            children: `<div class="alert alert-error">Please enter an Apple Podcasts URL.</div><a href="/admin/submit" class="button">Try Again</a>`,
+        }));
     }
 
     const parsed = parseApplePodcastsUrl(appleUrl);
     if (!parsed) {
-        return c.json(
-            {
-                error: "Please enter a valid Apple Podcasts episode URL. It should look like: podcasts.apple.com/...?i=...",
-            },
-            400
-        );
+        return c.html(Layout({
+            title: "Error",
+            children: `<div class="alert alert-error">Invalid Apple Podcasts episode URL. It should look like: podcasts.apple.com/...?i=...</div><a href="/admin/submit" class="button">Try Again</a>`,
+        }));
+    }
+
+    // Check blocked podcasts (creator opt-outs)
+    if (isBlockedPodcast(appleUrl)) {
+        return c.html(Layout({
+            title: "Error",
+            children: `<div class="alert alert-error">This podcast has opted out of TLDL.</div><a href="/admin/submit" class="button">Try Again</a>`,
+        }));
     }
 
     // Validate template
     const effectiveTemplateId = templateId || c.env.DEFAULT_TEMPLATE;
     if (!isValidTemplateId(effectiveTemplateId)) {
-        return c.json({ error: `Invalid template ID: ${templateId} ` }, 400);
+        return c.html(Layout({
+            title: "Error",
+            children: `<div class="alert alert-error">Invalid summary template.</div><a href="/admin/submit" class="button">Try Again</a>`,
+        }));
     }
 
     // Derive episode ID
     const episodeId = deriveEpisodeId(parsed.podcastId, parsed.episodeId);
 
-    // Check if episode + template already exists (cached)
+    // Check cache
     const existingEpisode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (existingEpisode) {
-        const existingSummary = await getSummary(
-            c.env.TLDL_DATA,
-            episodeId,
-            effectiveTemplateId
-        );
+        const existingSummary = await getSummary(c.env.TLDL_DATA, episodeId, effectiveTemplateId);
         if (existingSummary) {
-            // Return cached result
-            const response: SubmitResponse = {
-                jobId: "",
-                status: "completed",
-                episodeId,
-                cached: true,
-            };
-            return c.json(response);
+            // Redirect to existing episode
+            return c.redirect(`/episode/${episodeId}`);
         }
     }
 
-    // Pre-fetch episode info (tries iTunes, then Apple redirect + Podcast Index)
-    // This provides episodeGuid for reliable RSS matching
+    // Pre-fetch episode info
     const episodeInfo = await prefetchEpisodeInfo(parsed.podcastId, parsed.episodeId, c.env, appleUrl);
 
     console.log(JSON.stringify({
-        event: "submit_prefetch_complete",
+        event: "admin_submit_prefetch_complete",
         podcastId: parsed.podcastId,
         episodeId: parsed.episodeId,
         episodeInfoFound: !!episodeInfo,
-        episodeGuid: episodeInfo?.episodeGuid
+        episodeGuid: episodeInfo?.episodeGuid,
     }));
 
-    // Create new job
+    // Create job
     const jobId = generateUUID();
     const now = new Date().toISOString();
 
@@ -1529,11 +862,9 @@ authenticated.post("/submit", async (c, next) => {
         updatedAt: now,
     };
 
-    // Create job in both DO (immediate consistency) and KV (backup)
     await createJobDO(c.env, job);
     await createJob(c.env.TLDL_DATA, job);
 
-    // Queue the job for processing with pre-fetched iTunes metadata
     const message = createProcessEpisodeMessage({
         jobId,
         episodeId,
@@ -1542,76 +873,42 @@ authenticated.post("/submit", async (c, next) => {
         episodeGuid: episodeInfo?.episodeGuid,
         expectedTitle: episodeInfo?.trackName,
         expectedDate: episodeInfo?.releaseDate,
-        submittedBy: userEmail,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 
-    const response: SubmitResponse = {
-        jobId,
-        status: "queued",
-        episodeId,
-        cached: false,
-    };
-
-    return c.json(response, 201);
-});
-
-// GET /job/:jobId - Get job status (JSON API)
-// This only handles JSON requests; HTML requests fall through to public routes
-// ============================================================================
-
-authenticated.get("/job/:jobId", async (c, next) => {
-    // Check if client wants JSON (explicit Accept header or Content-Type: application/json)
-    const accept = c.req.header("Accept") || "";
-    const contentType = c.req.header("Content-Type") || "";
-
-    // If not explicitly requesting JSON, let the HTML route handle it
-    if (!accept.includes("application/json") && !contentType.includes("application/json")) {
-        return next();
-    }
-
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
-    if (authError) return authError;
-
-    const jobId = c.req.param("jobId");
-
-    // Use DO with fallback to KV for job status
-    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
-    if (!job) {
-        return c.json({ error: "Job not found" }, 404);
-    }
-
-    const response: JobStatusResponse = {
-        id: job.id,
-        status: job.status,
-        episodeId: job.episodeId,
-        estimatedSeconds: job.estimatedSeconds,
-        error: job.error,
-        updatedAt: job.updatedAt,
-    };
-
-    return c.json(response);
+    // Redirect to admin dashboard (job shows as in-progress on home page)
+    return c.redirect("/admin");
 });
 
 // ============================================================================
-// POST /profile/update-tags/:episodeId - Update episode tags (admin only)
+// POST /episodes/:episodeId/delete - Delete episode
 // ============================================================================
 
-authenticated.post("/profile/update-tags/:episodeId", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
+admin.post("/episodes/:episodeId/delete", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    // Admin-only check
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     const episodeId = c.req.param("episodeId");
 
-    // Parse request body
+    const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (!episode) {
+        return c.json({ error: "Episode not found" }, 404);
+    }
+
+    await deleteEpisode(c.env.TLDL_DATA, episodeId);
+    return c.json({ deleted: true });
+});
+
+// ============================================================================
+// POST /episodes/:episodeId/tags - Update episode tags
+// ============================================================================
+
+admin.post("/episodes/:episodeId/tags", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    const episodeId = c.req.param("episodeId");
+
     let body: { tags: string[] };
     try {
         body = await c.req.json();
@@ -1623,16 +920,14 @@ authenticated.post("/profile/update-tags/:episodeId", async (c) => {
         return c.json({ error: "tags must be an array" }, 400);
     }
 
-    // Validate tags
     const validation = validateTags(body.tags);
     if (validation.invalid.length > 0) {
         return c.json({
-            error: `Invalid tags: ${validation.invalid.join(', ')} `,
+            error: `Invalid tags: ${validation.invalid.join(', ')}`,
             validTags: getValidTags(),
         }, 400);
     }
 
-    // Enforce 1-4 tags
     if (validation.valid.length < 1 || validation.valid.length > 4) {
         return c.json({
             error: "Must provide between 1 and 4 tags",
@@ -1640,19 +935,14 @@ authenticated.post("/profile/update-tags/:episodeId", async (c) => {
         }, 400);
     }
 
-    // Verify episode exists
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Update tags
     try {
         await updateEpisodeTags(c.env.TLDL_DATA, episodeId, validation.valid);
-        return c.json({
-            success: true,
-            tags: validation.valid,
-        });
+        return c.json({ success: true, tags: validation.valid });
     } catch (error) {
         return c.json({
             error: error instanceof Error ? error.message : "Failed to update tags",
@@ -1661,30 +951,22 @@ authenticated.post("/profile/update-tags/:episodeId", async (c) => {
 });
 
 // ============================================================================
-// GET /profile/summaries/:episodeId - Get all summaries for an episode (admin only)
+// GET /episodes/:episodeId/summaries - Get all summaries for episode
 // ============================================================================
 
-authenticated.get("/profile/summaries/:episodeId", async (c) => {
-    const authError = await requireAuth(c);
+admin.get("/episodes/:episodeId/summaries", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     const episodeId = c.req.param("episodeId");
 
-    // Verify episode exists
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Get all summaries for this episode
     const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
 
-    // Return summaries with template names
     return c.json({
         episodeId,
         episodeTitle: episode.episodeTitle,
@@ -1699,39 +981,31 @@ authenticated.get("/profile/summaries/:episodeId", async (c) => {
 });
 
 // ============================================================================
-// POST /profile/update-summary/:episodeId/:templateId - Update a summary (admin only)
+// POST /episodes/:episodeId/summaries/:templateId - Update a summary
 // ============================================================================
 
-authenticated.post("/profile/update-summary/:episodeId/:templateId", async (c) => {
-    const authError = await requireAuth(c);
+admin.post("/episodes/:episodeId/summaries/:templateId", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     const episodeId = c.req.param("episodeId");
     const templateId = c.req.param("templateId");
+    const userEmail = c.get("userEmail");
 
-    // Validate template ID
     if (!isValidTemplateId(templateId)) {
         return c.json({ error: `Invalid template ID: ${templateId}` }, 400);
     }
 
-    // Verify episode exists
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Get existing summary
     const existingSummary = await getSummary(c.env.TLDL_DATA, episodeId, templateId);
     if (!existingSummary) {
         return c.json({ error: "Summary not found for this template" }, 404);
     }
 
-    // Parse request body
     let body: { text: string };
     try {
         body = await c.req.json();
@@ -1743,13 +1017,12 @@ authenticated.post("/profile/update-summary/:episodeId/:templateId", async (c) =
         return c.json({ error: "text field is required" }, 400);
     }
 
-    // Update the summary
     await saveSummary(c.env.TLDL_DATA, {
         episodeId,
         templateId,
         text: body.text.trim(),
-        model: existingSummary.model, // Keep original model
-        createdAt: new Date().toISOString(), // Update timestamp
+        model: existingSummary.model,
+        createdAt: new Date().toISOString(),
     });
 
     console.log(JSON.stringify({
@@ -1759,82 +1032,49 @@ authenticated.post("/profile/update-summary/:episodeId/:templateId", async (c) =
         updatedBy: userEmail,
     }));
 
-    return c.json({
-        success: true,
-        templateId,
-    });
+    return c.json({ success: true, templateId });
 });
 
 // ============================================================================
-// POST /episode/:episodeId/regenerate - Regenerate summary with different template
+// POST /episodes/:episodeId/regenerate - Regenerate summary with different template
 // ============================================================================
 
-authenticated.post("/episode/:episodeId/regenerate", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
+admin.post("/episodes/:episodeId/regenerate", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    // Rate limiting check (only if user email is available)
-    const userEmail = c.get("userEmail");
-    if (userEmail) {
-        const rateLimit = await checkRateLimit(c.env.TLDL_DATA, userEmail);
-        setRateLimitHeaders(c, rateLimit.count);
-
-        if (rateLimit.exceeded) {
-            return c.json(
-                { error: "Rate limit exceeded. Maximum 10 submissions per hour." },
-                429
-            );
-        }
-    }
 
     const episodeId = c.req.param("episodeId");
 
-    let body: RegenerateRequest;
+    let body: { templateId: string };
     try {
-        body = await c.req.json<RegenerateRequest>();
+        body = await c.req.json();
     } catch {
         return c.json({ error: "Invalid JSON body" }, 400);
     }
 
     const { templateId } = body;
 
-    // Validate template
     if (!templateId) {
         return c.json({ error: "Missing templateId field" }, 400);
     }
     if (!isValidTemplateId(templateId)) {
-        return c.json({ error: `Invalid template ID: ${templateId} ` }, 400);
+        return c.json({ error: `Invalid template ID: ${templateId}` }, 400);
     }
 
-    // Verify episode exists
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Verify transcript exists (required for regeneration)
     const transcript = await getTranscript(c.env.TLDL_DATA, episodeId);
     if (!transcript) {
-        return c.json(
-            { error: "Transcript not found. Cannot regenerate summary." },
-            400
-        );
+        return c.json({ error: "Transcript not found. Cannot regenerate summary." }, 400);
     }
 
-    // Check if summary already exists for this template
-    const existingSummary = await getSummary(
-        c.env.TLDL_DATA,
-        episodeId,
-        templateId
-    );
+    // Check if summary already exists
+    const existingSummary = await getSummary(c.env.TLDL_DATA, episodeId, templateId);
     if (existingSummary) {
-        const response: RegenerateResponse = {
-            jobId: "",
-            status: "completed",
-            cached: true,
-        };
-        return c.json(response);
+        return c.json({ jobId: "", status: "completed", cached: true });
     }
 
     // Create regeneration job
@@ -1851,11 +1091,9 @@ authenticated.post("/episode/:episodeId/regenerate", async (c) => {
         updatedAt: now,
     };
 
-    // Create job in both DO (immediate consistency) and KV (backup)
     await createJobDO(c.env, job);
     await createJob(c.env.TLDL_DATA, job);
 
-    // Queue regeneration job
     const message = createRegenerateSummaryMessage({
         jobId,
         episodeId,
@@ -1864,127 +1102,371 @@ authenticated.post("/episode/:episodeId/regenerate", async (c) => {
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 
-    const response: RegenerateResponse = {
-        jobId,
-        status: "queued",
-        cached: false,
-    };
-
-    return c.json(response, 201);
+    return c.json({ jobId, status: "queued", cached: false }, 201);
 });
 
 // ============================================================================
-// DELETE /episode/:episodeId - Delete episode and all related data
+// DELETE /episodes/:episodeId - Delete episode (REST API)
 // ============================================================================
 
-authenticated.delete("/episode/:episodeId", async (c) => {
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
+admin.delete("/episodes/:episodeId", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
 
     const episodeId = c.req.param("episodeId");
 
-    // Verify episode exists
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
         return c.json({ error: "Episode not found" }, 404);
     }
 
-    // Check authorization: admin can delete any, regular users only their own
-    const userEmail = c.get("userEmail");
-    const isAdmin = isAdminUser(userEmail);
-    if (!isAdmin && episode.submittedBy && episode.submittedBy !== userEmail) {
-        return c.json({ error: "You can only delete episodes you submitted" }, 403);
-    }
-
-    // Delete episode and all related data (transcript, summaries)
     await deleteEpisode(c.env.TLDL_DATA, episodeId);
-
-    const response: DeleteResponse = {
-        deleted: true,
-    };
-
-    return c.json(response);
+    return c.json({ deleted: true });
 });
 
 // ============================================================================
-// POST /job/:jobId/retry - Retry a failed job (JSON API)
-// This only handles JSON requests; form submissions fall through to public routes
+// DELETE /jobs/:jobId - Delete a job (moved from unauthenticated api.ts)
 // ============================================================================
 
-authenticated.post("/job/:jobId/retry", async (c, next) => {
-    // Check if client wants JSON
-    const accept = c.req.header("Accept") || "";
-    const contentType = c.req.header("Content-Type") || "";
-
-    // If not explicitly requesting JSON, let the HTML form handler handle it
-    if (!accept.includes("application/json") && !contentType.includes("application/json")) {
-        return next();
-    }
-
-    // Auth check - reject unauthorized requests in production
-    const authError = await requireAuth(c);
+admin.delete("/jobs/:jobId", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
 
     const jobId = c.req.param("jobId");
 
-    // Get existing job using DO with fallback
-    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
-    if (!job) {
-        return c.json({ error: "Job not found" }, 404);
-    }
+    const job = await getJobDO(c.env, jobId);
 
-    // Verify job is in failed status
-    if (job.status !== "failed") {
-        return c.json(
-            { error: `Cannot retry job with status: ${job.status}. Only failed jobs can be retried.` },
-            400
-        );
-    }
-
-    // Reset job status to queued in both DO and KV
-    await updateJobStatusDO(c.env, jobId, "queued");
-    await updateJobStatus(c.env.TLDL_DATA, jobId, "queued");
-
-    // Re-queue the job
-    // Determine message type based on whether it's a regeneration
-    const existingEpisode = await getEpisode(c.env.TLDL_DATA, job.episodeId);
-    const existingTranscript = await getTranscript(c.env.TLDL_DATA, job.episodeId);
-
-    // If episode and transcript exist, treat as regeneration
-    const messageType = existingEpisode && existingTranscript
-        ? createRegenerateSummaryMessage
-        : createProcessEpisodeMessage;
-
-    const message = messageType({
+    console.log(JSON.stringify({
+        event: "job_delete_request",
         jobId,
-        episodeId: job.episodeId,
-        appleUrl: job.appleUrl,
-        templateId: job.templateId,
+        exists: !!job,
+        status: job?.status,
+    }));
+
+    await deleteJobDO(c.env, jobId);
+    await deleteJob(c.env.TLDL_DATA, jobId);
+
+    return c.json({
+        success: true,
+        message: `Job ${jobId} deleted`,
+        previousStatus: job?.status || "not found",
     });
-    await enqueueJob(c.env.TLDL_QUEUE, message);
+});
 
-    const response: RetryResponse = {
-        jobId,
-        status: "queued",
-    };
+// ============================================================================
+// Admin Tool API Routes
+// ============================================================================
 
-    return c.json(response);
+// POST /rebuild-index
+admin.post("/rebuild-index", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const count = await rebuildEpisodeIndex(c.env.TLDL_DATA);
+        return c.json({
+            success: true,
+            message: "Episode index rebuilt successfully",
+            episodeCount: count,
+        });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
+});
+
+// POST /backfill-tags
+admin.post("/backfill-tags", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, { pageSize: 1000 });
+        const episodesNeedingTags = allEpisodes.episodes.filter(
+            ep => !ep.tags || ep.tags.length === 0
+        );
+
+        let processed = 0;
+        let tagged = 0;
+        let failed = 0;
+
+        for (const ep of episodesNeedingTags) {
+            try {
+                processed++;
+
+                const [transcript, summary] = await Promise.all([
+                    getTranscript(c.env.TLDL_DATA, ep.id),
+                    getSummary(c.env.TLDL_DATA, ep.id, "key-takeaways"),
+                ]);
+
+                if (!transcript || !summary) {
+                    console.log(`Skipping ${ep.id}: missing transcript or summary`);
+                    failed++;
+                    continue;
+                }
+
+                const tagResult = await generateEpisodeTags(
+                    summary.text,
+                    transcript.text,
+                    c.env.OPENAI_API_KEY
+                );
+
+                if (tagResult.tags.length === 0) {
+                    console.log(`Warning: No tags generated for ${ep.id}`);
+                    failed++;
+                    continue;
+                }
+
+                await updateEpisodeTags(c.env.TLDL_DATA, ep.id, tagResult.tags);
+                tagged++;
+
+                console.log(JSON.stringify({
+                    event: "episode_tagged",
+                    episodeId: ep.id,
+                    tags: tagResult.tags,
+                }));
+            } catch (error) {
+                console.error(JSON.stringify({
+                    event: "backfill_failed",
+                    episodeId: ep.id,
+                    error: error instanceof Error ? error.message : "Unknown error",
+                }));
+                failed++;
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed} episodes: ${tagged} tagged, ${failed} failed`,
+            processed,
+            tagged,
+            failed,
+            totalEpisodes: allEpisodes.episodes.length,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to backfill tags",
+        }, 500);
+    }
+});
+
+// POST /cleanup-tags
+admin.post("/cleanup-tags", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const validTags = getValidTags();
+        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, { pageSize: 1000 });
+
+        let processed = 0;
+        let cleaned = 0;
+
+        for (const ep of allEpisodes.episodes) {
+            if (!ep.tags || ep.tags.length === 0) continue;
+            processed++;
+
+            const cleanedTags = ep.tags.filter(tag => validTags.includes(tag));
+
+            if (cleanedTags.length !== ep.tags.length) {
+                await updateEpisodeTags(c.env.TLDL_DATA, ep.id, cleanedTags);
+                cleaned++;
+
+                console.log(JSON.stringify({
+                    event: "tags_cleaned",
+                    episodeId: ep.id,
+                    before: ep.tags,
+                    after: cleanedTags,
+                }));
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed} episodes with tags: ${cleaned} cleaned`,
+            processed,
+            cleaned,
+            totalEpisodes: allEpisodes.episodes.length,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to cleanup tags",
+        }, 500);
+    }
+});
+
+// POST /cleanup-jobs
+admin.post("/cleanup-jobs", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const { listActiveJobsWithDO, deleteJobDO: deleteJobFromDO } = await import("../lib/job-status-do");
+
+        const jobs = await listActiveJobsWithDO(c.env, c.env.TLDL_DATA);
+        const failedJobs = jobs.filter(job => job.status === "failed");
+
+        const deletedJobs = [];
+        for (const job of failedJobs) {
+            await deleteJobFromDO(c.env, job.id);
+            await c.env.TLDL_DATA.delete(`job:${job.id}`);
+            deletedJobs.push({
+                id: job.id,
+                podcastName: job.podcastName,
+                episodeTitle: job.episodeTitle,
+                error: job.error,
+            });
+        }
+
+        return c.json({
+            success: true,
+            message: `Cleaned up ${deletedJobs.length} failed job${deletedJobs.length !== 1 ? 's' : ''}`,
+            deletedCount: deletedJobs.length,
+            deletedJobs,
+        });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
+});
+
+// POST /backfill-podcast-info
+admin.post("/backfill-podcast-info", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const { lookupPodcastByItunesId } = await import("../services/podcast-index");
+        const { parseApplePodcastsUrl: parseUrl } = await import("../lib/url-parser");
+        const { getEpisode: getEp, saveEpisode } = await import("../lib/kv");
+
+        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, { pageSize: 1000 });
+
+        let processed = 0;
+        let updated = 0;
+        let failed = 0;
+        let alreadyHasInfo = 0;
+
+        const podcastCache: Map<string, { author?: string; link?: string } | null> = new Map();
+
+        for (const ep of allEpisodes.episodes) {
+            processed++;
+
+            try {
+                const episode = await getEp(c.env.TLDL_DATA, ep.id);
+                if (!episode) {
+                    failed++;
+                    continue;
+                }
+
+                const needsUrlCleaning = (url: string) => {
+                    const lowerPath = new URL(url).pathname.toLowerCase();
+                    return (
+                        lowerPath.endsWith('.xml') ||
+                        lowerPath.endsWith('.rss') ||
+                        lowerPath.endsWith('/feed') ||
+                        lowerPath.endsWith('/feed/') ||
+                        lowerPath.includes('/rss') ||
+                        lowerPath.includes('/feed')
+                    );
+                };
+
+                const hasCleanWebsiteUrl = episode.podcastWebsiteUrl &&
+                    !needsUrlCleaning(episode.podcastWebsiteUrl);
+                if (episode.podcastAuthor && hasCleanWebsiteUrl) {
+                    alreadyHasInfo++;
+                    continue;
+                }
+
+                const parsedUrl = parseUrl(episode.appleUrl);
+                if (!parsedUrl) {
+                    failed++;
+                    continue;
+                }
+
+                let podcastInfo = podcastCache.get(parsedUrl.podcastId);
+                if (podcastInfo === undefined) {
+                    const podcast = await lookupPodcastByItunesId(
+                        parsedUrl.podcastId,
+                        c.env.PODCAST_INDEX_KEY,
+                        c.env.PODCAST_INDEX_SECRET
+                    );
+
+                    podcastInfo = podcast ? { author: podcast.author, link: podcast.link } : null;
+                    podcastCache.set(parsedUrl.podcastId, podcastInfo);
+                }
+
+                const cleanUrl = (url: string) => {
+                    try {
+                        const u = new URL(url);
+                        const lowerPath = u.pathname.toLowerCase();
+                        if (
+                            lowerPath.endsWith('.xml') ||
+                            lowerPath.endsWith('.rss') ||
+                            lowerPath.endsWith('/feed') ||
+                            lowerPath.endsWith('/feed/') ||
+                            lowerPath.includes('/rss') ||
+                            lowerPath.includes('/feed')
+                        ) {
+                            return u.origin;
+                        }
+                        return url;
+                    } catch {
+                        return url;
+                    }
+                };
+
+                if (podcastInfo && (podcastInfo.author || podcastInfo.link)) {
+                    episode.podcastAuthor = podcastInfo.author;
+                    episode.podcastWebsiteUrl = podcastInfo.link ? cleanUrl(podcastInfo.link) : undefined;
+                    await saveEpisode(c.env.TLDL_DATA, episode);
+                    updated++;
+
+                    console.log(JSON.stringify({
+                        event: "podcast_info_backfilled",
+                        episodeId: ep.id,
+                        podcastAuthor: podcastInfo.author,
+                        podcastWebsiteUrl: podcastInfo.link,
+                    }));
+                }
+            } catch (error) {
+                console.error(JSON.stringify({
+                    event: "backfill_podcast_info_failed",
+                    episodeId: ep.id,
+                    error: error instanceof Error ? error.message : "Unknown error",
+                }));
+                failed++;
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed} episodes: ${updated} updated, ${alreadyHasInfo} already had info, ${failed} failed`,
+            processed,
+            updated,
+            alreadyHasInfo,
+            failed,
+            totalEpisodes: allEpisodes.episodes.length,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to backfill podcast info",
+        }, 500);
+    }
 });
 
 // ============================================================================
 // Podcast Monitoring Routes
 // ============================================================================
 
-// GET /profile/podcasts - Podcast monitoring admin page
-authenticated.get("/profile/podcasts", async (c) => {
-    const authError = await requireAuth(c);
+// GET /podcasts - Podcast monitoring admin page
+admin.get("/podcasts", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.text("Admin access required", 403);
-    }
 
     const settings = await getMonitorSettings(c.env.TLDL_DATA);
     const podcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
@@ -2012,8 +1494,13 @@ authenticated.get("/profile/podcasts", async (c) => {
 
     const content = `
         <section class="section">
-            <h1>Monitor Podcasts</h1>
-            <p>Automatically check podcasts for new episodes and queue them for processing.</p>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1>Monitor Podcasts</h1>
+                    <p>Automatically check podcasts for new episodes and queue them for processing.</p>
+                </div>
+                <a href="/admin" class="button button-secondary">← Dashboard</a>
+            </div>
         </section>
 
         <section class="section">
@@ -2075,7 +1562,6 @@ authenticated.get("/profile/podcasts", async (c) => {
         </section>
 
         <style>
-            /* Form spacing for both forms */
             #settings-form .form-group,
             #add-podcast-form .form-group {
                 margin-bottom: 1.25rem;
@@ -2083,7 +1569,6 @@ authenticated.get("/profile/podcasts", async (c) => {
             #add-podcast-form button[type="submit"] {
                 margin-top: 0.5rem;
             }
-            /* Form select dropdown styling */
             .form-select {
                 padding: 0.75rem 2.5rem 0.75rem 1rem;
                 font-size: 0.875rem;
@@ -2107,7 +1592,6 @@ authenticated.get("/profile/podcasts", async (c) => {
                 background-color: var(--background);
                 color: var(--foreground);
             }
-            /* Custom checkbox styling */
             .checkbox-group {
                 display: flex;
                 flex-direction: row;
@@ -2205,7 +1689,7 @@ authenticated.get("/profile/podcasts", async (c) => {
                 const msg = document.getElementById('settings-message');
                 
                 try {
-                    const response = await fetch('/profile/podcasts/settings', {
+                    const response = await fetch('/admin/podcasts/settings', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
@@ -2235,7 +1719,7 @@ authenticated.get("/profile/podcasts", async (c) => {
                 btn.textContent = 'Adding...';
                 
                 try {
-                    const response = await fetch('/profile/podcasts/add', {
+                    const response = await fetch('/admin/podcasts/add', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
@@ -2271,7 +1755,7 @@ authenticated.get("/profile/podcasts", async (c) => {
                 msg.style.display = 'block';
                 
                 try {
-                    const response = await fetch('/profile/podcasts/check-now', {
+                    const response = await fetch('/admin/podcasts/check-now', {
                         method: 'POST',
                         credentials: 'include',
                     });
@@ -2279,7 +1763,7 @@ authenticated.get("/profile/podcasts", async (c) => {
                     const data = await response.json();
                     msg.className = response.ok ? 'alert alert-success' : 'alert alert-error';
                     msg.textContent = response.ok 
-                        ? \`Checked \${data.checked} podcasts. \${data.totalNewEpisodes} new episode(s) queued.\`
+                        ? 'Checked ' + data.checked + ' podcasts. ' + data.totalNewEpisodes + ' new episode(s) queued.'
                         : (data.error || 'Failed');
                     msg.style.display = 'block';
                     
@@ -2300,7 +1784,7 @@ authenticated.get("/profile/podcasts", async (c) => {
                 btn.textContent = 'Checking...';
                 
                 try {
-                    const response = await fetch('/profile/podcasts/' + podcastId + '/check', {
+                    const response = await fetch('/admin/podcasts/' + podcastId + '/check', {
                         method: 'POST',
                         credentials: 'include',
                     });
@@ -2325,7 +1809,7 @@ authenticated.get("/profile/podcasts", async (c) => {
                 }
                 
                 try {
-                    const response = await fetch('/profile/podcasts/' + podcastId, {
+                    const response = await fetch('/admin/podcasts/' + podcastId, {
                         method: 'DELETE',
                         credentials: 'include',
                     });
@@ -2349,15 +1833,10 @@ authenticated.get("/profile/podcasts", async (c) => {
     }));
 });
 
-// PUT /profile/podcasts/settings - Update monitor settings
-authenticated.put("/profile/podcasts/settings", async (c) => {
-    const authError = await requireAuth(c);
+// PUT /podcasts/settings
+admin.put("/podcasts/settings", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     let body: Partial<MonitorSettings>;
     try {
@@ -2373,7 +1852,6 @@ authenticated.put("/profile/podcasts/settings", async (c) => {
         enabled: body.enabled ?? current.enabled,
     };
 
-    // Validate
     if (updated.checkIntervalHours < 1 || updated.checkIntervalHours > 24) {
         return c.json({ error: "Check interval must be 1-24 hours" }, 400);
     }
@@ -2385,15 +1863,10 @@ authenticated.put("/profile/podcasts/settings", async (c) => {
     return c.json({ success: true, settings: updated });
 });
 
-// POST /profile/podcasts/add - Add a podcast to monitoring
-authenticated.post("/profile/podcasts/add", async (c) => {
-    const authError = await requireAuth(c);
+// POST /podcasts/add
+admin.post("/podcasts/add", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     let body: { appleUrl: string; templateId: string; queueLatest?: boolean };
     try {
@@ -2406,7 +1879,6 @@ authenticated.post("/profile/podcasts/add", async (c) => {
         return c.json({ error: "Missing appleUrl" }, 400);
     }
 
-    // Parse Apple Podcasts URL to extract podcast ID (accepts both podcast and episode URLs)
     const parsed = parsePodcastUrl(body.appleUrl);
     if (!parsed) {
         return c.json({ error: "Invalid Apple Podcasts URL. Please use a podcast URL like: https://podcasts.apple.com/us/podcast/podcast-name/id1234567890" }, 400);
@@ -2430,29 +1902,19 @@ authenticated.post("/profile/podcasts/add", async (c) => {
     });
 });
 
-// POST /profile/podcasts/check-now - Force check all podcasts
-authenticated.post("/profile/podcasts/check-now", async (c) => {
-    const authError = await requireAuth(c);
+// POST /podcasts/check-now
+admin.post("/podcasts/check-now", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     const result = await forceCheckAllPodcasts(c.env);
     return c.json(result);
 });
 
-// POST /profile/podcasts/:podcastId/check - Check single podcast
-authenticated.post("/profile/podcasts/:podcastId/check", async (c) => {
-    const authError = await requireAuth(c);
+// POST /podcasts/:podcastId/check
+admin.post("/podcasts/:podcastId/check", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     const podcastId = c.req.param("podcastId");
     const podcast = await getMonitoredPodcast(c.env.TLDL_DATA, podcastId);
@@ -2466,19 +1928,14 @@ authenticated.post("/profile/podcasts/:podcastId/check", async (c) => {
     return c.json(result);
 });
 
-// DELETE /profile/podcasts/:podcastId - Remove podcast from monitoring
-authenticated.delete("/profile/podcasts/:podcastId", async (c) => {
-    const authError = await requireAuth(c);
+// DELETE /podcasts/:podcastId
+admin.delete("/podcasts/:podcastId", async (c) => {
+    const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
-    if (!isAdminUser(userEmail)) {
-        return c.json({ error: "Admin access required" }, 403);
-    }
 
     const podcastId = c.req.param("podcastId");
     await deleteMonitoredPodcast(c.env.TLDL_DATA, podcastId);
     return c.json({ success: true });
 });
 
-export default authenticated;
+export default admin;

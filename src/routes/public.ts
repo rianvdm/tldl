@@ -11,47 +11,23 @@ import {
     getEpisode,
     getTranscript,
     listSummariesForEpisode,
-    createJob,
-    updateJobStatus,
     getPodcastList,
     getEpisodesForPodcast,
 } from "../lib/kv";
 import {
-    createJobDO,
-    getJobWithFallback,
-    updateJobStatusDO,
     listActiveJobsWithDO,
-    deleteJobDO,
 } from "../lib/job-status-do";
-import { getTemplate, TEMPLATES, isValidTemplateId, TIMEOUTS, getValidTags, isValidTag, isBlockedPodcast } from "../lib/constants";
-import { parseApplePodcastsUrl, deriveEpisodeId, extractPodcastId } from "../lib/url-parser";
-import { enqueueJob, createProcessEpisodeMessage } from "../lib/queue";
+import { getTemplate, TEMPLATES, getValidTags, isValidTag } from "../lib/constants";
+import { extractPodcastId } from "../lib/url-parser";
 
-import { getUserEmailFromJwt, escapeHtml } from "../lib/auth";
+import { escapeHtml } from "../lib/auth";
 import { marked } from "marked";
-import { verifyTurnstile, isValidEmail } from "../lib/turnstile";
 import { Footer } from "../lib/components";
 
 const publicRoutes = new Hono<HonoEnv>();
 
 // Base URL for canonical links
 const BASE_URL = "https://tldl-pod.com";
-
-// ============================================================================
-// JWT Email Extraction
-// ============================================================================
-
-/**
- * Extract user email from request (if Cloudflare Access JWT is present)
- */
-function getUserEmail(c: import("hono").Context<HonoEnv>): string | undefined {
-    const cfAccessJwt = c.req.header("Cf-Access-Jwt-Assertion");
-    if (cfAccessJwt) {
-        const email = getUserEmailFromJwt(cfAccessJwt);
-        if (email) return email;
-    }
-    return undefined;
-}
 
 // ============================================================================
 // Helper Functions
@@ -190,37 +166,6 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                 <meta name="twitter:image" content="${ogImage}" />
                 <link rel="stylesheet" href="/styles.css" />
                 <link rel="alternate" type="application/rss+xml" title="TL;DL RSS Feed" href="/feed" />
-                <script>
-                (function() {
-                    var CACHE_KEY = 'tldl-auth';
-                    var loggedOut = new URLSearchParams(location.search).get('loggedOut') === '1';
-
-                    // Clear cache and skip fetch if just logged out
-                    if (loggedOut) {
-                        localStorage.removeItem(CACHE_KEY);
-                        window.__authCheck = Promise.resolve(false);
-                        return;
-                    }
-
-                    // Start fetch early (runs in parallel with HTML parsing)
-                    window.__authCheck = fetch('/profile/auth-check', { credentials: 'include' })
-                        .then(function(r) {
-                            if (r.ok) {
-                                localStorage.setItem(CACHE_KEY, '1');
-                                return true;
-                            }
-                            localStorage.removeItem(CACHE_KEY);
-                            return false;
-                        })
-                        .catch(function() {
-                            localStorage.removeItem(CACHE_KEY);
-                            return false;
-                        });
-
-                    // Check cache for instant UI (will be applied in body script)
-                    window.__authCached = localStorage.getItem(CACHE_KEY) === '1';
-                })();
-                </script>
                 ${raw(props.headExtra || "")}
             </head>
             <body>
@@ -232,47 +177,10 @@ export function Layout(props: { title: string; children: string; headExtra?: str
                         >
                         <a href="/podcasts" class="nav-link">Podcasts</a>
                         <a href="/about" class="nav-link">About</a>
-                        <a href="/profile" class="nav-link" id="nav-auth-link">Log in</a>
-                        <span class="auth-logged-out nav-submit-wrapper" data-tooltip="Submissions are invite-only">
-                            <span class="nav-submit-btn nav-submit-disabled">Submit</span>
-                        </span>
-                        <a href="/submit" class="nav-submit-btn auth-logged-in hidden">Submit</a>
                     </nav>
                     <main class="main">${raw(props.children)}</main>
                     ${Footer}
                 </div>
-                <script>
-                (function() {
-                    function showLoggedIn() {
-                        var nav = document.getElementById('nav-auth-link');
-                        if (nav) nav.textContent = 'Profile';
-                        document.querySelectorAll('.auth-logged-out').forEach(function(el) {
-                            el.classList.add('hidden');
-                        });
-                        document.querySelectorAll('.auth-logged-in').forEach(function(el) {
-                            el.classList.remove('hidden');
-                        });
-                    }
-
-                    // If cached as logged in, show immediately (zero flash for returning users)
-                    if (window.__authCached) {
-                        showLoggedIn();
-                    }
-
-                    // Then validate with actual fetch result (updates if cache was wrong)
-                    if (window.__authCheck) {
-                        window.__authCheck.then(function(isLoggedIn) {
-                            if (isLoggedIn && !window.__authCached) {
-                                // Fetch confirmed login, but wasn't cached - update now
-                                showLoggedIn();
-                            } else if (!isLoggedIn && window.__authCached) {
-                                // Cache was wrong (session expired) - reload to show logged-out state
-                                location.reload();
-                            }
-                        });
-                    }
-                })();
-                </script>
             </body>
         </html>`;
 }
@@ -377,7 +285,7 @@ function InProgressCard(job: Job): string {
     const indicatorClass = isFailed ? "status-indicator status-indicator-failed" : "status-indicator status-indicator-active";
 
     return `
-        <a href="/job/${escapeHtml(job.id)}" class="${cardClass}">
+        <div class="${cardClass}">
             <div class="episode-card-content">
                 <div class="episode-podcast">
                     <span class="${indicatorClass}"></span>
@@ -393,7 +301,7 @@ function InProgressCard(job: Job): string {
             <div class="episode-card-arrow">
                 ${iconHtml}
             </div>
-        </a>
+        </div>
     `;
 }
 
@@ -408,7 +316,6 @@ publicRoutes.get("/", async (c) => {
     const pageSize = 10;
     const search = c.req.query("q") || "";
     const tagFilter = c.req.query("tag") || "";
-    const loggedOut = c.req.query("loggedOut") === "1";
 
     // Validate tag if provided
     const isValidTagFilter = tagFilter ? isValidTag(tagFilter) : true;
@@ -457,31 +364,17 @@ publicRoutes.get("/", async (c) => {
         <div class="divider"></div>
     ` : "";
 
-    // Logout success message
-    const logoutMessage = loggedOut ? `
-        <div class="alert alert-success" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 0.5rem; display: flex; align-items: center; justify-content: space-between;">
-            <span>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.5rem; vertical-align: middle; color: rgb(34, 197, 94);">
-                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/>
-                </svg>
-                You have been successfully logged out.
-            </span>
-            <a href="/" style="color: var(--text-muted); text-decoration: none; font-size: 1.25rem; line-height: 1;">&times;</a>
-        </div>
-    ` : "";
-
     // Intro text for the home page
     const introSection = `
         <div class="hero-section">
             <h1 class="hero-headline">Your favorite podcasts, <span class="text-accent">summarized</span>.</h1>
-            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Submissions are invite-only for now—<a href="/waitlist" class="hero-link">join the waitlist</a> or browse existing summaries below.</p>
+            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Browse AI summaries below.</p>
         </div>
     `;
 
     const content =
         episodes.length > 0 || activeJobs.length > 0 || search
             ? `
-        ${logoutMessage}
         ${introSection}
         <div class="page-header">
             <h2>Recently Added Episodes</h2>
@@ -676,8 +569,7 @@ publicRoutes.get("/", async (c) => {
                     <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
                 </svg>
             </div>
-            <p>No episodes yet.</p>
-            <p class="text-muted">Click Submit in the nav bar to add your first podcast episode!</p>
+            <p>No episodes yet. Check back soon!</p>
         </div>
     `;
 
@@ -924,15 +816,6 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
 });
 
 // ============================================================================
-// GET /submit — Episode Submission Form
-// ============================================================================
-
-publicRoutes.get("/submit", async (c) => {
-    const content = SubmitFormPage({ error: null, url: "", templateId: "key-takeaways" });
-    return c.html(Layout({ title: "Submit Episode", children: content, canonicalUrl: `${BASE_URL}/submit` }));
-});
-
-// ============================================================================
 // GET /about — About Page
 // ============================================================================
 
@@ -1018,7 +901,7 @@ publicRoutes.get("/about", async (c) => {
             }
         </style>
         <div class="intro-section">
-            <p>Submitting new episodes is currently invite-only. For now you can browse existing summaries on the home page.</p>
+            <p>New podcasts and episodes are added regularly. Browse existing summaries on the home page.</p>
         </div>
         <div class="card about-page">
             <h1>About TL;DL</h1>
@@ -1036,7 +919,7 @@ publicRoutes.get("/about", async (c) => {
 
             <section style="margin-top: 2rem;">
                 <h2>Summary Templates</h2>
-                <p>On submission users can select from three different summary styles depending on the type of content:</p>
+                <p>Each episode is available in three different summary styles depending on the type of content:</p>
 
                 <table class="templates-table">
                     <thead>
@@ -1135,653 +1018,6 @@ publicRoutes.get("/about", async (c) => {
     `;
     return c.html(Layout({ title: "About", children: content.toString(), canonicalUrl: `${BASE_URL}/about` }));
 });
-
-// ============================================================================
-// POST /submit — Handle Form Submission
-// ============================================================================
-
-publicRoutes.post("/submit", async (c) => {
-    const formData = await c.req.formData();
-    const appleUrl = formData.get("appleUrl") as string || "";
-    const templateId = formData.get("templateId") as string || "key-takeaways";
-
-    // Validate URL
-    if (!appleUrl.trim()) {
-        const content = SubmitFormPage({
-            error: "Please enter a podcast episode URL",
-            url: appleUrl,
-            templateId
-        });
-        return c.html(Layout({ title: "Submit Episode", children: content }), 400);
-    }
-
-    const parsed = parseApplePodcastsUrl(appleUrl);
-    if (!parsed) {
-        const content = SubmitFormPage({
-            error: "Please enter a valid Apple Podcasts episode URL. It should look like: podcasts.apple.com/...?i=...",
-            url: appleUrl,
-            templateId
-        });
-        return c.html(Layout({ title: "Submit Episode", children: content }), 400);
-    }
-
-    // Check if podcast is blocked
-    if (isBlockedPodcast(appleUrl)) {
-        const content = SubmitFormPage({
-            error: "This podcast has opted out of being processed on TL;DL.",
-            url: appleUrl,
-            templateId
-        });
-        return c.html(Layout({ title: "Submit Episode", children: content }), 403);
-    }
-
-    // Validate template
-    if (!isValidTemplateId(templateId)) {
-        const content = SubmitFormPage({
-            error: `Invalid summary template: ${templateId}`,
-            url: appleUrl,
-            templateId
-        });
-        return c.html(Layout({ title: "Submit Episode", children: content }), 400);
-    }
-
-    // Derive episode ID
-    const episodeId = deriveEpisodeId(parsed.podcastId, parsed.episodeId);
-
-    // Check if already cached
-    const existingEpisode = await getEpisode(c.env.TLDL_DATA, episodeId);
-    if (existingEpisode) {
-        const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
-        const hasSummary = summaries.some(s => s.templateId === templateId);
-        if (hasSummary) {
-            // Already processed - redirect directly to episode page
-            return c.redirect(`/episode/${episodeId}?template=${templateId}`);
-        }
-    }
-
-    // Create new job (skip prefetch to speed up redirect - queue consumer handles via Podcast Index + Apple scraping)
-    const jobId = crypto.randomUUID();
-    const now = new Date().toISOString();
-
-    const job: Job = {
-        id: jobId,
-        episodeId,
-        appleUrl,
-        status: "queued",
-        templateId,
-        createdAt: now,
-        updatedAt: now,
-    };
-
-    // Create job in both DO (immediate consistency) and KV (backup)
-    await createJobDO(c.env, job);
-    await createJob(c.env.TLDL_DATA, job);
-
-    // Queue the job for processing
-    // Extract user email from JWT if available (for profile page tracking)
-    const userEmail = getUserEmail(c);
-
-    const message = createProcessEpisodeMessage({
-        jobId,
-        episodeId,
-        appleUrl,
-        templateId,
-        submittedBy: userEmail,
-    });
-    await enqueueJob(c.env.TLDL_QUEUE, message);
-
-    // Redirect to job status page
-    return c.redirect(`/job/${jobId}`);
-});
-
-// ============================================================================
-// Submit Form Component
-// ============================================================================
-
-interface SubmitFormProps {
-    error: string | null;
-    url: string;
-    templateId: string;
-}
-
-function SubmitFormPage(props: SubmitFormProps): string {
-    const templateOptions = Object.entries(TEMPLATES).map(([id, template]) => {
-        const checked = props.templateId === id ? "checked" : "";
-        return `
-            <label class="radio-option">
-                <input type="radio" name="templateId" value="${escapeHtml(id)}" ${checked}>
-                <div class="radio-content">
-                    <div class="radio-label">${escapeHtml(template.name)}</div>
-                    <div class="radio-description">${escapeHtml(template.description)}</div>
-                </div>
-            </label>
-        `;
-    }).join("");
-
-    const errorHtml = props.error ? `
-        <div class="alert alert-error">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            <span>${escapeHtml(props.error)}</span>
-        </div>
-    ` : "";
-
-    return `
-        <div class="page-header">
-            <h1>Submit Episode</h1>
-            <p class="page-subtitle">Generate an AI summary from any Apple Podcasts episode</p>
-        </div>
-
-        <div class="card">
-            <form method="POST" action="/submit" class="form">
-                <div class="form-group">
-                    <label for="appleUrl" class="form-label">Apple Podcasts Episode URL</label>
-                    <input 
-                        type="url" 
-                        id="appleUrl"
-                        name="appleUrl" 
-                        value="${escapeHtml(props.url)}"
-                        placeholder="https://podcasts.apple.com/us/podcast/..."
-                        class="form-input"
-                        required
-                    >
-                    <p class="form-hint">Paste the URL from an Apple Podcasts episode page</p>
-                </div>
-
-                <div class="form-group">
-                    <fieldset class="form-fieldset">
-                        <legend class="form-label">Summary Template</legend>
-                        <div class="radio-group">
-                            ${templateOptions}
-                        </div>
-                    </fieldset>
-                </div>
-
-                ${errorHtml}
-
-                <div class="alert alert-info">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
-                    </svg>
-                    <span>Episodes are limited to 2 hours. Transcripts and summaries are cached for 365 days.</span>
-                </div>
-
-                <div class="form-actions">
-                    <button type="submit" class="button button-primary">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>
-                        </svg>
-                        Generate Summary
-                    </button>
-                    <a href="/" class="button">Cancel</a>
-                </div>
-            </form>
-        </div>
-    `;
-}
-
-// ============================================================================
-// GET /job/:jobId — Job Status Page (HTML)
-// ============================================================================
-
-publicRoutes.get("/job/:jobId", async (c) => {
-    const jobId = c.req.param("jobId");
-
-    // Use DO with fallback to KV for strongly consistent status
-    let job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
-    if (!job) {
-        const content = `
-            <div class="error-page">
-                <h1>Job Not Found</h1>
-                <p>This job doesn't exist or has expired.</p>
-                <a href="/" class="button">Back to Home</a>
-            </div>
-        `;
-        return c.html(Layout({ title: "Not Found", children: content }), 404);
-    }
-
-    // Check for job timeout - if job has been running for more than 20 minutes, mark as failed
-    const isInProgressStatus = job.status !== "completed" && job.status !== "failed";
-    if (isInProgressStatus) {
-        const jobAge = Date.now() - new Date(job.createdAt).getTime();
-        if (jobAge > TIMEOUTS.JOB_MS) {
-            console.log(
-                JSON.stringify({
-                    event: "job_timeout_detected",
-                    jobId,
-                    status: job.status,
-                    ageMinutes: Math.round(jobAge / 60000),
-                    createdAt: job.createdAt,
-                })
-            );
-            // Mark job as failed due to timeout
-            const timeoutError = `Job timed out after ${Math.round(jobAge / 60000)} minutes. The transcription may have stalled. Please try again.`;
-            await updateJobStatusDO(c.env, jobId, "failed", timeoutError);
-            await updateJobStatus(c.env.TLDL_DATA, jobId, "failed", timeoutError);
-            // Refresh job data
-            job = { ...job, status: "failed", error: timeoutError };
-        }
-    }
-
-    // Debug: log what status we're seeing
-    console.log(
-        JSON.stringify({
-            event: "job_status_read",
-            jobId,
-            status: job.status,
-            updatedAt: job.updatedAt,
-        })
-    );
-
-    const content = JobStatusPage(job);
-
-    // Add auto-refresh only for in-progress jobs (not completed or failed)
-    const isInProgress = job.status !== "failed" && job.status !== "completed";
-    const refreshMeta = isInProgress
-        ? '<meta http-equiv="refresh" content="5">'
-        : '';
-
-    // Prevent caching to ensure fresh status on every request
-    c.header("Cache-Control", "no-cache, no-store, must-revalidate");
-    c.header("Pragma", "no-cache");
-    c.header("Expires", "0");
-
-    return c.html(Layout({
-        title: job.status === "completed" ? "Episode Ready" : "Processing Episode",
-        children: content,
-        headExtra: refreshMeta
-    }));
-});
-
-// ============================================================================
-// POST /job/:jobId/retry — Retry Failed Job (HTML)
-// ============================================================================
-
-publicRoutes.post("/job/:jobId/retry", async (c) => {
-    const jobId = c.req.param("jobId");
-
-    // Use DO with fallback for job lookup
-    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
-    if (!job) {
-        return c.redirect("/");
-    }
-
-    if (job.status !== "failed") {
-        return c.redirect(`/job/${jobId}`);
-    }
-
-    // Reset job status in both DO and KV
-    await updateJobStatusDO(c.env, jobId, "queued");
-    await updateJobStatus(c.env.TLDL_DATA, jobId, "queued");
-
-    // Re-queue the job (include user email if available)
-    const userEmail = getUserEmail(c);
-    const message = createProcessEpisodeMessage({
-        jobId,
-        episodeId: job.episodeId,
-        appleUrl: job.appleUrl,
-        templateId: job.templateId,
-        submittedBy: userEmail,
-    });
-    await enqueueJob(c.env.TLDL_QUEUE, message);
-
-    return c.redirect(`/job/${jobId}`);
-});
-
-// ============================================================================
-// POST /job/:jobId/delete — Remove Failed Job (HTML)
-// ============================================================================
-
-publicRoutes.post("/job/:jobId/delete", async (c) => {
-    const jobId = c.req.param("jobId");
-
-    // Use DO with fallback for job lookup
-    const job = await getJobWithFallback(c.env, c.env.TLDL_DATA, jobId);
-    if (!job) {
-        return c.redirect("/");
-    }
-
-    // Only allow deletion of failed jobs
-    if (job.status !== "failed") {
-        return c.redirect(`/job/${jobId}`);
-    }
-
-    // Delete from both DO and KV
-    await deleteJobDO(c.env, jobId);
-    await c.env.TLDL_DATA.delete(`job:${jobId}`);
-
-    return c.redirect("/");
-});
-
-// ============================================================================
-// Job Status Component
-// ============================================================================
-
-const STATUS_LABELS: Record<JobStatus, string> = {
-    queued: "Queued",
-    fetching_metadata: "Fetching episode metadata",
-    checking_transcript: "Checking for existing transcript",
-    transcribing: "Transcribing audio",
-    summarizing: "Generating summary",
-    completed: "Completed",
-    failed: "Failed",
-};
-
-const STATUS_PROGRESS: Record<JobStatus, number> = {
-    queued: 5,
-    fetching_metadata: 20,
-    checking_transcript: 35,
-    transcribing: 60,
-    summarizing: 85,
-    completed: 100,
-    failed: 0,
-};
-
-const STATUS_ORDER: JobStatus[] = [
-    "queued",
-    "fetching_metadata",
-    "checking_transcript",
-    "transcribing",
-    "summarizing",
-    "completed",
-];
-
-function JobStatusPage(job: Job): string {
-    const currentProgress = STATUS_PROGRESS[job.status];
-    const isFailed = job.status === "failed";
-
-    // Build progress steps
-    const stepsHtml = STATUS_ORDER.filter(status => status !== "completed").map(status => {
-        const label = STATUS_LABELS[status];
-        const statusProgress = STATUS_PROGRESS[status];
-        const isCurrentStep = job.status === status;
-        const isPastStep = !isFailed && currentProgress > statusProgress;
-
-        let stepClass = "step";
-        let iconHtml = "";
-
-        if (isPastStep) {
-            stepClass += " step-complete";
-            iconHtml = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="step-icon step-icon-check">
-                    <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
-                </svg>
-            `;
-        } else if (isCurrentStep && !isFailed) {
-            stepClass += " step-current";
-            iconHtml = `
-                <div class="step-icon step-icon-spinner"></div>
-            `;
-        } else {
-            stepClass += " step-pending";
-            iconHtml = `
-                <div class="step-icon step-icon-empty"></div>
-            `;
-        }
-
-        return `
-            <div class="${stepClass}">
-                ${iconHtml}
-                <span class="step-label">${escapeHtml(label)}</span>
-            </div>
-        `;
-    }).join("");
-
-    // Estimated time
-    const estimatedTimeHtml = job.estimatedSeconds && job.estimatedSeconds > 0 && !isFailed ? `
-        <div class="estimated-time">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-            </svg>
-            ~${Math.ceil(job.estimatedSeconds / 60)} minute${job.estimatedSeconds > 60 ? 's' : ''} remaining
-        </div>
-    ` : "";
-
-    // Error display
-    const errorHtml = isFailed ? `
-        <div class="alert alert-error">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            <span>${escapeHtml(job.error || "An unknown error occurred")}</span>
-        </div>
-    ` : "";
-
-    // Progress bar (only show when not failed and not completed)
-    const isCompleted = job.status === "completed";
-    const progressBarHtml = !isFailed && !isCompleted ? `
-        <div class="progress-container">
-            <div class="progress-bar">
-                <div class="progress-fill" style="width: ${currentProgress}%"></div>
-            </div>
-            <div class="progress-info">
-                <span class="progress-percent">${currentProgress}% complete</span>
-                ${estimatedTimeHtml}
-            </div>
-        </div>
-    ` : "";
-
-    // Success message for completed jobs
-    const successHtml = isCompleted ? `
-        <div class="alert alert-success mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
-            </svg>
-            <span>Your episode summary is ready!</span>
-        </div>
-    ` : "";
-
-    // Actions based on status
-    let actionsHtml = "";
-    if (isCompleted) {
-        actionsHtml = `
-            <div class="form-actions">
-                <a href="/episode/${escapeHtml(job.episodeId)}?template=${escapeHtml(job.templateId)}" class="button button-primary">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
-                        <circle cx="12" cy="12" r="3"/>
-                    </svg>
-                    View Episode Summary
-                </a>
-                <a href="/" class="button">Back to Episodes</a>
-            </div>
-        `;
-    } else if (isFailed) {
-        actionsHtml = `
-            <div class="form-actions">
-                <form method="POST" action="/job/${escapeHtml(job.id)}/retry" style="display: contents;">
-                    <button type="submit" class="button button-primary">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                            <path d="M3 3v5h5"/>
-                            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
-                            <path d="M16 21h5v-5"/>
-                        </svg>
-                        Retry
-                    </button>
-                </form>
-                <form method="POST" action="/job/${escapeHtml(job.id)}/delete" style="display: contents;">
-                    <button type="submit" class="button" onclick="return confirm('Are you sure you want to remove this failed job?')">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                        </svg>
-                        Remove Job
-                    </button>
-                </form>
-                <a href="/" class="button">Back to Episodes</a>
-            </div>
-        `;
-    } else {
-        actionsHtml = `
-            <div class="form-actions">
-                <a href="/" class="button">Back to Episodes</a>
-            </div>
-        `;
-    }
-
-    // Page title based on status
-    const pageTitle = isCompleted ? "Episode Ready" : isFailed ? "Processing Failed" : "Processing Episode";
-
-    return `
-        <div class="page-header">
-            <h1>${pageTitle}</h1>
-            <p class="page-subtitle">Job ID: <code class="job-id">${escapeHtml(job.id)}</code></p>
-        </div>
-
-        <div class="card">
-            ${progressBarHtml}
-
-            ${!isCompleted ? `
-            <div class="steps">
-                ${stepsHtml}
-            </div>
-            ` : ""}
-
-            ${successHtml}
-            ${errorHtml}
-
-            ${actionsHtml}
-        </div>
-
-        ${!isFailed && !isCompleted ? `
-        <div class="text-center mt-4">
-            <p class="text-muted text-sm">This page will automatically update. You can safely navigate away and return later.</p>
-        </div>
-        ` : ""}
-    `;
-}
-
-// ============================================================================
-// GET /waitlist — Waitlist signup form
-// ============================================================================
-
-publicRoutes.get("/waitlist", async (c) => {
-    const success = c.req.query("success") === "1";
-    const error = c.req.query("error");
-    const siteKey = c.env.TURNSTILE_SITE_KEY;
-
-    const content = WaitlistPage({ success, error, siteKey });
-    const turnstileScript = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>';
-    return c.html(Layout({ title: "Join the Waitlist", children: content, headExtra: turnstileScript }));
-});
-
-// ============================================================================
-// POST /waitlist — Handle waitlist signup
-// ============================================================================
-
-publicRoutes.post("/waitlist", async (c) => {
-    const body = await c.req.parseBody();
-    const email = body.email as string;
-    const token = body["cf-turnstile-response"] as string;
-
-    // 1. Validate Turnstile
-    const turnstileValid = await verifyTurnstile(token, c.env.TURNSTILE_SECRET);
-    if (!turnstileValid) {
-        return c.redirect("/waitlist?error=captcha");
-    }
-
-    // 2. Validate email
-    if (!email || !isValidEmail(email)) {
-        return c.redirect("/waitlist?error=invalid-email");
-    }
-
-    // 3. Store in KV (lowercase for deduplication)
-    const normalizedEmail = email.toLowerCase().trim();
-    const key = `waitlist:${normalizedEmail}`;
-
-    await c.env.TLDL_DATA.put(key, JSON.stringify({
-        email: normalizedEmail,
-        createdAt: new Date().toISOString()
-    }));
-
-    console.log(
-        JSON.stringify({
-            event: "waitlist_signup",
-            email: normalizedEmail,
-        })
-    );
-
-    return c.redirect("/waitlist?success=1");
-});
-
-// ============================================================================
-// Waitlist Page Component
-// ============================================================================
-
-function WaitlistPage(props: { success: boolean; error?: string | null; siteKey: string }): string {
-    if (props.success) {
-        return `
-            <div class="page-header">
-                <h1>Join the Waitlist</h1>
-                <p class="page-subtitle text-muted">
-                    TL;DL is currently invite-only. Sign up to get notified when we open up.
-                </p>
-            </div>
-
-            <div class="alert alert-success">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                    <polyline points="22 4 12 14.01 9 11.01"/>
-                </svg>
-                <span>You're on the list! We'll email you when spots open up.</span>
-            </div>
-            <div style="margin-top: 1.5rem;">
-                <a href="/" class="button button-primary">Go Home</a>
-            </div>
-        `;
-    }
-
-    const errorMessage = props.error === "captcha"
-        ? "Verification failed. Please try again."
-        : props.error === "invalid-email"
-            ? "Please enter a valid email address."
-            : null;
-
-    return `
-        <div class="page-header">
-            <h1>Join the Waitlist</h1>
-            <p class="page-subtitle text-muted">
-                TL;DL is currently invite-only. Sign up to get notified when we open up.
-            </p>
-        </div>
-
-        ${errorMessage ? `
-            <div class="alert alert-error" style="margin-bottom: 1.5rem;">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <line x1="12" y1="8" x2="12" y2="12"/>
-                    <line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                <span>${escapeHtml(errorMessage)}</span>
-            </div>
-        ` : ""}
-
-        <div class="card">
-            <form method="POST" action="/waitlist" class="form">
-                <div class="form-group">
-                    <label for="email" class="form-label">Email address</label>
-                    <input
-                        type="email"
-                        id="email"
-                        name="email"
-                        class="form-input"
-                        placeholder="you@example.com"
-                        required
-                        autocomplete="email"
-                    />
-                </div>
-
-                <!-- Turnstile widget -->
-                <div class="cf-turnstile" data-sitekey="${escapeHtml(props.siteKey)}" data-theme="dark"></div>
-
-                <div class="form-actions">
-                    <button type="submit" class="button button-primary">Join Waitlist</button>
-                </div>
-            </form>
-        </div>
-    `;
-}
 
 // ============================================================================
 // GET /feed — RSS Feed (with optional tag filter)
@@ -1896,9 +1132,7 @@ publicRoutes.get("/podcasts", async (c) => {
                 <p class="page-subtitle">All podcasts with AI summaries</p>
             </div>
             <div class="empty-state">
-                <p>No podcasts yet.</p>
-                <p class="text-muted">Submit your first episode to get started!</p>
-                <a href="/submit" class="button button-primary mt-4">Submit Episode</a>
+                <p>No podcasts yet. Check back soon!</p>
             </div>
         `;
         return c.html(Layout({ title: "Browse Podcasts", children: content }));

@@ -9,7 +9,7 @@
     "openai": {
       "options": {
         "websearch_cited": {
-          "model": "gpt-5.2"
+          "model": "gpt-5.4"
         }
       }
     },
