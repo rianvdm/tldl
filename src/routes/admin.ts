@@ -5,7 +5,7 @@
  */
 
 import { Hono } from "hono";
-import type { HonoEnv, Job, EpisodeIndexEntry, MonitorSettings } from "../types";
+import type { HonoEnv, Job, MonitorSettings } from "../types";
 import { Layout } from "./public";
 import {
     createJob,
@@ -27,8 +27,6 @@ import {
 } from "../lib/kv";
 import {
     createJobDO,
-    getJobWithFallback,
-    updateJobStatusDO,
     deleteJobDO,
     getJobDO,
 } from "../lib/job-status-do";
@@ -70,13 +68,14 @@ async function requireAdmin(c: import("hono").Context<HonoEnv>): Promise<Respons
 
     if (cfAccessJwt) {
         const userEmail = getUserEmailFromJwt(cfAccessJwt);
-        if (userEmail) {
-            // Verify admin access
-            if (!isAdminUser(userEmail)) {
-                return c.json({ error: "Admin access required" }, 403);
-            }
-            c.set("userEmail", userEmail);
+        if (!userEmail) {
+            // Malformed JWT or missing email — fail closed
+            return c.json({ error: "Invalid token" }, 401);
         }
+        if (!isAdminUser(userEmail)) {
+            return c.json({ error: "Admin access required" }, 403);
+        }
+        c.set("userEmail", userEmail);
     } else if (isDevelopment) {
         // Mock admin user for local development
         c.set("userEmail", "rianvdm@gmail.com");
@@ -773,8 +772,6 @@ admin.get("/submit", async (c) => {
 admin.post("/submit", async (c) => {
     const authError = await requireAdmin(c);
     if (authError) return authError;
-
-    const userEmail = c.get("userEmail");
 
     // Handle both form and JSON submissions
     const contentType = c.req.header("Content-Type") || "";

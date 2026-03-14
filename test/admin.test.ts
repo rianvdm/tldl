@@ -11,7 +11,6 @@ import {
     saveSummary,
     getSummary,
     listSummariesForEpisode,
-    updateEpisodeTags,
 } from "../src/lib/kv";
 import type { Episode, Transcript, Summary, Job } from "../src/types";
 
@@ -75,7 +74,7 @@ function createSampleJob(overrides: Partial<Job> = {}): Job {
 }
 
 async function clearTestData() {
-    const prefixes = ["episode:", "transcript:", "summary:", "job:", "index:"];
+    const prefixes = ["episode:", "episodes:", "transcript:", "summary:", "job:"];
     for (const prefix of prefixes) {
         const keys = await env.TLDL_DATA.list({ prefix });
         await Promise.all(keys.keys.map((k) => env.TLDL_DATA.delete(k.name)));

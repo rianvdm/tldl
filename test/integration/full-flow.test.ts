@@ -65,7 +65,7 @@ function createSampleSummary(overrides: Partial<Summary> = {}): Summary {
 }
 
 async function clearTestData() {
-    const prefixes = ["episode:", "transcript:", "summary:", "job:"];
+    const prefixes = ["episode:", "episodes:", "transcript:", "summary:", "job:"];
     for (const prefix of prefixes) {
         const keys = await env.TLDL_DATA.list({ prefix });
         await Promise.all(keys.keys.map((k) => env.TLDL_DATA.delete(k.name)));

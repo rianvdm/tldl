@@ -17,7 +17,7 @@ import {
 import {
     listActiveJobsWithDO,
 } from "../lib/job-status-do";
-import { getTemplate, TEMPLATES, getValidTags, isValidTag } from "../lib/constants";
+import { getTemplate, getValidTags, isValidTag } from "../lib/constants";
 import { extractPodcastId } from "../lib/url-parser";
 
 import { escapeHtml } from "../lib/auth";
