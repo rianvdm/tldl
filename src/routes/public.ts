@@ -900,20 +900,18 @@ publicRoutes.get("/about", async (c) => {
                 }
             }
         </style>
-        <div class="intro-section">
-            <p>New podcasts and episodes are added regularly. Browse existing summaries on the home page.</p>
-        </div>
         <div class="card about-page">
             <h1>About TL;DL</h1>
 
             <section style="margin-top: 2rem;">
                 <p>
-                    TL;DL (Too Long; Didn't Listen) generates AI-powered summaries of podcast episodes.
-                    Paste an Apple Podcasts URL, and get a concise summary along with the full transcript.
+                    TL;DL (Too Long; Didn't Listen) is a curated archive of AI-powered podcast summaries.
+                    New podcasts and episodes are added regularly. Each episode includes a concise summary
+                    and the full transcript.
                 </p>
                 <p>
-                    All summaries and transcripts are cached for 365 days, so if someone has already
-                    processed an episode, you'll get instant results.
+                    All summaries and transcripts are cached for 365 days, so episodes are always
+                    available for quick reference.
                 </p>
             </section>
 
@@ -1001,9 +999,9 @@ publicRoutes.get("/about", async (c) => {
                     </li>
                 </ul>
                 <p>
-                    Transcription and summarization powered by
-                    <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a>
-                    (Whisper and GPT-5.2).
+                    Transcription powered by
+                    <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a>'s
+                    gpt-4o-mini-transcribe model. Summarization and tagging by GPT-5.4.
                 </p>
             </section>
 
