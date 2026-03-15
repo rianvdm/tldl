@@ -1239,25 +1239,33 @@ function buildRssFeed(
             ? ep.tags.map((tag) => `        <category>${escapeXml(tag)}</category>`).join("\n")
             : "";
         
-        // Build description with podcast info header and summary (converted to HTML)
+        // Build content with podcast info header and summary (converted to HTML)
         const podcastInfo = `${ep.podcastName} • ${formatDuration(ep.episodeDuration)}`;
-        const description = ep.summaryText
-            ? `<![CDATA[<p><strong>${escapeHtml(podcastInfo)}</strong></p>${renderMarkdown(ep.summaryText)}]]>`
-            : escapeXml(podcastInfo);
+        const summaryHtml = ep.summaryText
+            ? `<p><strong>${escapeHtml(podcastInfo)}</strong></p>${renderMarkdown(ep.summaryText)}`
+            : `<p>${escapeHtml(podcastInfo)}</p>`;
+
+        // Use content:encoded for full content (prevents RSS readers from
+        // fetching the page and showing the transcript instead of the summary).
+        // description gets a plain-text excerpt for readers that don't support content:encoded.
+        const plainExcerpt = ep.summaryText
+            ? ep.summaryText.replace(/[#*_`\[\]]/g, "").substring(0, 500)
+            : podcastInfo;
 
         return `    <item>
       <title>${escapeXml(ep.episodeTitle)}</title>
       <link>${itemLink}</link>
       <guid isPermaLink="true">${itemLink}</guid>
       <pubDate>${toRfc822Date(ep.createdAt)}</pubDate>
-      <description>${description}</description>
+      <description>${escapeXml(plainExcerpt)}</description>
+      <content:encoded><![CDATA[${summaryHtml}]]></content:encoded>
       <source url="${baseUrl}/feed">${escapeXml(ep.podcastName)}</source>
 ${categories}
     </item>`;
     }).join("\n");
 
     return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
     <title>${escapeXml(feedTitle)}</title>
     <link>${feedLink}</link>
