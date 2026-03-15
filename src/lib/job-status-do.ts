@@ -7,7 +7,9 @@
  */
 
 import type { Env, Job, JobStatus } from "../types";
-import { getJob } from "./kv";
+import { getJob, updateJobStatus, appendActivityEvent } from "./kv";
+import { TIMEOUTS } from "./constants";
+import { notifyDiscord, DISCORD_COLORS } from "./discord";
 
 /**
  * Get the Durable Object stub for a job by its ID
@@ -140,16 +142,60 @@ export async function listActiveJobsWithDO(
         jobIds.map(jobId => getJobWithFallback(env, kv, jobId))
     );
 
-    // Filter to only active jobs and failed jobs (not completed) and sort by createdAt descending
-    return jobs
-        .filter((job): job is import("../types").Job =>
-            job !== null &&
-            job.status !== "completed"
-        )
-        .sort(
-            (a, b) =>
-                new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
+    // Filter to non-completed jobs
+    const activeJobs = jobs.filter(
+        (job): job is Job => job !== null && job.status !== "completed"
+    );
+
+    // Check for timed-out jobs and mark them as failed
+    const now = Date.now();
+    for (const job of activeJobs) {
+        if (job.status === "failed") continue;
+
+        const jobAge = now - new Date(job.createdAt).getTime();
+        if (jobAge > TIMEOUTS.JOB_MS) {
+            const timeoutError = `Job timed out after ${Math.round(jobAge / 60000)} minutes. The transcription may have stalled.`;
+
+            console.log(JSON.stringify({
+                event: "job_timeout_detected",
+                jobId: job.id,
+                status: job.status,
+                ageMinutes: Math.round(jobAge / 60000),
+            }));
+
+            // Mark as failed in both DO and KV (best effort)
+            try {
+                await updateJobStatusDO(env, job.id, "failed", timeoutError);
+                await updateJobStatus(kv, job.id, "failed", timeoutError);
+
+                await appendActivityEvent(kv, {
+                    type: "episode_failed",
+                    timestamp: new Date().toISOString(),
+                    title: job.podcastName
+                        ? `${job.podcastName}: ${job.episodeTitle || job.episodeId}`
+                        : `Episode ${job.episodeId}`,
+                    details: timeoutError,
+                    episodeId: job.episodeId,
+                });
+
+                await notifyDiscord(env.DISCORD_WEBHOOK_URL, {
+                    title: "🔴 Job timed out",
+                    description: `**${job.podcastName || "Unknown"}: ${job.episodeTitle || job.episodeId}**\n\n${timeoutError}\n\nLast status: ${job.status}`,
+                    color: DISCORD_COLORS.ERROR,
+                });
+
+                // Update the in-memory job object so the UI shows it as failed
+                job.status = "failed";
+                job.error = timeoutError;
+            } catch (err) {
+                console.error("Failed to mark timed-out job:", err);
+            }
+        }
+    }
+
+    return activeJobs.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 }
 
 /**

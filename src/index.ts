@@ -17,6 +17,7 @@ import { Footer } from "./lib/components";
 import { checkAllPodcasts } from "./lib/monitor";
 import { appendActivityEvent } from "./lib/kv";
 import { notifyDiscord, DISCORD_COLORS } from "./lib/discord";
+import { listActiveJobsWithDO } from "./lib/job-status-do";
 import type { Env } from "./types";
 
 // ============================================================================
@@ -438,6 +439,14 @@ async function scheduledHandler(
         trigger: controller.cron,
         scheduledTime: new Date(controller.scheduledTime).toISOString(),
     }));
+
+    // Sweep for timed-out jobs (>20 min). listActiveJobsWithDO automatically
+    // marks stale jobs as failed, logs to activity, and notifies Discord.
+    try {
+        await listActiveJobsWithDO(env, env.TLDL_DATA);
+    } catch (err) {
+        console.error("Stale job sweep failed:", err);
+    }
 
     try {
         const result = await checkAllPodcasts(env);
