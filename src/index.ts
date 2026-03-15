@@ -302,8 +302,7 @@ Disallow: /debug/
     // Admin Routes (protected by Cloudflare Access in production)
     // ============================================================================
 
-    // Redirect /admin/ (trailing slash) to /admin for consistent URLs
-    app.get("/admin/", (c) => c.redirect("/admin", 301));
+    // Admin routes (protected by Cloudflare Access: /admin and /admin/* paths)
     app.route("/admin", admin);
 
     // ============================================================================
