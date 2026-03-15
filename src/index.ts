@@ -208,8 +208,12 @@ Disallow: /debug/
         }
     });
 
-    // Debug route for episode metadata (will be removed in production)
+    // Debug route for episode metadata (disabled in production - calls external APIs)
     app.get("/debug/episode", async (c) => {
+        if (c.env.ENVIRONMENT !== "development") {
+            return c.json({ error: "Debug routes are disabled in production" }, 403);
+        }
+
         const url = c.req.query("url");
         if (!url) {
             return c.json({ error: "Missing url query parameter" }, 400);
@@ -268,13 +272,9 @@ Disallow: /debug/
 
     // Debug route for rebuilding episode index (one-time migration)
     app.post("/debug/rebuild-index", async (c) => {
-        // Only allow in development or with proper auth
+        // Disabled in production — use POST /admin/rebuild-index instead
         if (c.env.ENVIRONMENT !== "development") {
-            // Check for admin auth header or Cloudflare Access JWT
-            const cfAccessJwt = c.req.header("Cf-Access-Jwt-Assertion");
-            if (!cfAccessJwt) {
-                return c.json({ error: "Unauthorized" }, 401);
-            }
+            return c.json({ error: "Debug routes are disabled in production. Use POST /admin/rebuild-index instead." }, 403);
         }
 
         try {
