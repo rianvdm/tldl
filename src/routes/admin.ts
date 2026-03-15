@@ -333,7 +333,10 @@ admin.get("/", async (c) => {
         <div id="check-all-status" class="alert" style="display: none; margin-bottom: 1rem;"></div>
 
         <section class="card admin-activity-section">
-            <h2 style="margin-top: 0;">Recent Activity</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h2 style="margin: 0;">Recent Activity</h2>
+                <a href="/admin/activity" class="text-muted" style="font-size: 0.875rem;">View all →</a>
+            </div>
             ${activeJobsHtml}
             ${activityHtml}
         </section>
@@ -835,6 +838,59 @@ async function checkAllNow() {
 
     return c.html(Layout({
         title: "Admin Dashboard",
+        children: content
+    }));
+});
+
+// ============================================================================
+// GET /activity - Full activity log
+// ============================================================================
+
+admin.get("/activity", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    const activityLog = await getActivityLog(c.env.TLDL_DATA);
+
+    const activityHtml = activityLog.length > 0
+        ? activityLog.map(event => {
+            const icon = event.type === "episode_completed"
+                ? `<span class="activity-icon activity-icon-success">✓</span>`
+                : event.type === "episode_failed"
+                    ? `<span class="activity-icon activity-icon-error">✗</span>`
+                    : event.type === "monitor_error"
+                        ? `<span class="activity-icon activity-icon-error">!</span>`
+                        : `<span class="activity-icon activity-icon-info">↻</span>`;
+
+            const detailsHtml = event.details
+                ? `<span class="activity-details">${escapeHtml(event.details)}</span>`
+                : "";
+
+            return `<div class="activity-item">
+                ${icon}
+                <div class="activity-content">
+                    <span class="activity-title">${escapeHtml(event.title)}</span>
+                    ${detailsHtml}
+                </div>
+                <span class="activity-time">${formatRelativeTime(event.timestamp)}</span>
+            </div>`;
+        }).join("")
+        : `<p class="text-muted">No activity recorded yet.</p>`;
+
+    const content = `
+        <div class="page-header">
+            <h1>Activity Log</h1>
+            <p class="page-subtitle"><a href="/admin">← Back to dashboard</a></p>
+        </div>
+
+        <section class="card admin-activity-section">
+            <p class="text-muted" style="margin-top: 0; margin-bottom: 1rem;">Last ${activityLog.length} event${activityLog.length !== 1 ? "s" : ""} (30-day rolling window)</p>
+            ${activityHtml}
+        </section>
+    `;
+
+    return c.html(Layout({
+        title: "Activity Log",
         children: content
     }));
 });
