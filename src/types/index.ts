@@ -151,9 +151,13 @@ export interface Env {
     PODCAST_INDEX_SECRET: string;
     TURNSTILE_SECRET: string;
     DISCORD_WEBHOOK_URL?: string;  // Optional — notifications disabled if not set
+    POSTMARK_API_KEY?: string;     // Optional — request form disabled if not set
 
     // Environment variables (from wrangler.toml [vars])
     TURNSTILE_SITE_KEY: string;
+    POSTMARK_FROM_EMAIL: string;           // e.g., rian@elezea.com
+    ADMIN_NOTIFICATION_EMAIL: string;      // e.g., rianvdm@gmail.com
+    POSTMARK_MESSAGE_STREAM: string;       // e.g., "tldl"
     MAX_EPISODE_MINUTES: string;
     CACHE_TTL_DAYS: string;
     DEFAULT_TEMPLATE: string;

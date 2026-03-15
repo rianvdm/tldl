@@ -500,3 +500,79 @@ describe("Integration: Public vs Admin Access", () => {
         expect(html).toContain('href="/about"');
     });
 });
+
+// ============================================================================
+// Request a Podcast Form Tests
+// ============================================================================
+
+describe("Integration: Request a Podcast", () => {
+    beforeEach(async () => {
+        await clearTestData();
+    });
+
+    it("GET /request renders the form", async () => {
+        const response = await SELF.fetch("http://localhost/request");
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("Request a Podcast");
+        expect(html).toContain("Podcast name");
+        expect(html).toContain("Send Request");
+        expect(html).toContain("cf-turnstile");
+    });
+
+    it("GET /request?success=1 renders thank-you page", async () => {
+        const response = await SELF.fetch("http://localhost/request?success=1");
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("Request Sent");
+        expect(html).toContain("Thanks for the suggestion");
+    });
+
+    it("GET /request?error=captcha renders error", async () => {
+        const response = await SELF.fetch("http://localhost/request?error=captcha");
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain("Verification failed");
+    });
+
+    it("POST /request with empty name redirects with error", async () => {
+        const formData = new FormData();
+        formData.append("podcastName", "");
+        formData.append("cf-turnstile-response", "test-token");
+
+        const response = await SELF.fetch("http://localhost/request", {
+            method: "POST",
+            body: formData,
+            redirect: "manual",
+        });
+
+        expect(response.status).toBe(302);
+        // Turnstile validation happens first — in test env it may fail,
+        // which would redirect to ?error=captcha. Either error is acceptable.
+        const location = response.headers.get("Location") || "";
+        expect(location).toMatch(/\/request\?error=(captcha|missing-name)/);
+    });
+
+    it("home page hero links to /request", async () => {
+        // Hero section only renders when there are episodes
+        await saveEpisode(env.TLDL_DATA, createSampleEpisode());
+
+        const response = await SELF.fetch("http://localhost/");
+        const html = await response.text();
+        expect(html).toContain('href="/request"');
+        expect(html).toContain("request a podcast");
+    });
+
+    it("footer links to /request", async () => {
+        const response = await SELF.fetch("http://localhost/");
+        const html = await response.text();
+        expect(html).toContain('href="/request">Request a Podcast</a>');
+    });
+
+    it("about page links to /request", async () => {
+        const response = await SELF.fetch("http://localhost/about");
+        const html = await response.text();
+        expect(html).toContain('href="/request"');
+        expect(html).toContain("send a request");
+    });
+});

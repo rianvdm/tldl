@@ -23,6 +23,8 @@ import { extractPodcastId } from "../lib/url-parser";
 import { escapeHtml } from "../lib/auth";
 import { marked } from "marked";
 import { Footer } from "../lib/components";
+import { verifyTurnstile } from "../lib/turnstile";
+import { sendEmail } from "../services/postmark";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -368,7 +370,7 @@ publicRoutes.get("/", async (c) => {
     const introSection = `
         <div class="hero-section">
             <h1 class="hero-headline">Your favorite podcasts, <span class="text-accent">summarized</span>.</h1>
-            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Browse AI summaries below.</p>
+            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Browse AI summaries below, or <a href="/request" class="hero-link">request a podcast</a> to be added.</p>
         </div>
     `;
 
@@ -907,7 +909,8 @@ publicRoutes.get("/about", async (c) => {
                 <p>
                     TL;DL (Too Long; Didn't Listen) is a curated archive of AI-powered podcast summaries.
                     New podcasts and episodes are added regularly. Each episode includes a concise summary
-                    and the full transcript.
+                    and the full transcript. If there's a podcast you'd like to see here,
+                    <a href="/request">send a request</a>.
                 </p>
                 <p>
                     All summaries and transcripts are cached for 365 days, so episodes are always
@@ -1015,6 +1018,167 @@ publicRoutes.get("/about", async (c) => {
         </div>
     `;
     return c.html(Layout({ title: "About", children: content.toString(), canonicalUrl: `${BASE_URL}/about` }));
+});
+
+// ============================================================================
+// GET /request — Request a Podcast Form
+// ============================================================================
+
+publicRoutes.get("/request", async (c) => {
+    const success = c.req.query("success") === "1";
+    const error = c.req.query("error");
+    const siteKey = c.env.TURNSTILE_SITE_KEY;
+
+    const errorMessage = error === "captcha"
+        ? "Verification failed. Please try again."
+        : error === "missing-name"
+            ? "Please enter the podcast name."
+            : error === "send-failed"
+                ? "Something went wrong sending your request. Please try again."
+                : null;
+
+    const content = success
+        ? `
+            <div class="page-header">
+                <h1>Request Sent</h1>
+            </div>
+            <div class="card">
+                <div class="alert alert-success" style="margin-bottom: 1rem;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                        <polyline points="22 4 12 14.01 9 11.01"/>
+                    </svg>
+                    <span>Thanks for the suggestion! I'll take a look and add it if it's a good fit.</span>
+                </div>
+                <a href="/" class="button button-primary">Back to Home</a>
+            </div>
+        `
+        : `
+            <div class="page-header">
+                <h1>Request a Podcast</h1>
+                <p class="page-subtitle">Know a podcast that should be on TL;DL? Let me know.</p>
+            </div>
+
+            ${errorMessage ? `
+                <div class="alert alert-error" style="margin-bottom: 1.5rem;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    <span>${escapeHtml(errorMessage)}</span>
+                </div>
+            ` : ""}
+
+            <div class="card">
+                <form method="POST" action="/request" class="form">
+                    <div class="form-group">
+                        <label for="podcastName" class="form-label">Podcast name</label>
+                        <input type="text" id="podcastName" name="podcastName" class="form-input"
+                            placeholder="e.g., The Ezra Klein Show" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="appleUrl" class="form-label">Apple Podcasts URL <span class="text-muted">(optional)</span></label>
+                        <input type="url" id="appleUrl" name="appleUrl" class="form-input"
+                            placeholder="https://podcasts.apple.com/us/podcast/..." />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="email" class="form-label">Your email <span class="text-muted">(optional, in case I need to follow up)</span></label>
+                        <input type="email" id="email" name="email" class="form-input"
+                            placeholder="you@example.com" autocomplete="email" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="message" class="form-label">Message <span class="text-muted">(optional)</span></label>
+                        <textarea id="message" name="message" class="form-input" rows="3"
+                            placeholder="Any specific episodes you'd like to see?"></textarea>
+                    </div>
+
+                    <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-theme="dark"></div>
+
+                    <div class="form-actions" style="margin-top: 1rem;">
+                        <button type="submit" class="button button-primary">Send Request</button>
+                    </div>
+                </form>
+            </div>
+        `;
+
+    const turnstileScript = success
+        ? ""
+        : '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>';
+
+    return c.html(Layout({
+        title: success ? "Request Sent" : "Request a Podcast",
+        children: content,
+        headExtra: turnstileScript,
+        canonicalUrl: `${BASE_URL}/request`,
+    }));
+});
+
+// ============================================================================
+// POST /request — Handle Podcast Request Submission
+// ============================================================================
+
+publicRoutes.post("/request", async (c) => {
+    const body = await c.req.parseBody();
+    const podcastName = (body.podcastName as string || "").trim();
+    const appleUrl = (body.appleUrl as string || "").trim();
+    const email = (body.email as string || "").trim();
+    const message = (body.message as string || "").trim();
+    const token = body["cf-turnstile-response"] as string;
+
+    // Validate Turnstile
+    const turnstileValid = await verifyTurnstile(token, c.env.TURNSTILE_SECRET);
+    if (!turnstileValid) {
+        return c.redirect("/request?error=captcha");
+    }
+
+    // Validate required field
+    if (!podcastName) {
+        return c.redirect("/request?error=missing-name");
+    }
+
+    // Check if Postmark is configured
+    if (!c.env.POSTMARK_API_KEY) {
+        console.error(JSON.stringify({ event: "postmark_not_configured" }));
+        return c.redirect("/request?error=send-failed");
+    }
+
+    // Build email body
+    const textParts = [
+        `Podcast: ${podcastName}`,
+        appleUrl ? `Apple Podcasts URL: ${appleUrl}` : null,
+        email ? `Requester email: ${email}` : null,
+        message ? `\nMessage:\n${message}` : null,
+    ].filter(Boolean).join("\n");
+
+    const result = await sendEmail(c.env.POSTMARK_API_KEY, {
+        from: c.env.POSTMARK_FROM_EMAIL,
+        to: c.env.ADMIN_NOTIFICATION_EMAIL,
+        subject: `TLDL Request: ${podcastName}`,
+        textBody: textParts,
+        messageStream: c.env.POSTMARK_MESSAGE_STREAM,
+    });
+
+    if (!result.success) {
+        console.error(JSON.stringify({
+            event: "request_email_failed",
+            error: result.errorMessage,
+        }));
+        return c.redirect("/request?error=send-failed");
+    }
+
+    console.log(JSON.stringify({
+        event: "podcast_request_submitted",
+        podcastName,
+        hasUrl: !!appleUrl,
+        hasEmail: !!email,
+        hasMessage: !!message,
+    }));
+
+    return c.redirect("/request?success=1");
 });
 
 // ============================================================================
