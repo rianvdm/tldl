@@ -52,8 +52,7 @@ async function getEpisodePageHtml(episodeId: string): Promise<string> {
 
 // ============================================================================
 // XSS Sanitization Tests
-// These should FAIL today because renderMarkdown does not sanitize.
-// They will PASS after Task 2 adds a sanitizing marked Renderer.
+// Verify that renderMarkdown strips dangerous content from AI-generated summaries.
 // ============================================================================
 
 describe("renderMarkdown XSS sanitization (via GET /episode/:id)", () => {
@@ -126,6 +125,36 @@ describe("renderMarkdown XSS sanitization (via GET /episode/:id)", () => {
         expect(html.toLowerCase()).not.toContain('href="javascript:');
         // But the link text should still appear
         expect(html).toContain("uppercase js link");
+    });
+
+    it("strips data: URI hrefs from links", async () => {
+        const episode = createTestEpisode({ id: "xss_datauri_test" });
+        const summary = createTestSummary({
+            episodeId: "xss_datauri_test",
+            text: "Click [this link](data:text/html,<script>alert(1)</script>) here.",
+        });
+        await saveEpisode(env.TLDL_DATA, episode);
+        await saveSummary(env.TLDL_DATA, summary);
+
+        const html = await getEpisodePageHtml("xss_datauri_test");
+
+        expect(html).not.toContain('href="data:');
+        expect(html).toContain("this link");
+    });
+
+    it("escapes title attribute to prevent attribute injection", async () => {
+        const episode = createTestEpisode({ id: "xss_title_test" });
+        const summary = createTestSummary({
+            episodeId: "xss_title_test",
+            text: `[link](https://example.com 'x" onmouseover="alert(1)')`,
+        });
+        await saveEpisode(env.TLDL_DATA, episode);
+        await saveSummary(env.TLDL_DATA, summary);
+
+        const html = await getEpisodePageHtml("xss_title_test");
+
+        expect(html).not.toContain('onmouseover="alert(1)"');
+        expect(html).toContain("https://example.com");
     });
 
     // ============================================================================

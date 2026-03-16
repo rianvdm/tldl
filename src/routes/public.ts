@@ -21,10 +21,38 @@ import { getTemplate, getValidTags, isValidTag } from "../lib/constants";
 import { extractPodcastId } from "../lib/url-parser";
 
 import { escapeHtml } from "../lib/auth";
-import { marked } from "marked";
+import { marked, Renderer, Parser } from "marked";
 import { Footer } from "../lib/components";
 import { verifyTurnstile } from "../lib/turnstile";
 import { sendEmail } from "../services/postmark";
+
+// ============================================================================
+// Markdown Renderer (XSS-safe)
+// Applied once at module scope — strips raw HTML and javascript: links
+// ============================================================================
+const sanitizingRenderer = new Renderer();
+
+// Strip raw HTML blocks entirely (e.g. <script>, <img onerror=...>)
+sanitizingRenderer.html = (_token) => "";
+
+// Strip javascript:/data: link hrefs, keep link text; pass normal links through.
+// - Uses Parser.parseInline to correctly render inline formatting in link text.
+// - Decodes percent-encoded hrefs before checking to catch javascript%3A etc.
+// - Escapes href and title to prevent attribute injection.
+sanitizingRenderer.link = ({ href, title, tokens }) => {
+    // Render inline tokens (handles **bold**, _italic_, `code` in link text)
+    const text = Parser.parseInline(tokens);
+    // Decode percent-encoding before protocol check (e.g. javascript%3A)
+    const decodedHref = (() => { try { return decodeURIComponent(href ?? ""); } catch { return href ?? ""; } })();
+    if (decodedHref && /^(javascript|data):/i.test(decodedHref.trim())) {
+        return text; // drop the href entirely, keep visible text
+    }
+    const safeHref = escapeHtml(href ?? "");
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+    return `<a href="${safeHref}"${titleAttr}>${text}</a>`;
+};
+
+marked.use({ renderer: sanitizingRenderer });
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -74,19 +102,13 @@ function calculateDaysRemaining(expiresAt: string): number {
 // escapeHtml imported from ../lib/auth
 
 /**
- * Render markdown to HTML using the marked library
- * Configured for security (no raw HTML passthrough)
+ * Render markdown to HTML using the marked library.
+ * XSS-safe: raw HTML is stripped, javascript: links are sanitized.
+ * Uses module-scope sanitizingRenderer (applied via marked.use above).
  */
 function renderMarkdown(md: string): string {
     if (!md) return "";
-
-    // Configure marked for safe output
-    marked.setOptions({
-        gfm: true,        // GitHub Flavored Markdown
-        breaks: false,    // Don't convert single newlines to <br>
-    });
-
-    return marked.parse(md) as string;
+    return marked.parse(md, { gfm: true, breaks: false }) as string;
 }
 
 /**
