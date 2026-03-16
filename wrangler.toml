@@ -54,5 +54,5 @@ new_classes = ["JobStatusDO"]
 
 # Cron trigger for podcast monitoring
 [triggers]
-crons = ["0 * * * *"]  # Every hour at minute 0
+crons = ["0 */2 * * *"]  # Every 2 hours
 

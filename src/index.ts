@@ -466,11 +466,6 @@ async function scheduledHandler(
                 title: `Monitoring check: ${result.errors.length} error(s) in ${result.checked} podcasts`,
                 details: errorSummary,
             });
-            await notifyDiscord(env.DISCORD_WEBHOOK_URL, {
-                title: `⚠ Monitoring: ${result.errors.length} error(s)`,
-                description: `Checked ${result.checked} podcasts.\n\n${errorSummary}`,
-                color: DISCORD_COLORS.WARNING,
-            });
         } else {
             await appendActivityEvent(env.TLDL_DATA, {
                 type: "monitor_check",
