@@ -232,8 +232,14 @@ export async function checkPodcastForNewEpisodes(
 
                 if (!matchedPiEpisode) {
                     result.errors.push(`Could not find episode ID for: ${rssEpisode.title}`);
-                    // Still mark as processed to avoid retrying
-                    await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
+                    // Don't mark as processed — Podcast Index may not have indexed
+                    // this episode yet. It will be retried on the next cron check.
+                    console.log(JSON.stringify({
+                        event: "monitor_pi_match_not_found",
+                        podcastId: podcast.id,
+                        episodeTitle: rssEpisode.title,
+                        episodeGuid: rssEpisode.guid,
+                    }));
                     continue;
                 }
 
@@ -333,6 +339,12 @@ export async function checkAllPodcasts(env: Env): Promise<CheckAllResult> {
             result.totalNewEpisodes += checkResult.newEpisodes;
             result.checked++;
 
+            // Surface per-podcast episode errors (e.g. "Could not find episode ID")
+            // so the scheduled handler can notify via Discord
+            for (const err of checkResult.errors) {
+                result.errors.push(`${podcast.name}: ${err}`);
+            }
+
         } catch (error) {
             result.errors.push(`${podcastId}: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -378,6 +390,11 @@ export async function forceCheckAllPodcasts(env: Env): Promise<CheckAllResult> {
             result.results.push(checkResult);
             result.totalNewEpisodes += checkResult.newEpisodes;
             result.checked++;
+
+            // Surface per-podcast episode errors
+            for (const err of checkResult.errors) {
+                result.errors.push(`${podcast.name}: ${err}`);
+            }
 
         } catch (error) {
             result.errors.push(`${podcastId}: ${error instanceof Error ? error.message : String(error)}`);
