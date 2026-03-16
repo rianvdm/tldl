@@ -102,19 +102,28 @@ const queueHandler = {
                 await processMessage(message.body, env);
                 message.ack();
 
-                // Log successful completion to activity log
+                // Log successful completion to activity log and notify Discord
                 try {
                     const episode = await getEpisode(env.TLDL_DATA, message.body.episodeId);
+                    const episodeLabel = episode
+                        ? `${episode.podcastName}: ${episode.episodeTitle}`
+                        : `Episode ${message.body.episodeId}`;
+
                     await appendActivityEvent(env.TLDL_DATA, {
                         type: "episode_completed",
                         timestamp: new Date().toISOString(),
-                        title: episode
-                            ? `${episode.podcastName}: ${episode.episodeTitle}`
-                            : `Episode ${message.body.episodeId}`,
+                        title: episodeLabel,
                         episodeId: message.body.episodeId,
                     });
+
+                    const episodeUrl = `https://tldl-pod.com/episode/${message.body.episodeId}`;
+                    await notifyDiscord(env.DISCORD_WEBHOOK_URL, {
+                        title: "🟢 Episode processed successfully",
+                        description: `**${episodeLabel}**\n\n🔗 ${episodeUrl}`,
+                        color: DISCORD_COLORS.SUCCESS,
+                    });
                 } catch {
-                    // Activity log is non-critical — don't fail the job
+                    // Activity log and Discord are non-critical — don't fail the job
                 }
             } catch (error) {
                 // Log the error with context
