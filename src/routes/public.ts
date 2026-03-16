@@ -1275,7 +1275,7 @@ function buildRssFeed(
             : podcastInfo;
 
         return `    <item>
-      <title>${escapeXml(ep.episodeTitle)}</title>
+      <title>${escapeXml(`${ep.podcastName} - ${ep.episodeTitle}`)}</title>
       <link>${itemLink}</link>
       <guid isPermaLink="true">${itemLink}</guid>
       <pubDate>${toRfc822Date(ep.createdAt)}</pubDate>
