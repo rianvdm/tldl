@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchYouTubeEpisodeData, parseCaptionXml } from "../src/services/youtube";
+import { fetchYouTubeEpisodeData, parseCaptionXml, parseCaptionJson3 } from "../src/services/youtube";
 import { ERROR_CODES } from "../src/lib/constants";
 
 function makePlayerResponse(overrides: Record<string, unknown> = {}): string {
@@ -124,9 +124,13 @@ describe("fetchYouTubeEpisodeData", () => {
     });
 
     it("should throw TRANSCRIPTION_FAILED if caption fetch fails", async () => {
+        // All caption URL attempts (signed URL + 2 fallbacks) fail
+        const failResponse = { ok: false, status: 403, text: async () => "Forbidden" };
         const mockFetch = vi.fn()
             .mockResolvedValueOnce({ ok: true, text: async () => makePlayerResponse() })
-            .mockResolvedValueOnce({ ok: false, status: 403, text: async () => "Forbidden" });
+            .mockResolvedValueOnce(failResponse)  // signed URL
+            .mockResolvedValueOnce(failResponse)  // video.google.com XML
+            .mockResolvedValueOnce(failResponse); // video.google.com JSON3
         vi.stubGlobal("fetch", mockFetch);
 
         await expect(fetchYouTubeEpisodeData("expiredCaptionId"))
@@ -148,5 +152,37 @@ describe("parseCaptionXml", () => {
     it("should strip <font> tags", () => {
         const xml = `<transcript><text start="0"><font color="#ccc">colored text</font></text></transcript>`;
         expect(parseCaptionXml(xml)).toBe("colored text");
+    });
+});
+
+describe("parseCaptionJson3", () => {
+    it("should extract text from events with segs", () => {
+        const json = JSON.stringify({
+            wireMagic: "pb3",
+            events: [
+                { tStartMs: 0, id: 1 }, // non-text event, no segs
+                { tStartMs: 500, segs: [{ utf8: "Hello" }] },
+                { tStartMs: 1000, segs: [{ utf8: " world" }] },
+            ],
+        });
+        expect(parseCaptionJson3(json)).toBe("Hello world");
+    });
+
+    it("should handle empty events array", () => {
+        expect(parseCaptionJson3(JSON.stringify({ events: [] }))).toBe("");
+    });
+
+    it("should return empty string for invalid JSON", () => {
+        expect(parseCaptionJson3("not json")).toBe("");
+    });
+
+    it("should skip events without segs", () => {
+        const json = JSON.stringify({
+            events: [
+                { tStartMs: 0 },
+                { tStartMs: 500, segs: [{ utf8: "caption text" }] },
+            ],
+        });
+        expect(parseCaptionJson3(json)).toBe("caption text");
     });
 });

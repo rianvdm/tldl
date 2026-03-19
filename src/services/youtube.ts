@@ -37,6 +37,15 @@ export async function fetchYouTubeEpisodeData(videoId: string): Promise<YouTubeE
         { maxRetries: 2, baseDelayMs: 2000, shouldRetry: isServerError }
     );
 
+    // DIAGNOSTIC: log what we actually got from YouTube
+    console.log(JSON.stringify({
+        event: "youtube_page_fetch",
+        videoId,
+        htmlLength: html.length,
+        hasPlayerResponse: html.includes("ytInitialPlayerResponse"),
+        first200: html.slice(0, 200),
+    }));
+
     const playerResponse = extractPlayerResponse(html);
     if (!playerResponse || !playerResponse.videoDetails) {
         throw new AppError(
@@ -64,7 +73,14 @@ export async function fetchYouTubeEpisodeData(videoId: string): Promise<YouTubeE
     }
 
     const captionTrack = selectBestCaptionTrack(captionTracks);
-    const transcriptText = await fetchCaptionText(captionTrack.baseUrl);
+    console.log(JSON.stringify({
+        event: "youtube_caption_fetch",
+        videoId,
+        trackCount: captionTracks.length,
+        selectedTrack: { languageCode: captionTrack.languageCode, kind: captionTrack.kind },
+        fullBaseUrl: captionTrack.baseUrl,
+    }));
+    const transcriptText = await fetchCaptionText(captionTrack.baseUrl, videoId);
 
     return { videoTitle, channelName, durationSeconds, publishDate, transcriptText };
 }
@@ -90,17 +106,43 @@ interface PlayerResponse {
 // Internal helpers
 // ============================================================================
 
+/**
+ * Extract ytInitialPlayerResponse from YouTube page HTML using brace counting
+ * rather than regex, so it works across all page variants and script structures.
+ */
 function extractPlayerResponse(html: string): PlayerResponse | null {
-    // Use a lazy quantifier so we don't over-consume on real YouTube pages where
-    // multiple JSON variable assignments appear in the same <script> block.
-    // The trailing sentinel anchors the match to the end of the assignment.
-    const match = html.match(/var ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});\s*(?:var\s|<\/script>|$)/);
-    if (!match) return null;
-    try {
-        return JSON.parse(match[1]) as PlayerResponse;
-    } catch {
-        return null;
+    // Find the assignment — handles var/let/const/window. prefix and no-prefix variants
+    const marker = "ytInitialPlayerResponse";
+    const markerIdx = html.indexOf(marker);
+    if (markerIdx === -1) return null;
+
+    // Find the opening brace of the JSON object
+    const braceIdx = html.indexOf("{", markerIdx);
+    if (braceIdx === -1) return null;
+
+    // Walk forward counting braces to find the matching close
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = braceIdx; i < html.length; i++) {
+        const ch = html[i];
+        if (escape) { escape = false; continue; }
+        if (ch === "\\" && inString) { escape = true; continue; }
+        if (ch === '"' && !escape) { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+            depth--;
+            if (depth === 0) {
+                try {
+                    return JSON.parse(html.slice(braceIdx, i + 1)) as PlayerResponse;
+                } catch {
+                    return null;
+                }
+            }
+        }
     }
+    return null;
 }
 
 function selectBestCaptionTrack(tracks: CaptionTrack[]): CaptionTrack {
@@ -110,27 +152,60 @@ function selectBestCaptionTrack(tracks: CaptionTrack[]): CaptionTrack {
     return manual ?? searchSet[0];
 }
 
-async function fetchCaptionText(baseUrl: string): Promise<string> {
-    // Force XML format — caption baseUrls can return JSON3 by default
-    const xmlUrl = baseUrl.includes("fmt=") ? baseUrl : `${baseUrl}&fmt=xml`;
+async function fetchCaptionText(baseUrl: string, videoId: string): Promise<string> {
+    const captionHeaders = {
+        ...BROWSER_HEADERS,
+        "Referer": `https://www.youtube.com/watch?v=${videoId}`,
+    };
 
-    let response: Response;
-    try {
-        response = await fetch(xmlUrl, { headers: BROWSER_HEADERS });
-    } catch {
+    // Try the signed URL from the page first, then fall back to the legacy
+    // public timedtext endpoint which doesn't require session authentication.
+    const urlsToTry = [
+        baseUrl,
+        `https://video.google.com/timedtext?v=${videoId}&lang=en`,
+        `https://video.google.com/timedtext?v=${videoId}&lang=en&fmt=json3`,
+    ];
+
+    let body = "";
+    for (const url of urlsToTry) {
+        let response: Response;
+        try {
+            response = await fetch(url, { headers: captionHeaders });
+        } catch {
+            continue;
+        }
+        if (!response.ok) continue;
+        const candidate = await response.text();
+        console.log(JSON.stringify({
+            event: "youtube_caption_response",
+            url: url.slice(0, 80),
+            status: response.status,
+            bodyLength: candidate.length,
+            first200: candidate.slice(0, 200),
+        }));
+        if (candidate.trim().length > 0) {
+            body = candidate;
+            break;
+        }
+    }
+
+    if (!body) {
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
             "Could not retrieve captions for this video."
         );
     }
-    if (!response.ok) {
-        throw new AppError(
-            ERROR_CODES.TRANSCRIPTION_FAILED,
-            "Could not retrieve captions for this video."
-        );
+
+    // Detect format by content: XML starts with '<', JSON3 starts with '{'
+    let text: string;
+    if (body.trimStart().startsWith("<")) {
+        text = parseCaptionXml(body);
+    } else if (body.trimStart().startsWith("{")) {
+        text = parseCaptionJson3(body);
+    } else {
+        text = "";
     }
-    const xml = await response.text();
-    const text = parseCaptionXml(xml);
+
     if (!text) {
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
@@ -141,8 +216,8 @@ async function fetchCaptionText(baseUrl: string): Promise<string> {
 }
 
 /**
- * Parse YouTube caption XML into plain text.
- * Strips all XML/HTML tags (including <c>, <font>), decodes HTML entities.
+ * Parse YouTube caption XML (timedtext format) into plain text.
+ * Strips all XML/HTML tags, decodes HTML entities.
  */
 export function parseCaptionXml(xml: string): string {
     const textMatches = [...xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)];
@@ -160,6 +235,27 @@ export function parseCaptionXml(xml: string): string {
             .replace(/&apos;/g, "'");
         return text.trim();
     });
+
+    return segments.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Parse YouTube caption JSON3 format (wireMagic: "pb3") into plain text.
+ * Extracts text from events[].segs[].utf8, skipping non-text events.
+ */
+export function parseCaptionJson3(json: string): string {
+    let data: { events?: Array<{ segs?: Array<{ utf8?: string }> }> };
+    try {
+        data = JSON.parse(json) as typeof data;
+    } catch {
+        return "";
+    }
+    if (!data.events) return "";
+
+    const segments = data.events
+        .filter((e) => e.segs && e.segs.length > 0)
+        .flatMap((e) => e.segs!.map((s) => s.utf8 ?? ""))
+        .map((t) => t.trim());
 
     return segments.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
