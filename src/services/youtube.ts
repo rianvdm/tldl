@@ -111,9 +111,12 @@ function selectBestCaptionTrack(tracks: CaptionTrack[]): CaptionTrack {
 }
 
 async function fetchCaptionText(baseUrl: string): Promise<string> {
+    // Force XML format — caption baseUrls can return JSON3 by default
+    const xmlUrl = baseUrl.includes("fmt=") ? baseUrl : `${baseUrl}&fmt=xml`;
+
     let response: Response;
     try {
-        response = await fetch(baseUrl, { headers: BROWSER_HEADERS });
+        response = await fetch(xmlUrl, { headers: BROWSER_HEADERS });
     } catch {
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
@@ -127,7 +130,14 @@ async function fetchCaptionText(baseUrl: string): Promise<string> {
         );
     }
     const xml = await response.text();
-    return parseCaptionXml(xml);
+    const text = parseCaptionXml(xml);
+    if (!text) {
+        throw new AppError(
+            ERROR_CODES.TRANSCRIPTION_FAILED,
+            "Could not retrieve captions for this video."
+        );
+    }
+    return text;
 }
 
 /**
