@@ -38,7 +38,7 @@ import {
     createProcessEpisodeMessage,
     createRegenerateSummaryMessage,
 } from "../lib/queue";
-import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId } from "../lib/url-parser";
+import { parseApplePodcastsUrl, parseYouTubeUrl, detectUrlType, parsePodcastUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId, getValidTags, validateTags, TEMPLATES, isBlockedPodcast } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { generateEpisodeTags } from "../services/tag-generation";
@@ -919,7 +919,7 @@ admin.get("/submit", async (c) => {
     const content = `
         <div class="page-header">
             <h1>Submit Episode</h1>
-            <p class="page-subtitle">Paste an Apple Podcasts episode URL to generate a summary.</p>
+            <p class="page-subtitle">Paste an Apple Podcasts episode URL or YouTube video URL to generate a summary.</p>
             <a href="/admin" class="button button-secondary">← Back to Dashboard</a>
         </div>
 
@@ -927,10 +927,10 @@ admin.get("/submit", async (c) => {
 
         <form method="POST" action="/admin/submit" class="card">
             <div class="form-group">
-                <label class="form-label" for="appleUrl">Apple Podcasts Episode URL</label>
+                <label class="form-label" for="appleUrl">Episode URL</label>
                 <input type="url" id="appleUrl" name="appleUrl" class="form-input"
-                    placeholder="https://podcasts.apple.com/us/podcast/...?i=..." required />
-                <p class="form-help">Paste the full URL of an episode from Apple Podcasts</p>
+                    placeholder="Apple Podcasts or YouTube URL" required />
+                <p class="form-help">Paste the full URL of an Apple Podcasts episode or a YouTube video</p>
             </div>
 
             <div class="form-group">
@@ -960,41 +960,55 @@ admin.post("/submit", async (c) => {
 
     // Handle both form and JSON submissions
     const contentType = c.req.header("Content-Type") || "";
-    let appleUrl: string;
+    let url: string;
     let templateId: string;
 
     if (contentType.includes("application/json")) {
         const body = await c.req.json<{ appleUrl: string; templateId: string }>();
-        appleUrl = body.appleUrl;
+        url = body.appleUrl;
         templateId = body.templateId;
     } else {
         const formData = await c.req.parseBody();
-        appleUrl = formData.appleUrl as string;
+        url = formData.appleUrl as string;
         templateId = formData.templateId as string;
     }
 
     // Validate URL
-    if (!appleUrl) {
+    if (!url) {
         return c.html(Layout({
             title: "Error",
             children: `<div class="alert alert-error">Please enter an Apple Podcasts URL.</div><a href="/admin/submit" class="button">Try Again</a>`,
         }));
     }
 
-    const parsed = parseApplePodcastsUrl(appleUrl);
-    if (!parsed) {
+    const urlType = detectUrlType(url);
+    if (urlType === "unknown") {
         return c.html(Layout({
             title: "Error",
-            children: `<div class="alert alert-error">Invalid Apple Podcasts episode URL. It should look like: podcasts.apple.com/...?i=...</div><a href="/admin/submit" class="button">Try Again</a>`,
+            children: `<div class="alert alert-error">Invalid Apple Podcasts episode URL. Please enter an Apple Podcasts episode URL or a YouTube video URL.</div><a href="/admin/submit" class="button">Try Again</a>`,
         }));
     }
 
-    // Check blocked podcasts (creator opt-outs)
-    if (isBlockedPodcast(appleUrl)) {
-        return c.html(Layout({
-            title: "Error",
-            children: `<div class="alert alert-error">This podcast has opted out of TLDL.</div><a href="/admin/submit" class="button">Try Again</a>`,
-        }));
+    let episodeId: string;
+    let videoId: string | undefined;
+
+    if (urlType === "apple") {
+        const parsed = parseApplePodcastsUrl(url)!;
+
+        // Check blocked podcasts (creator opt-outs)
+        if (isBlockedPodcast(url)) {
+            return c.html(Layout({
+                title: "Error",
+                children: `<div class="alert alert-error">This podcast has opted out of TLDL.</div><a href="/admin/submit" class="button">Try Again</a>`,
+            }));
+        }
+
+        episodeId = deriveEpisodeId(parsed.podcastId, parsed.episodeId);
+    } else {
+        // youtube
+        const parsed = parseYouTubeUrl(url)!;
+        videoId = parsed.videoId;
+        episodeId = `yt_${parsed.videoId}`;
     }
 
     // Validate template
@@ -1006,9 +1020,6 @@ admin.post("/submit", async (c) => {
         }));
     }
 
-    // Derive episode ID
-    const episodeId = deriveEpisodeId(parsed.podcastId, parsed.episodeId);
-
     // Check cache
     const existingEpisode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (existingEpisode) {
@@ -1019,16 +1030,20 @@ admin.post("/submit", async (c) => {
         }
     }
 
-    // Pre-fetch episode info
-    const episodeInfo = await prefetchEpisodeInfo(parsed.podcastId, parsed.episodeId, c.env, appleUrl);
+    // Pre-fetch episode info (Apple only)
+    let episodeInfo: Awaited<ReturnType<typeof prefetchEpisodeInfo>> = null;
+    if (urlType === "apple") {
+        const appleParsed = parseApplePodcastsUrl(url)!;
+        episodeInfo = await prefetchEpisodeInfo(appleParsed.podcastId, appleParsed.episodeId, c.env, url);
 
-    console.log(JSON.stringify({
-        event: "admin_submit_prefetch_complete",
-        podcastId: parsed.podcastId,
-        episodeId: parsed.episodeId,
-        episodeInfoFound: !!episodeInfo,
-        episodeGuid: episodeInfo?.episodeGuid,
-    }));
+        console.log(JSON.stringify({
+            event: "admin_submit_prefetch_complete",
+            podcastId: appleParsed.podcastId,
+            episodeId: appleParsed.episodeId,
+            episodeInfoFound: !!episodeInfo,
+            episodeGuid: episodeInfo?.episodeGuid,
+        }));
+    }
 
     // Create job
     const jobId = generateUUID();
@@ -1037,7 +1052,8 @@ admin.post("/submit", async (c) => {
     const job: Job = {
         id: jobId,
         episodeId,
-        appleUrl,
+        sourceUrl: url,
+        sourceType: urlType as "apple" | "youtube",
         status: "queued",
         templateId: effectiveTemplateId,
         createdAt: now,
@@ -1050,7 +1066,9 @@ admin.post("/submit", async (c) => {
     const message = createProcessEpisodeMessage({
         jobId,
         episodeId,
-        appleUrl,
+        sourceUrl: url,
+        sourceType: urlType as "apple" | "youtube",
+        videoId,
         templateId: effectiveTemplateId,
         episodeGuid: episodeInfo?.episodeGuid,
         expectedTitle: episodeInfo?.trackName,
@@ -1266,7 +1284,8 @@ admin.post("/episodes/:episodeId/regenerate", async (c) => {
     const job: Job = {
         id: jobId,
         episodeId,
-        appleUrl: episode.appleUrl,
+        sourceUrl: episode.sourceUrl,
+        sourceType: episode.sourceType,
         status: "queued",
         templateId,
         createdAt: now,
@@ -1279,7 +1298,8 @@ admin.post("/episodes/:episodeId/regenerate", async (c) => {
     const message = createRegenerateSummaryMessage({
         jobId,
         episodeId,
-        appleUrl: episode.appleUrl,
+        sourceUrl: episode.sourceUrl,
+        sourceType: episode.sourceType,
         templateId,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
@@ -1564,7 +1584,7 @@ admin.post("/backfill-podcast-info", async (c) => {
                     continue;
                 }
 
-                const parsedUrl = parseUrl(episode.appleUrl);
+                const parsedUrl = parseUrl(episode.sourceUrl);
                 if (!parsedUrl) {
                     failed++;
                     continue;

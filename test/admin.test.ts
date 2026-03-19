@@ -136,7 +136,7 @@ describe("GET /admin/submit", () => {
         expect(response.status).toBe(200);
         const html = await response.text();
         expect(html).toContain("Submit Episode");
-        expect(html).toContain("Apple Podcasts Episode URL");
+        expect(html).toContain("Episode URL");
         expect(html).toContain("Summary Style");
     });
 });
