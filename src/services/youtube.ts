@@ -91,11 +91,10 @@ interface PlayerResponse {
 // ============================================================================
 
 function extractPlayerResponse(html: string): PlayerResponse | null {
-    // Match the ytInitialPlayerResponse JSON blob. The pattern uses a greedy match
-    // on the outer braces and stops at the semicolon that terminates the assignment.
-    // On real YouTube pages this is followed by `var` or `</script>`, but in tests
-    // it may be the only content, so we don't require a trailing sentinel.
-    const match = html.match(/var ytInitialPlayerResponse\s*=\s*(\{[\s\S]+\});/);
+    // Use a lazy quantifier so we don't over-consume on real YouTube pages where
+    // multiple JSON variable assignments appear in the same <script> block.
+    // The trailing sentinel anchors the match to the end of the assignment.
+    const match = html.match(/var ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});\s*(?:var\s|<\/script>|$)/);
     if (!match) return null;
     try {
         return JSON.parse(match[1]) as PlayerResponse;
