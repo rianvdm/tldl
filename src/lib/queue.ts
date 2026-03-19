@@ -21,7 +21,9 @@ export async function enqueueJob(
 export function createProcessEpisodeMessage(params: {
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    sourceUrl: string;
+    sourceType: "apple" | "youtube";
+    videoId?: string;
     templateId: string;
     episodeGuid?: string;
     expectedTitle?: string;
@@ -32,7 +34,9 @@ export function createProcessEpisodeMessage(params: {
         type: "process_episode",
         jobId: params.jobId,
         episodeId: params.episodeId,
-        appleUrl: params.appleUrl,
+        sourceUrl: params.sourceUrl,
+        sourceType: params.sourceType,
+        ...(params.videoId && { videoId: params.videoId }),
         templateId: params.templateId,
         ...(params.episodeGuid && { episodeGuid: params.episodeGuid }),
         ...(params.expectedTitle && { expectedTitle: params.expectedTitle }),
@@ -47,14 +51,16 @@ export function createProcessEpisodeMessage(params: {
 export function createRegenerateSummaryMessage(params: {
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    sourceUrl: string;
+    sourceType: "apple" | "youtube";
     templateId: string;
 }): QueueMessage {
     return {
         type: "regenerate_summary",
         jobId: params.jobId,
         episodeId: params.episodeId,
-        appleUrl: params.appleUrl,
+        sourceUrl: params.sourceUrl,
+        sourceType: params.sourceType,
         templateId: params.templateId,
     };
 }
