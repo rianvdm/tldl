@@ -24,7 +24,8 @@ function createSampleJob(overrides: Partial<Job> = {}): Job {
     return {
         id: "job-123",
         episodeId: "podcast_episode",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+        sourceType: "apple",
         status: "queued",
         templateId: "key-takeaways",
         createdAt: new Date().toISOString(),
@@ -39,7 +40,8 @@ function createSampleEpisode(overrides: Partial<Episode> = {}): Episode {
     const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
     return {
         id: "123_456",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+        sourceType: "apple",
         podcastName: "Test Podcast",
         episodeTitle: "Test Episode",
         episodeDuration: 2700,
@@ -393,5 +395,49 @@ describe("Summary Operations", () => {
             "no-summaries-here"
         );
         expect(listed).toEqual([]);
+    });
+});
+
+describe("backwards compat: appleUrl → sourceUrl", () => {
+    it("should read legacy Episode records that have appleUrl instead of sourceUrl", async () => {
+        const legacyRecord = {
+            id: "legacy_episode",
+            appleUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+            podcastName: "Legacy Podcast",
+            episodeTitle: "Legacy Episode",
+            episodeDuration: 3600,
+            episodeDate: "2024-01-01",
+            audioUrl: "https://example.com/audio.mp3",
+            transcriptSource: "rss",
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date().toISOString(),
+        };
+        await env.TLDL_DATA.put("episode:legacy_episode", JSON.stringify(legacyRecord));
+
+        const episode = await getEpisode(env.TLDL_DATA, "legacy_episode");
+        expect(episode).not.toBeNull();
+        expect(episode!.sourceUrl).toBe("https://podcasts.apple.com/us/podcast/test/id123?i=456");
+        expect(episode!.sourceType).toBe("apple");
+    });
+
+    it("should prefer sourceUrl over appleUrl when both are present", async () => {
+        const record = {
+            id: "both_fields",
+            sourceUrl: "https://new-source-url.com",
+            appleUrl: "https://old-apple-url.com",
+            sourceType: "apple",
+            podcastName: "Test",
+            episodeTitle: "Test",
+            episodeDuration: 1800,
+            episodeDate: "2024-01-01",
+            audioUrl: "https://example.com/audio.mp3",
+            transcriptSource: "rss",
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date().toISOString(),
+        };
+        await env.TLDL_DATA.put("episode:both_fields", JSON.stringify(record));
+
+        const episode = await getEpisode(env.TLDL_DATA, "both_fields");
+        expect(episode!.sourceUrl).toBe("https://new-source-url.com");
     });
 });

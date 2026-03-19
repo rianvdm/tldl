@@ -52,7 +52,13 @@ export async function getJob(
 ): Promise<Job | null> {
     const data = await kv.get(KV_KEYS.job(jobId));
     if (!data) return null;
-    return JSON.parse(data) as Job;
+    const rawRecord = JSON.parse(data) as any;
+    const job: Job = {
+        ...rawRecord,
+        sourceUrl: rawRecord.sourceUrl ?? rawRecord.appleUrl,
+        sourceType: rawRecord.sourceType ?? "apple",
+    };
+    return job;
 }
 
 /**
@@ -151,7 +157,13 @@ export async function listActiveJobs(kv: KVNamespace): Promise<Job[]> {
         keys.keys.map(async (key) => {
             const data = await kv.get(key.name);
             if (!data) return null;
-            return JSON.parse(data) as Job;
+            const rawRecord = JSON.parse(data) as any;
+            const job: Job = {
+                ...rawRecord,
+                sourceUrl: rawRecord.sourceUrl ?? rawRecord.appleUrl,
+                sourceType: rawRecord.sourceType ?? "apple",
+            };
+            return job;
         })
     );
 
@@ -193,7 +205,13 @@ export async function getEpisode(
 ): Promise<Episode | null> {
     const data = await kv.get(KV_KEYS.episode(episodeId));
     if (!data) return null;
-    return JSON.parse(data) as Episode;
+    const rawRecord = JSON.parse(data) as any;
+    const episode: Episode = {
+        ...rawRecord,
+        sourceUrl: rawRecord.sourceUrl ?? rawRecord.appleUrl,
+        sourceType: rawRecord.sourceType ?? "apple",
+    };
+    return episode;
 }
 
 /**
@@ -414,7 +432,13 @@ export async function rebuildEpisodeIndex(kv: KVNamespace): Promise<number> {
         keys.keys.map(async (key) => {
             const data = await kv.get(key.name);
             if (!data) return null;
-            return JSON.parse(data) as Episode;
+            const rawRecord = JSON.parse(data) as any;
+            const episode: Episode = {
+                ...rawRecord,
+                sourceUrl: rawRecord.sourceUrl ?? rawRecord.appleUrl,
+                sourceType: rawRecord.sourceType ?? "apple",
+            };
+            return episode;
         })
     );
 
