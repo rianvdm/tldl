@@ -23,7 +23,8 @@ describe("Type Definitions", () => {
             const job: Job = {
                 id: "550e8400-e29b-41d4-a716-446655440000",
                 episodeId: "123456_789012",
-                appleUrl: "https://podcasts.apple.com/us/podcast/example/id123456?i=789012",
+                sourceUrl: "https://podcasts.apple.com/us/podcast/example/id123456?i=789012",
+                sourceType: "apple",
                 status: "queued",
                 templateId: "key-takeaways",
                 createdAt: "2024-12-20T10:00:00Z",
@@ -49,7 +50,8 @@ describe("Type Definitions", () => {
                 const job: Job = {
                     id: "test-id",
                     episodeId: "ep-id",
-                    appleUrl: "https://example.com",
+                    sourceUrl: "https://example.com",
+                    sourceType: "apple",
                     status,
                     templateId: "key-takeaways",
                     createdAt: new Date().toISOString(),
@@ -63,7 +65,8 @@ describe("Type Definitions", () => {
             const failedJob: Job = {
                 id: "test-id",
                 episodeId: "ep-id",
-                appleUrl: "https://example.com",
+                sourceUrl: "https://example.com",
+                sourceType: "apple",
                 status: "failed",
                 templateId: "key-takeaways",
                 error: "Something went wrong",
@@ -79,7 +82,8 @@ describe("Type Definitions", () => {
         it("creates a valid episode object", () => {
             const episode: Episode = {
                 id: "123456_789012",
-                appleUrl: "https://podcasts.apple.com/us/podcast/example/id123456?i=789012",
+                sourceUrl: "https://podcasts.apple.com/us/podcast/example/id123456?i=789012",
+                sourceType: "apple",
                 podcastName: "Example Podcast",
                 episodeTitle: "Episode 1: Getting Started",
                 episodeDuration: 2700,
@@ -100,7 +104,8 @@ describe("Type Definitions", () => {
             sources.forEach((source) => {
                 const episode: Episode = {
                     id: "test-id",
-                    appleUrl: "https://example.com",
+                    sourceUrl: "https://example.com",
+                    sourceType: "apple",
                     podcastName: "Test",
                     episodeTitle: "Test Episode",
                     episodeDuration: 1800,
@@ -150,7 +155,8 @@ describe("Type Definitions", () => {
                 type: "process_episode",
                 jobId: "job-123",
                 episodeId: "ep-456",
-                appleUrl: "https://podcasts.apple.com/...",
+                sourceUrl: "https://podcasts.apple.com/...",
+                sourceType: "apple",
                 templateId: "key-takeaways",
             };
 
@@ -162,7 +168,8 @@ describe("Type Definitions", () => {
                 type: "regenerate_summary",
                 jobId: "job-789",
                 episodeId: "ep-456",
-                appleUrl: "https://podcasts.apple.com/...",
+                sourceUrl: "https://podcasts.apple.com/...",
+                sourceType: "apple",
                 templateId: "eli5",
             };
 

@@ -438,7 +438,8 @@ async function queueEpisodeForProcessing(
     const job: Job = {
         id: jobId,
         episodeId: params.episodeId,
-        appleUrl: params.appleUrl,
+        sourceUrl: params.appleUrl,
+        sourceType: "apple",
         status: "queued",
         templateId: params.templateId,
         createdAt: now,
@@ -453,7 +454,8 @@ async function queueEpisodeForProcessing(
     const message = createProcessEpisodeMessage({
         jobId,
         episodeId: params.episodeId,
-        appleUrl: params.appleUrl,
+        sourceUrl: params.appleUrl,
+        sourceType: "apple",
         templateId: params.templateId,
         episodeGuid: params.episodeGuid,
         expectedTitle: params.expectedTitle,

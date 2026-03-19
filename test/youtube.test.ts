@@ -4,7 +4,6 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetchYouTubeEpisodeData, parseCaptionXml } from "../src/services/youtube";
-import { AppError } from "../src/lib/errors";
 import { ERROR_CODES } from "../src/lib/constants";
 
 function makePlayerResponse(overrides: Record<string, unknown> = {}): string {

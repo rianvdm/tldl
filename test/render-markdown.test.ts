@@ -13,7 +13,8 @@ function createTestEpisode(overrides: Partial<Episode> = {}): Episode {
     const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
     return {
         id: "xss_test_episode",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test/id999?i=001",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test/id999?i=001",
+        sourceType: "apple",
         podcastName: "XSS Test Podcast",
         episodeTitle: "XSS Test Episode",
         episodeDuration: 1800,

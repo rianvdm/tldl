@@ -41,7 +41,8 @@ function createSampleEpisode(overrides: Partial<Episode> = {}): Episode {
     const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
     return {
         id: "123_456",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test/id123?i=456",
+        sourceType: "apple",
         podcastName: "Test Podcast",
         episodeTitle: "Test Episode",
         episodeDuration: 2700,

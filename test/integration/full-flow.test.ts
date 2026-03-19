@@ -31,7 +31,8 @@ function createSampleEpisode(overrides: Partial<Episode> = {}): Episode {
     const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
     return {
         id: "integration_test_123_456",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceType: "apple",
         podcastName: "Integration Test Podcast",
         episodeTitle: "Integration Test Episode",
         episodeDuration: 1800,
@@ -310,7 +311,8 @@ describe("Integration: Admin CRUD Flow", () => {
         // Use ID "123_456" to match deriveEpisodeId("123", "456") from the apple URL
         const episode = createSampleEpisode({
             id: "123_456",
-            appleUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+            sourceUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+            sourceType: "apple",
         });
         const transcript = createSampleTranscript({ episodeId: episode.id });
         const summary = createSampleSummary({ episodeId: episode.id });
@@ -377,7 +379,7 @@ describe("Integration: Admin CRUD Flow", () => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                appleUrl: episode.appleUrl,
+                appleUrl: episode.sourceUrl,
                 templateId: "key-takeaways",
             }),
             redirect: "manual",
