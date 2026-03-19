@@ -23,6 +23,10 @@ vi.mock("../src/services/apple-podcasts", () => ({
     getEpisodeMetadata: vi.fn(),
 }));
 
+vi.mock("../src/services/youtube", () => ({
+    fetchYouTubeEpisodeData: vi.fn(),
+}));
+
 vi.mock("../src/services/rss", () => ({
     fetchTranscript: vi.fn(),
 }));
@@ -45,6 +49,7 @@ import { getEpisodeMetadata } from "../src/services/apple-podcasts";
 import { fetchTranscript } from "../src/services/rss";
 import { transcribeAudio } from "../src/services/transcription";
 import { generateSummary } from "../src/services/summarization";
+import { fetchYouTubeEpisodeData } from "../src/services/youtube";
 import queueConsumer from "../src/queue/consumer";
 
 // ============================================================================
@@ -70,7 +75,8 @@ function createSampleJob(overrides: Partial<Job> = {}): Job {
     return {
         id: "test-job-123",
         episodeId: "123_456",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceType: "apple",
         status: "queued",
         templateId: "key-takeaways",
         createdAt: now,
@@ -84,7 +90,8 @@ function createSampleEpisode(overrides: Partial<Episode> = {}): Episode {
     const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
     return {
         id: "123_456",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceType: "apple",
         podcastName: "Test Podcast",
         episodeTitle: "Test Episode",
         episodeDuration: 1800, // 30 minutes
@@ -112,7 +119,8 @@ function createQueueMessage(overrides: Partial<QueueMessage> = {}): QueueMessage
         type: "process_episode",
         jobId: "test-job-123",
         episodeId: "123_456",
-        appleUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceUrl: "https://podcasts.apple.com/us/podcast/test-podcast/id123?i=456",
+        sourceType: "apple",
         templateId: "key-takeaways",
         ...overrides,
     };
@@ -517,6 +525,135 @@ describe("Queue Consumer - regenerate_summary", () => {
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
         expect(updatedJob?.error).toContain("Transcript not found");
+    });
+});
+
+// ============================================================================
+// YouTube Episode Tests
+// ============================================================================
+
+describe("Queue Consumer - YouTube process_episode", () => {
+    beforeEach(async () => {
+        await clearTestData();
+        vi.clearAllMocks();
+    });
+
+    it("processes YouTube episode successfully end-to-end", async () => {
+        vi.mocked(fetchYouTubeEpisodeData).mockResolvedValue({
+            videoTitle: "My YouTube Video",
+            channelName: "Test Channel",
+            durationSeconds: 900,
+            publishDate: "2024-03-01",
+            transcriptText: "This is the YouTube caption transcript text.",
+        });
+
+        vi.mocked(generateSummary).mockResolvedValue({
+            text: "# Summary\n\nKey takeaways from the video.",
+            model: "gpt-5.2",
+        });
+
+        const job = createSampleJob({
+            sourceUrl: "https://www.youtube.com/watch?v=abc123",
+            sourceType: "youtube",
+        });
+        await createJob(env.TLDL_DATA, job);
+
+        const message = createQueueMessage({
+            sourceUrl: "https://www.youtube.com/watch?v=abc123",
+            sourceType: "youtube",
+            videoId: "abc123",
+        });
+        const batch = createMockBatch([message]);
+
+        await queueConsumer.queue(batch, getTestEnv());
+
+        // Verify message acknowledged
+        expect(batch.messages[0].ack).toHaveBeenCalled();
+        expect(batch.messages[0].retry).not.toHaveBeenCalled();
+
+        // Verify job completed
+        const updatedJob = await getJob(env.TLDL_DATA, job.id);
+        expect(updatedJob?.status).toBe("completed");
+
+        // Verify episode saved
+        const episode = await getEpisode(env.TLDL_DATA, "123_456");
+        expect(episode).not.toBeNull();
+        expect(episode?.podcastName).toBe("Test Channel");
+        expect(episode?.episodeTitle).toBe("My YouTube Video");
+        expect(episode?.sourceType).toBe("youtube");
+        expect(episode?.transcriptSource).toBe("youtube");
+
+        // Verify transcript saved
+        const transcript = await getTranscript(env.TLDL_DATA, "123_456");
+        expect(transcript).not.toBeNull();
+        expect(transcript?.source).toBe("youtube");
+        expect(transcript?.text).toBe("This is the YouTube caption transcript text.");
+
+        // Verify summary saved
+        const summary = await getSummary(env.TLDL_DATA, "123_456", "key-takeaways");
+        expect(summary).not.toBeNull();
+        expect(summary?.text).toContain("Summary");
+
+        // Verify Apple-specific services not called
+        expect(getEpisodeMetadata).not.toHaveBeenCalled();
+        expect(transcribeAudio).not.toHaveBeenCalled();
+        expect(fetchYouTubeEpisodeData).toHaveBeenCalledWith("abc123");
+    });
+
+    it("throws INVALID_URL error when videoId is missing", async () => {
+        const job = createSampleJob({
+            sourceUrl: "https://www.youtube.com/watch?v=abc123",
+            sourceType: "youtube",
+        });
+        await createJob(env.TLDL_DATA, job);
+
+        const message = createQueueMessage({
+            sourceUrl: "https://www.youtube.com/watch?v=abc123",
+            sourceType: "youtube",
+            // videoId intentionally omitted
+        });
+        const batch = createMockBatch([message]);
+
+        await queueConsumer.queue(batch, getTestEnv());
+
+        // Verify retry triggered (not final attempt yet)
+        expect(batch.messages[0].retry).toHaveBeenCalled();
+
+        // Verify job marked as failed
+        const updatedJob = await getJob(env.TLDL_DATA, job.id);
+        expect(updatedJob?.status).toBe("failed");
+    });
+
+    it("propagates FETCH_FAILED error from YouTube service", async () => {
+        const { AppError } = await import("../src/lib/errors");
+        const { ERROR_CODES } = await import("../src/lib/constants");
+
+        vi.mocked(fetchYouTubeEpisodeData).mockRejectedValue(
+            new AppError(ERROR_CODES.FETCH_FAILED, "Could not load video data. The video may be private, unavailable, or region-restricted.")
+        );
+
+        const job = createSampleJob({
+            sourceUrl: "https://www.youtube.com/watch?v=abc123",
+            sourceType: "youtube",
+        });
+        await createJob(env.TLDL_DATA, job);
+
+        const message = createQueueMessage({
+            sourceUrl: "https://www.youtube.com/watch?v=abc123",
+            sourceType: "youtube",
+            videoId: "abc123",
+        });
+        const batch = createMockBatch([message]);
+
+        await queueConsumer.queue(batch, getTestEnv());
+
+        // Verify retry triggered
+        expect(batch.messages[0].retry).toHaveBeenCalled();
+
+        // Verify job marked as failed with error
+        const updatedJob = await getJob(env.TLDL_DATA, job.id);
+        expect(updatedJob?.status).toBe("failed");
+        expect(updatedJob?.error).toBeDefined();
     });
 });
 

@@ -15,6 +15,7 @@ import { ERROR_CODES } from "../lib/constants";
 import { generateEpisodeTags } from "../services/tag-generation";
 import { parseApplePodcastsUrl } from "../lib/url-parser";
 import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
+import { fetchYouTubeEpisodeData } from "../services/youtube";
 import {
     getJob,
     updateJobStatus,
@@ -74,7 +75,9 @@ interface ProcessingContext {
     env: Env;
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    sourceUrl: string;
+    sourceType: "apple" | "youtube";
+    videoId?: string;
     templateId: string;
     // Pre-fetched iTunes metadata (avoids 403 errors from iTunes API)
     episodeGuid?: string;
@@ -219,7 +222,9 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         env,
         jobId: msg.jobId,
         episodeId: msg.episodeId,
-        appleUrl: msg.appleUrl,
+        sourceUrl: msg.sourceUrl,
+        sourceType: msg.sourceType,
+        videoId: msg.videoId,
         templateId: msg.templateId,
         episodeGuid: msg.episodeGuid,
         expectedTitle: msg.expectedTitle,
@@ -269,7 +274,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
  * 6. Store all data
  */
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
-    const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate, submittedBy } = ctx;
+    const { env, jobId, episodeId, sourceUrl, sourceType, templateId, episodeGuid, expectedTitle, expectedDate, submittedBy } = ctx;
     const kv = env.TLDL_DATA;
     const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 121;
 
@@ -318,25 +323,31 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         return;
     }
 
+    // YouTube routing: hand off to YouTube-specific pipeline
+    if (sourceType === "youtube") {
+        await processYouTubeEpisode(ctx);
+        return;
+    }
+
     // Standard path: Need to fetch metadata first
     await updateJobStatusBoth(env, kv, jobId, "fetching_metadata");
     await updateJobEstimateBoth(env, kv, jobId, 180); // ~3 minutes initial estimate
 
-    const parsedUrl = parseApplePodcastsUrl(appleUrl);
+    const parsedUrl = parseApplePodcastsUrl(sourceUrl);
     if (!parsedUrl) {
         throw new AppError(ERROR_CODES.INVALID_URL, "Invalid Apple Podcasts URL");
     }
 
     // Use pre-fetched iTunes metadata from queue message (avoids 403 errors)
     // Pass env for Podcast Index API access (primary source)
-    // Pass appleUrl for redirect-based title extraction when no pre-fetched metadata
+    // Pass sourceUrl for redirect-based title extraction when no pre-fetched metadata
     const metadata = await getEpisodeMetadata(parsedUrl, {
         maxMinutes,
         episodeGuid,
         expectedTitle,
         expectedDate,
         env,
-        appleUrl,
+        appleUrl: sourceUrl,
     });
 
     // Update job with metadata so it shows on the status page
@@ -449,7 +460,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
 
         const episode: Episode = {
             id: episodeId,
-            appleUrl,
+            sourceUrl,
+            sourceType: "apple",
             podcastName: metadata.podcastName,
             episodeTitle: metadata.episodeTitle,
             episodeDuration: metadata.episodeDuration,
@@ -480,6 +492,88 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     }
 
     // Step 6: Mark job as completed
+    await updateJobStatusBoth(env, kv, jobId, "completed");
+}
+
+// ============================================================================
+// Process YouTube Episode Pipeline
+// ============================================================================
+
+async function processYouTubeEpisode(ctx: ProcessingContext): Promise<void> {
+    const { env, jobId, episodeId, sourceUrl, videoId, templateId, submittedBy } = ctx;
+    const kv = env.TLDL_DATA;
+
+    if (!videoId) {
+        throw new AppError(ERROR_CODES.INVALID_URL, "Missing videoId for YouTube job");
+    }
+
+    // Step 1: Fetch metadata and captions
+    await updateJobStatusBoth(env, kv, jobId, "fetching_metadata");
+    await updateJobEstimateBoth(env, kv, jobId, 60);
+
+    const youtubeData = await fetchYouTubeEpisodeData(videoId);
+
+    await updateJobMetadataDO(env, jobId, youtubeData.channelName, youtubeData.videoTitle);
+    await updateJobMetadata(kv, jobId, youtubeData.channelName, youtubeData.videoTitle);
+
+    // Step 2: Store transcript
+    const transcript: Transcript = {
+        episodeId,
+        text: youtubeData.transcriptText,
+        source: "youtube",
+        createdAt: new Date().toISOString(),
+    };
+    await saveTranscript(kv, transcript);
+
+    // Step 3: Generate summary
+    await updateJobStatusBoth(env, kv, jobId, "summarizing");
+    await updateJobEstimateBoth(env, kv, jobId, 30);
+
+    const summaryResult = await generateSummary(
+        youtubeData.transcriptText,
+        templateId,
+        env.OPENAI_API_KEY
+    );
+
+    const summary: Summary = {
+        episodeId,
+        templateId,
+        text: summaryResult.text,
+        model: summaryResult.model,
+        createdAt: new Date().toISOString(),
+    };
+    await saveSummary(kv, summary);
+
+    // Step 4: Save episode
+    const now = new Date();
+    const expiresAt = new Date(now);
+    expiresAt.setDate(expiresAt.getDate() + 365);
+
+    const episode: Episode = {
+        id: episodeId,
+        sourceUrl,
+        sourceType: "youtube",
+        podcastName: youtubeData.channelName,
+        episodeTitle: youtubeData.videoTitle,
+        episodeDuration: youtubeData.durationSeconds,
+        episodeDate: youtubeData.publishDate,
+        transcriptSource: "youtube",
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        submittedBy,
+    };
+    await saveEpisode(kv, episode);
+
+    await addToEpisodeIndex(kv, {
+        id: episode.id,
+        podcastName: episode.podcastName,
+        episodeTitle: episode.episodeTitle,
+        episodeDate: episode.episodeDate,
+        episodeDuration: episode.episodeDuration,
+        createdAt: episode.createdAt,
+        expiresAt: episode.expiresAt,
+    });
+
     await updateJobStatusBoth(env, kv, jobId, "completed");
 }
 
