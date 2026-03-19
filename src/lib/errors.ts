@@ -13,7 +13,7 @@ import { ERROR_CODES } from "./constants";
 
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
     [ERROR_CODES.INVALID_URL]:
-        "Please enter a valid Apple Podcasts episode URL. It should look like: podcasts.apple.com/...?i=...",
+        "Please enter an Apple Podcasts episode URL or a YouTube video URL.",
     [ERROR_CODES.INVALID_TEMPLATE]:
         "Invalid summary template selected. Please choose a valid template.",
     [ERROR_CODES.EPISODE_NOT_FOUND]:
@@ -24,6 +24,8 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
         "Unable to access the episode audio. It may be geo-restricted or no longer available.",
     [ERROR_CODES.AUDIO_TOO_LARGE]:
         "The audio file is too large to process. Try a shorter episode.",
+    [ERROR_CODES.FETCH_FAILED]:
+        "Could not load the video. It may be private, unavailable, or region-restricted.",
     [ERROR_CODES.TRANSCRIPTION_FAILED]:
         "Transcription failed. Please try again in a few minutes.",
     [ERROR_CODES.SUMMARIZATION_FAILED]:
@@ -53,6 +55,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
     [ERROR_CODES.EPISODE_TOO_LONG]: 400,
     [ERROR_CODES.AUDIO_UNAVAILABLE]: 502,
     [ERROR_CODES.AUDIO_TOO_LARGE]: 400,
+    [ERROR_CODES.FETCH_FAILED]: 502,
     [ERROR_CODES.TRANSCRIPTION_FAILED]: 502,
     [ERROR_CODES.SUMMARIZATION_FAILED]: 502,
     [ERROR_CODES.RATE_LIMITED]: 429,

@@ -17,7 +17,7 @@ export type JobStatus =
 /**
  * Source of the transcript - determines how we obtained it
  */
-export type TranscriptSource = "apple" | "rss" | "openai";
+export type TranscriptSource = "apple" | "rss" | "openai" | "youtube";
 
 /**
  * Job record - tracks the processing state of a submitted episode
@@ -26,8 +26,9 @@ export type TranscriptSource = "apple" | "rss" | "openai";
  */
 export interface Job {
     id: string;                    // UUID
-    episodeId: string;             // Derived from Apple Podcasts URL
-    appleUrl: string;              // Original submitted URL
+    episodeId: string;             // Derived from source URL
+    sourceUrl: string;             // Original submitted URL
+    sourceType: "apple" | "youtube"; // Type of source
     status: JobStatus;
     templateId: string;            // Template used for this job
     error?: string;                // Error message if failed
@@ -44,13 +45,14 @@ export interface Job {
  * TTL: 365 days
  */
 export interface Episode {
-    id: string;                    // Derived from Apple episode ID
-    appleUrl: string;              // Original Apple Podcasts URL
+    id: string;                    // Derived from source ID
+    sourceUrl: string;             // Original source URL
+    sourceType: "apple" | "youtube"; // Type of source
     podcastName: string;
     episodeTitle: string;
     episodeDuration: number;       // Duration in seconds
     episodeDate: string;           // Original publish date (ISO)
-    audioUrl: string;              // Source audio URL
+    audioUrl?: string;             // Source audio URL (optional for YouTube)
     transcriptSource: TranscriptSource;
     createdAt: string;             // ISO timestamp
     expiresAt: string;             // ISO timestamp (createdAt + 365 days)
@@ -122,7 +124,9 @@ export interface QueueMessage {
     type: QueueMessageType;
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    sourceUrl: string;
+    sourceType: "apple" | "youtube";
+    videoId?: string;             // Populated for YouTube jobs
     templateId: string;
     // Pre-fetched iTunes metadata (to avoid 403 errors in queue consumer)
     episodeGuid?: string;
@@ -225,4 +229,15 @@ export interface ActivityEvent {
     details?: string;              // Error message or extra context
     episodeId?: string;            // For episode events
     podcastId?: string;            // For monitoring events
+}
+
+/**
+ * YouTube-sourced episode data - metadata extracted from video page
+ */
+export interface YouTubeEpisodeData {
+    videoTitle: string;
+    channelName: string;
+    durationSeconds: number;
+    publishDate: string;           // YYYY-MM-DD (no time precision from YouTube watch page)
+    transcriptText: string;        // Plain text from captions
 }
