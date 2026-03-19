@@ -973,15 +973,7 @@ admin.post("/submit", async (c) => {
         templateId = formData.templateId as string;
     }
 
-    // Validate URL
-    if (!url) {
-        return c.html(Layout({
-            title: "Error",
-            children: `<div class="alert alert-error">Please enter an Apple Podcasts URL.</div><a href="/admin/submit" class="button">Try Again</a>`,
-        }));
-    }
-
-    const urlType = detectUrlType(url);
+    const urlType = detectUrlType(url ?? "");
     if (urlType === "unknown") {
         return c.html(Layout({
             title: "Error",

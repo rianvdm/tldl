@@ -197,7 +197,7 @@ describe("POST /admin/submit — validation", () => {
 
         expect(response.status).toBe(200);
         const html = await response.text();
-        expect(html).toContain("Please enter an Apple Podcasts URL");
+        expect(html).toContain("Please enter an Apple Podcasts episode URL or a YouTube video URL");
     });
 
     it("shows error for invalid URL via JSON", async () => {

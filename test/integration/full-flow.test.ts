@@ -276,7 +276,7 @@ describe("Integration: Error Handling", () => {
 
         expect(response.status).toBe(200);
         const html = await response.text();
-        expect(html).toContain("Please enter an Apple Podcasts URL");
+        expect(html).toContain("Please enter an Apple Podcasts episode URL or a YouTube video URL");
     });
 
     it("invalid template ID on admin submit shows error", async () => {
