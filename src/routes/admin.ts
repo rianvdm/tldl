@@ -977,7 +977,7 @@ admin.post("/submit", async (c) => {
     if (urlType === "unknown") {
         return c.html(Layout({
             title: "Error",
-            children: `<div class="alert alert-error">Invalid Apple Podcasts episode URL. Please enter an Apple Podcasts episode URL or a YouTube video URL.</div><a href="/admin/submit" class="button">Try Again</a>`,
+            children: `<div class="alert alert-error">Please enter an Apple Podcasts episode URL or a YouTube video URL.</div><a href="/admin/submit" class="button">Try Again</a>`,
         }));
     }
 

@@ -254,7 +254,7 @@ describe("Integration: Error Handling", () => {
 
         expect(response.status).toBe(200); // Admin submit returns HTML error page with 200
         const html = await response.text();
-        expect(html).toContain("Invalid Apple Podcasts episode URL");
+        expect(html).toContain("Please enter an Apple Podcasts episode URL or a YouTube video URL");
     });
 
     it("non-existent episode returns 404 with helpful message", async () => {
