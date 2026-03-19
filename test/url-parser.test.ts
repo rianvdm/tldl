@@ -5,6 +5,8 @@
 import { describe, it, expect } from "vitest";
 import {
     parseApplePodcastsUrl,
+    parseYouTubeUrl,
+    detectUrlType,
     deriveEpisodeId,
     type ParsedAppleUrl,
 } from "../src/lib/url-parser";
@@ -170,5 +172,79 @@ describe("deriveEpisodeId", () => {
         expect(id1).not.toBe(id2);
         expect(id1).not.toBe(id3);
         expect(id2).not.toBe(id3);
+    });
+});
+
+describe("parseYouTubeUrl", () => {
+    describe("valid URLs", () => {
+        it("should parse a youtube.com/watch URL", () => {
+            const result = parseYouTubeUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+            expect(result).toEqual({ videoId: "dQw4w9WgXcQ" });
+        });
+
+        it("should parse a youtu.be short URL", () => {
+            const result = parseYouTubeUrl("https://youtu.be/dQw4w9WgXcQ");
+            expect(result).toEqual({ videoId: "dQw4w9WgXcQ" });
+        });
+
+        it("should parse a youtu.be URL with share params", () => {
+            const result = parseYouTubeUrl("https://youtu.be/a2aYd-XHzsI?si=Ix4VfQJ5GnX8VnN5");
+            expect(result).toEqual({ videoId: "a2aYd-XHzsI" });
+        });
+
+        it("should parse a youtube.com/shorts URL", () => {
+            const result = parseYouTubeUrl("https://www.youtube.com/shorts/dQw4w9WgXcQ");
+            expect(result).toEqual({ videoId: "dQw4w9WgXcQ" });
+        });
+
+        it("should parse a youtube.com/watch URL without www", () => {
+            const result = parseYouTubeUrl("https://youtube.com/watch?v=dQw4w9WgXcQ");
+            expect(result).toEqual({ videoId: "dQw4w9WgXcQ" });
+        });
+    });
+
+    describe("invalid URLs", () => {
+        it("should return null for Apple Podcasts URLs", () => {
+            expect(parseYouTubeUrl("https://podcasts.apple.com/us/podcast/test/id123?i=456")).toBeNull();
+        });
+
+        it("should return null for random URLs", () => {
+            expect(parseYouTubeUrl("https://example.com/watch?v=dQw4w9WgXcQ")).toBeNull();
+        });
+
+        it("should return null for youtube.com without video ID", () => {
+            expect(parseYouTubeUrl("https://www.youtube.com/channel/UCtest")).toBeNull();
+        });
+
+        it("should return null for empty string", () => {
+            expect(parseYouTubeUrl("")).toBeNull();
+        });
+
+        it("should return null for null/undefined", () => {
+            expect(parseYouTubeUrl(null as unknown as string)).toBeNull();
+            expect(parseYouTubeUrl(undefined as unknown as string)).toBeNull();
+        });
+    });
+});
+
+describe("detectUrlType", () => {
+    it("should return 'apple' for Apple Podcasts episode URLs", () => {
+        expect(detectUrlType("https://podcasts.apple.com/us/podcast/test/id123?i=456")).toBe("apple");
+    });
+
+    it("should return 'youtube' for YouTube watch URLs", () => {
+        expect(detectUrlType("https://www.youtube.com/watch?v=dQw4w9WgXcQ")).toBe("youtube");
+    });
+
+    it("should return 'youtube' for youtu.be URLs", () => {
+        expect(detectUrlType("https://youtu.be/dQw4w9WgXcQ")).toBe("youtube");
+    });
+
+    it("should return 'unknown' for Spotify URLs", () => {
+        expect(detectUrlType("https://open.spotify.com/episode/abc123")).toBe("unknown");
+    });
+
+    it("should return 'unknown' for empty string", () => {
+        expect(detectUrlType("")).toBe("unknown");
     });
 });

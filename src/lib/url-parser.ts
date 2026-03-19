@@ -141,3 +141,64 @@ export function extractPodcastId(episodeId: string): string | null {
     const match = episodeId.match(/^(\d+)_/);
     return match ? match[1] : null;
 }
+
+/**
+ * Result of parsing a YouTube URL
+ */
+export interface ParsedYouTubeUrl {
+    videoId: string;
+}
+
+/**
+ * Parse a YouTube URL and extract the video ID.
+ *
+ * Accepts:
+ * - https://www.youtube.com/watch?v=VIDEO_ID
+ * - https://youtu.be/VIDEO_ID
+ * - https://www.youtube.com/shorts/VIDEO_ID
+ */
+export function parseYouTubeUrl(url: string): ParsedYouTubeUrl | null {
+    if (!url || typeof url !== "string") {
+        return null;
+    }
+
+    try {
+        const parsed = new URL(url);
+        const hostname = parsed.hostname.replace(/^www\./, "");
+
+        if (hostname === "youtube.com") {
+            if (parsed.pathname === "/watch") {
+                const videoId = parsed.searchParams.get("v");
+                if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+                    return { videoId };
+                }
+            }
+            const shortsMatch = parsed.pathname.match(/^\/shorts\/([a-zA-Z0-9_-]{11})\/?$/);
+            if (shortsMatch) {
+                return { videoId: shortsMatch[1] };
+            }
+        }
+
+        if (hostname === "youtu.be") {
+            const videoId = parsed.pathname.slice(1).split("/")[0];
+            if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+                return { videoId };
+            }
+        }
+
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Detect the type of a submitted URL.
+ *
+ * @returns "apple" | "youtube" | "unknown"
+ */
+export function detectUrlType(url: string): "apple" | "youtube" | "unknown" {
+    if (parseApplePodcastsUrl(url)) return "apple";
+    if (parseYouTubeUrl(url)) return "youtube";
+    return "unknown";
+}
