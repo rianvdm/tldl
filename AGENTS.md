@@ -195,7 +195,7 @@ Defined in `src/lib/constants.ts`:
 ### Episode Tags
 
 Defined in `src/lib/constants.ts` (EPISODE_TAGS array):
-- 14 predefined tags: ai, business, creativity, education, entertainment, faith, health, music, politics, product, psychology, science, sport, technology
+- 15 predefined tags: ai, business, creativity, education, entertainment, faith, health, music, politics, product, psychology, science, sport, startup, technology
 - Tags are alphabetically sorted for consistency
 - Easy to add/remove tags — just edit the EPISODE_TAGS array
 - After removing tags, use "Cleanup Invalid Tags" admin tool to remove them from existing episodes
