@@ -48,7 +48,7 @@ describe("lookupPodcast", () => {
             expect.objectContaining({
                 headers: {
                     Accept: "application/json",
-                    "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+                    "User-Agent": "TLDL/1.0 (+https://tldl-pod.com/; podcast summary service)",
                 },
             })
         );

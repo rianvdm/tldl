@@ -4,7 +4,7 @@
  */
 
 import { AppError } from "../lib/errors";
-import { ERROR_CODES } from "../lib/constants";
+import { ERROR_CODES, USER_AGENT } from "../lib/constants";
 import { getCorrectedFeedUrl } from "../lib/feed-corrections";
 import type { ParsedAppleUrl } from "../lib/url-parser";
 import type { Env } from "../types";
@@ -69,7 +69,7 @@ async function getEpisodeTitleFromApplePage(
 
         const response = await fetch(appleUrl, {
             headers: {
-                "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+                "User-Agent": USER_AGENT,
                 "Accept": "text/html",
             },
         });
@@ -349,7 +349,7 @@ export async function lookupPodcast(
         const response = await fetch(url, {
             headers: {
                 Accept: "application/json",
-                "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+                "User-Agent": USER_AGENT,
             },
         });
 
@@ -428,7 +428,7 @@ export async function lookupEpisodeInfo(
         const response = await fetch(url, {
             headers: {
                 Accept: "application/json",
-                "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+                "User-Agent": USER_AGENT,
             },
         });
 

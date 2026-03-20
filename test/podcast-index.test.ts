@@ -48,7 +48,7 @@ describe("lookupPodcastByItunesId", () => {
             expect.objectContaining({
                 headers: expect.objectContaining({
                     "X-Auth-Key": "test-key",
-                    "User-Agent": "TLDL/1.0 (Podcast Summary Service)",
+                    "User-Agent": "TLDL/1.0 (+https://tldl-pod.com/; podcast summary service)",
                 }),
             })
         );

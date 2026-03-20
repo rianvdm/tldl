@@ -1,6 +1,16 @@
 import type { Template } from "../types";
 
 // ============================================================================
+// HTTP
+// ============================================================================
+
+/**
+ * User-Agent string for all outbound HTTP requests.
+ * Includes a contact URL so feed hosts can identify and whitelist us.
+ */
+export const USER_AGENT = "TLDL/1.0 (+https://tldl-pod.com/; podcast summary service)";
+
+// ============================================================================
 // Admin Users
 // ============================================================================
 

@@ -14,7 +14,7 @@ async function main() {
             console.log('Podcast name:', podcast.collectionName);
 
             // Now fetch and parse the feed
-            const feedResp = await fetch(podcast.feedUrl, { headers: { 'User-Agent': 'TLDL/1.0' } });
+            const feedResp = await fetch(podcast.feedUrl, { headers: { 'User-Agent': 'TLDL/1.0 (+https://tldl-pod.com/; podcast summary service)' } });
             const feedText = await feedResp.text();
 
             // Get all episode titles

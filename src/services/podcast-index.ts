@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { AppError } from "../lib/errors";
-import { ERROR_CODES } from "../lib/constants";
+import { ERROR_CODES, USER_AGENT } from "../lib/constants";
 import { stripTruncationSuffix } from "../lib/title-utils";
 
 // ============================================================================
@@ -74,7 +74,7 @@ function getAuthHeaders(apiKey: string, apiSecret: string): HeadersInit {
         "X-Auth-Date": apiHeaderTime.toString(),
         "X-Auth-Key": apiKey,
         "Authorization": hash,
-        "User-Agent": "TLDL/1.0 (Podcast Summary Service)"
+        "User-Agent": USER_AGENT
     };
 }
 

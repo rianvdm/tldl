@@ -5,7 +5,7 @@
 
 import { XMLParser } from "fast-xml-parser";
 import { AppError } from "../lib/errors";
-import { ERROR_CODES } from "../lib/constants";
+import { ERROR_CODES, USER_AGENT } from "../lib/constants";
 import { stripTruncationSuffix, isTruncatedTitle } from "../lib/title-utils";
 
 /**
@@ -110,7 +110,7 @@ export async function fetchAndParseFeed(feedUrl: string): Promise<ParsedFeed> {
         const response = await fetch(feedUrl, {
             headers: {
                 Accept: "application/rss+xml, application/xml, text/xml",
-                "User-Agent": "TLDL/1.0",
+                "User-Agent": USER_AGENT,
             },
             signal: controller.signal,
         });
@@ -528,7 +528,7 @@ export async function fetchTranscript(
     try {
         const response = await fetch(transcriptUrl, {
             headers: {
-                "User-Agent": "TLDL/1.0",
+                "User-Agent": USER_AGENT,
             },
         });
 
