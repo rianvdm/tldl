@@ -27,6 +27,7 @@ export function createProcessEpisodeMessage(params: {
     expectedTitle?: string;
     expectedDate?: string;
     submittedBy?: string;
+    audioUrlOverride?: string;
 }): QueueMessage {
     return {
         type: "process_episode",
@@ -38,6 +39,7 @@ export function createProcessEpisodeMessage(params: {
         ...(params.expectedTitle && { expectedTitle: params.expectedTitle }),
         ...(params.expectedDate && { expectedDate: params.expectedDate }),
         ...(params.submittedBy && { submittedBy: params.submittedBy }),
+        ...(params.audioUrlOverride && { audioUrlOverride: params.audioUrlOverride }),
     };
 }
 

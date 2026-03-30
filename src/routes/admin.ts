@@ -940,6 +940,16 @@ admin.get("/submit", async (c) => {
                 </div>
             </div>
 
+            <details class="form-group" style="margin-top: 1rem;">
+                <summary style="cursor: pointer; font-size: 0.9rem; color: #666;">Advanced options</summary>
+                <div style="margin-top: 0.5rem;">
+                    <label class="form-label" for="audioUrl">Audio URL (override)</label>
+                    <input type="url" id="audioUrl" name="audioUrl" class="form-input"
+                        placeholder="https://substackcdn.com/..." />
+                    <p class="form-help">Optional. Direct CDN URL to bypass rate-limited origins. Get it with: curl -sI -o /dev/null -w "%{redirect_url}" "AUDIO_URL"</p>
+                </div>
+            </details>
+
             <button type="submit" class="button button-primary">Submit Episode</button>
         </form>
     `;
@@ -962,15 +972,18 @@ admin.post("/submit", async (c) => {
     const contentType = c.req.header("Content-Type") || "";
     let appleUrl: string;
     let templateId: string;
+    let audioUrlOverride: string | undefined;
 
     if (contentType.includes("application/json")) {
-        const body = await c.req.json<{ appleUrl: string; templateId: string }>();
+        const body = await c.req.json<{ appleUrl: string; templateId: string; audioUrl?: string }>();
         appleUrl = body.appleUrl;
         templateId = body.templateId;
+        audioUrlOverride = body.audioUrl || undefined;
     } else {
         const formData = await c.req.parseBody();
         appleUrl = formData.appleUrl as string;
         templateId = formData.templateId as string;
+        audioUrlOverride = (formData.audioUrl as string) || undefined;
     }
 
     // Validate URL
@@ -1055,6 +1068,7 @@ admin.post("/submit", async (c) => {
         episodeGuid: episodeInfo?.episodeGuid,
         expectedTitle: episodeInfo?.trackName,
         expectedDate: episodeInfo?.releaseDate,
+        audioUrlOverride,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 

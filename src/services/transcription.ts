@@ -604,6 +604,8 @@ export interface TranscribeOptions {
     provider?: string;
     /** Optional callback for progress updates (chunk number, total chunks) */
     onProgress?: (currentChunk: number, totalChunks: number) => void;
+    /** Skip URL validation and redirect resolution (use when caller has already resolved the URL) */
+    skipValidation?: boolean;
 }
 
 /**
@@ -649,47 +651,52 @@ export async function transcribeAudio(
     // bypass origin rate limiting (e.g. Substack → CloudFront), then fall back
     // to direct fetch with unknown size.
     let validation: AudioValidation;
-    try {
-        validation = await withRetry(
-            () => validateAudioUrl(audioUrl),
-            { maxRetries: 3, baseDelayMs: 5000, shouldRetry: isRateLimitError },
-        );
-    } catch (error) {
-        if (error instanceof AppError && isRateLimitError(error)) {
-            // Origin is rate-limiting us — try resolving redirects to hit final CDN directly
-            const resolvedUrl = await resolveAudioUrl(audioUrl);
-            if (resolvedUrl !== audioUrl) {
-                audioUrl = resolvedUrl;
-                // Try validation again on the resolved URL
-                try {
-                    validation = await validateAudioUrl(audioUrl);
-                } catch {
-                    // Resolved URL also failed — fall back to direct fetch
+    if (opts.skipValidation) {
+        // Caller has already resolved the URL — skip validation and redirect resolution
+        validation = { contentLength: 0, contentType: "audio/mpeg" };
+    } else {
+        try {
+            validation = await withRetry(
+                () => validateAudioUrl(audioUrl),
+                { maxRetries: 3, baseDelayMs: 5000, shouldRetry: isRateLimitError },
+            );
+        } catch (error) {
+            if (error instanceof AppError && isRateLimitError(error)) {
+                // Origin is rate-limiting us — try resolving redirects to hit final CDN directly
+                const resolvedUrl = await resolveAudioUrl(audioUrl);
+                if (resolvedUrl !== audioUrl) {
+                    audioUrl = resolvedUrl;
+                    // Try validation again on the resolved URL
+                    try {
+                        validation = await validateAudioUrl(audioUrl);
+                    } catch {
+                        // Resolved URL also failed — fall back to direct fetch
+                        console.log(
+                            JSON.stringify({
+                                event: "validation_rate_limited_fallback",
+                                message: "Both origin and resolved URL rate-limited, falling back to direct fetch",
+                            })
+                        );
+                        validation = { contentLength: 0, contentType: "audio/mpeg" };
+                    }
+                } else {
                     console.log(
                         JSON.stringify({
                             event: "validation_rate_limited_fallback",
-                            message: "Both origin and resolved URL rate-limited, falling back to direct fetch",
+                            message: "HEAD request rate-limited, falling back to direct fetch",
                         })
                     );
                     validation = { contentLength: 0, contentType: "audio/mpeg" };
                 }
             } else {
-                console.log(
-                    JSON.stringify({
-                        event: "validation_rate_limited_fallback",
-                        message: "HEAD request rate-limited, falling back to direct fetch",
-                    })
-                );
-                validation = { contentLength: 0, contentType: "audio/mpeg" };
+                throw error;
             }
-        } else {
-            throw error;
         }
-    }
 
-    // Step 1.5: Resolve redirects to get final CDN URL
-    // This avoids rate limiting on the origin (e.g. api.substack.com → substackcdn.com)
-    audioUrl = await resolveAudioUrl(audioUrl);
+        // Step 1.5: Resolve redirects to get final CDN URL
+        // This avoids rate limiting on the origin (e.g. api.substack.com → substackcdn.com)
+        audioUrl = await resolveAudioUrl(audioUrl);
+    }
 
     // Step 2: Route based on file size
     if (requiresChunking(validation.contentLength)) {

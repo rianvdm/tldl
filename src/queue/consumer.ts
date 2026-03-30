@@ -80,6 +80,8 @@ interface ProcessingContext {
     episodeGuid?: string;
     expectedTitle?: string;
     expectedDate?: string;
+    // Override audio URL (bypasses origin rate limiting on redirecting hosts)
+    audioUrlOverride?: string;
     // User who submitted the episode
     submittedBy?: string;
 }
@@ -226,6 +228,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         episodeGuid: msg.episodeGuid,
         expectedTitle: msg.expectedTitle,
         expectedDate: msg.expectedDate,
+        audioUrlOverride: msg.audioUrlOverride,
         submittedBy: msg.submittedBy,
     };
 
@@ -378,9 +381,17 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const estimatedTranscriptionSeconds = Math.round((durationMinutes / 15) * 90);
         await updateJobEstimateBoth(env, kv, jobId, estimatedTranscriptionSeconds + 30);
 
+        const audioUrl = ctx.audioUrlOverride || metadata.audioUrl;
+        if (ctx.audioUrlOverride) {
+            console.log(JSON.stringify({
+                event: "using_audio_url_override",
+                override: ctx.audioUrlOverride,
+            }));
+        }
+
         const transcriptionResult = await transcribeAudio(
-            metadata.audioUrl,
-            { apiKey: env.OPENAI_API_KEY },
+            audioUrl,
+            { apiKey: env.OPENAI_API_KEY, skipValidation: !!ctx.audioUrlOverride },
         );
 
         transcriptSource = transcriptionResult.source;
