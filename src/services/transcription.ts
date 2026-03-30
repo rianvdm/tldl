@@ -6,7 +6,7 @@
  */
 
 import { AppError } from "../lib/errors";
-import { ERROR_CODES, TIMEOUTS, AUDIO_LIMITS } from "../lib/constants";
+import { ERROR_CODES, TIMEOUTS, AUDIO_LIMITS, AUDIO_USER_AGENT } from "../lib/constants";
 import { withRetry, isTransientError, isRateLimitError, sleep } from "../lib/retry";
 import {
     calculateChunkRanges,
@@ -197,6 +197,39 @@ export interface AudioValidation {
 }
 
 /**
+ * Resolve redirects to get the final audio URL.
+ * Many podcast CDNs (e.g. Substack) serve audio via a redirect to a different CDN
+ * (e.g. CloudFront). By resolving the redirect first, we can fetch directly from
+ * the final CDN and avoid rate limiting on the origin.
+ */
+export async function resolveAudioUrl(audioUrl: string): Promise<string> {
+    try {
+        const response = await fetch(audioUrl, {
+            method: "HEAD",
+            headers: { "User-Agent": AUDIO_USER_AGENT },
+            redirect: "manual",
+        });
+
+        if (response.status >= 300 && response.status < 400) {
+            const location = response.headers.get("Location");
+            if (location) {
+                console.log(
+                    JSON.stringify({
+                        event: "audio_url_redirect_resolved",
+                        originalHost: new URL(audioUrl).hostname,
+                        resolvedHost: new URL(location).hostname,
+                    })
+                );
+                return location;
+            }
+        }
+    } catch {
+        // If redirect resolution fails, fall back to original URL
+    }
+    return audioUrl;
+}
+
+/**
  * Validate audio URL accessibility and size via HEAD request.
  * 
  * @param audioUrl - URL of the audio file to validate
@@ -210,10 +243,19 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
     try {
         const response = await fetch(audioUrl, {
             method: "HEAD",
+            headers: { "User-Agent": AUDIO_USER_AGENT },
             signal: controller.signal,
         });
 
         clearTimeout(timeoutId);
+
+        if (response.status === 429) {
+            const retryAfter = parseInt(response.headers.get("Retry-After") || "0", 10);
+            throw new AppError(
+                ERROR_CODES.RATE_LIMITED,
+                `Audio rate limited: HTTP 429${retryAfter ? ` (retry-after: ${retryAfter}s)` : ""}`,
+            );
+        }
 
         if (!response.ok) {
             throw new AppError(
@@ -273,10 +315,19 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
 
     try {
         const response = await fetch(audioUrl, {
+            headers: { "User-Agent": AUDIO_USER_AGENT },
             signal: controller.signal,
         });
 
         clearTimeout(timeoutId);
+
+        if (response.status === 429) {
+            const retryAfter = parseInt(response.headers.get("Retry-After") || "0", 10);
+            throw new AppError(
+                ERROR_CODES.RATE_LIMITED,
+                `Audio rate limited: HTTP 429${retryAfter ? ` (retry-after: ${retryAfter}s)` : ""}`,
+            );
+        }
 
         if (!response.ok) {
             throw new AppError(
@@ -593,8 +644,52 @@ export async function transcribeAudio(
         })
     );
 
-    // Step 1: Validate audio URL and check size
-    const validation = await validateAudioUrl(audioUrl);
+    // Step 1: Validate audio URL and check size (with retry for rate limits)
+    // If HEAD request is persistently rate-limited, try resolving redirects to
+    // bypass origin rate limiting (e.g. Substack → CloudFront), then fall back
+    // to direct fetch with unknown size.
+    let validation: AudioValidation;
+    try {
+        validation = await withRetry(
+            () => validateAudioUrl(audioUrl),
+            { maxRetries: 3, baseDelayMs: 5000, shouldRetry: isRateLimitError },
+        );
+    } catch (error) {
+        if (error instanceof AppError && isRateLimitError(error)) {
+            // Origin is rate-limiting us — try resolving redirects to hit final CDN directly
+            const resolvedUrl = await resolveAudioUrl(audioUrl);
+            if (resolvedUrl !== audioUrl) {
+                audioUrl = resolvedUrl;
+                // Try validation again on the resolved URL
+                try {
+                    validation = await validateAudioUrl(audioUrl);
+                } catch {
+                    // Resolved URL also failed — fall back to direct fetch
+                    console.log(
+                        JSON.stringify({
+                            event: "validation_rate_limited_fallback",
+                            message: "Both origin and resolved URL rate-limited, falling back to direct fetch",
+                        })
+                    );
+                    validation = { contentLength: 0, contentType: "audio/mpeg" };
+                }
+            } else {
+                console.log(
+                    JSON.stringify({
+                        event: "validation_rate_limited_fallback",
+                        message: "HEAD request rate-limited, falling back to direct fetch",
+                    })
+                );
+                validation = { contentLength: 0, contentType: "audio/mpeg" };
+            }
+        } else {
+            throw error;
+        }
+    }
+
+    // Step 1.5: Resolve redirects to get final CDN URL
+    // This avoids rate limiting on the origin (e.g. api.substack.com → substackcdn.com)
+    audioUrl = await resolveAudioUrl(audioUrl);
 
     // Step 2: Route based on file size
     if (requiresChunking(validation.contentLength)) {
@@ -857,8 +952,8 @@ async function fetchAudioChunk(
     return withRetry(
         () => fetchAudioChunkOnce(audioUrl, startByte, endByte),
         {
-            maxRetries: 3,
-            baseDelayMs: 2000, // Longer delay for CDN rate limits
+            maxRetries: 4,
+            baseDelayMs: 5000, // Aggressive backoff for CDN rate limits (5s/10s/20s/40s)
             shouldRetry: isRateLimitError,
         }
     );
@@ -879,6 +974,7 @@ async function fetchAudioChunkOnce(
     try {
         const response = await fetch(audioUrl, {
             headers: {
+                "User-Agent": AUDIO_USER_AGENT,
                 Range: `bytes=${startByte}-${endByte}`,
             },
             signal: controller.signal,
@@ -888,7 +984,11 @@ async function fetchAudioChunkOnce(
 
         // Check for rate limiting (429) specifically
         if (response.status === 429) {
-            throw new Error(`CDN rate limited: HTTP 429`);
+            const retryAfter = parseInt(response.headers.get("Retry-After") || "0", 10);
+            throw new AppError(
+                ERROR_CODES.RATE_LIMITED,
+                `CDN rate limited: HTTP 429${retryAfter ? ` (retry-after: ${retryAfter}s)` : ""}`,
+            );
         }
 
         // Accept both 200 (full content) and 206 (partial content)

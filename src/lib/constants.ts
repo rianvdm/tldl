@@ -5,10 +5,17 @@ import type { Template } from "../types";
 // ============================================================================
 
 /**
- * User-Agent string for all outbound HTTP requests.
+ * User-Agent string for API and feed requests.
  * Includes a contact URL so feed hosts can identify and whitelist us.
  */
 export const USER_AGENT = "TLDL/1.0 (+https://tldl-pod.com/; podcast summary service)";
+
+/**
+ * User-Agent string for audio file downloads.
+ * Uses a standard podcast client format to avoid CDN rate limiting
+ * (many CDNs aggressively throttle non-browser/non-player UAs for large media files).
+ */
+export const AUDIO_USER_AGENT = "TLDL/1.0 (Podcast Client; +https://tldl-pod.com/)";
 
 // ============================================================================
 // Admin Users

@@ -128,6 +128,8 @@ export interface QueueMessage {
     episodeGuid?: string;
     expectedTitle?: string;
     expectedDate?: string;
+    // Override audio URL (bypasses origin rate limiting on redirecting hosts)
+    audioUrlOverride?: string;
     // User who submitted the episode
     submittedBy?: string;
 }

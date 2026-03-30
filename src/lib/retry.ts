@@ -51,8 +51,10 @@ export async function withRetry<T>(
                 throw lastError;
             }
 
-            // Calculate delay with exponential backoff
-            const delay = baseDelayMs * Math.pow(2, attempt);
+            // Calculate delay with exponential backoff, respecting Retry-After header if present
+            const retryAfterMatch = lastError.message.match(/retry-after: (\d+)s/);
+            const retryAfterMs = retryAfterMatch ? parseInt(retryAfterMatch[1], 10) * 1000 : 0;
+            const delay = Math.max(retryAfterMs, baseDelayMs * Math.pow(2, attempt));
             await sleep(delay);
         }
     }

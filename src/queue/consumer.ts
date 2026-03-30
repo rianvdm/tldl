@@ -139,8 +139,9 @@ const queueHandler = {
                     })
                 );
 
-                // Check if we've exhausted retries (max_retries = 2 in wrangler.toml means 3 total attempts)
-                const maxAttempts = 3;
+                // Rate-limited jobs get more attempts with longer backoff to let CDN cool down
+                const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
+                const maxAttempts = isRateLimited ? 5 : 3;
                 if (message.attempts >= maxAttempts) {
                     // Final attempt failed - mark job as failed and acknowledge
                     try {
@@ -184,9 +185,10 @@ const queueHandler = {
                     }
                     message.ack(); // Don't retry anymore
                 } else {
-                    // Determine retry delay - use longer delay for rate limits
-                    const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
-                    const delaySeconds = isRateLimited ? 15 : 5; // 15s for rate limit, 5s for other errors
+                    // Use much longer delays for CDN rate limits — short retries just extend the ban
+                    const delaySeconds = isRateLimited
+                        ? 120 * message.attempts  // 2min, 4min, 6min, 8min, 10min
+                        : 5;
 
                     console.log(
                         JSON.stringify({

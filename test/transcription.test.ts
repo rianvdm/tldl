@@ -129,6 +129,8 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             // Mock audio fetch
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
@@ -166,6 +168,8 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             // Header fetch (bytes 0-511) for prepending to non-first chunks
             .mockResolvedValueOnce(
                 new Response(new ArrayBuffer(512), { status: 206 })
@@ -219,6 +223,8 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -248,6 +254,8 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -281,6 +289,8 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -403,6 +413,8 @@ describe("transcribeAudio with options object", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -419,7 +431,7 @@ describe("transcribeAudio with options object", () => {
         expect(result.source).toBe("openai");
 
         // Verify the Whisper API was called with OpenAI URL
-        const whisperCall = fetchSpy.mock.calls[2];
+        const whisperCall = fetchSpy.mock.calls[3];
         expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
     });
 
@@ -436,6 +448,8 @@ describe("transcribeAudio with options object", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -452,7 +466,7 @@ describe("transcribeAudio with options object", () => {
         expect(result.source).toBe("openai");
 
         // Verify it used OpenAI URL
-        const whisperCall = fetchSpy.mock.calls[2];
+        const whisperCall = fetchSpy.mock.calls[3];
         expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
     });
 
@@ -469,6 +483,8 @@ describe("transcribeAudio with options object", () => {
                     },
                 })
             )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
