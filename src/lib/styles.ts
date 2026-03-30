@@ -1079,6 +1079,12 @@ h4 {
     font-size: 0.875rem;
 }
 
+.form-help {
+    font-size: 0.8rem;
+    color: var(--muted-foreground);
+    margin: 0;
+}
+
 .form-input {
     padding: 0.75rem 1rem;
     font-size: 0.875rem;

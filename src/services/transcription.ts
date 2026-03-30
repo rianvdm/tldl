@@ -812,6 +812,7 @@ async function transcribeWithChunking(
 
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
+    let usedFallbackModel: string | null = null;
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -882,6 +883,11 @@ async function transcribeWithChunking(
                 overlapBytes: chunk.overlapBytes,
             });
 
+            // Track actual model used (may differ from primary if fallback occurred)
+            if (chunkResult.model !== provider.model) {
+                usedFallbackModel = chunkResult.model;
+            }
+
             console.log(
                 JSON.stringify({
                     event: "chunk_completed",
@@ -927,7 +933,7 @@ async function transcribeWithChunking(
     return {
         text: combinedText,
         source: provider.name,
-        model: provider.model,
+        model: usedFallbackModel || provider.model,
     };
 }
 

@@ -925,7 +925,7 @@ admin.get("/submit", async (c) => {
 
         <div class="divider"></div>
 
-        <form method="POST" action="/admin/submit" class="card">
+        <form method="POST" action="/admin/submit" class="card" style="display: flex; flex-direction: column; gap: 1.5rem;">
             <div class="form-group">
                 <label class="form-label" for="appleUrl">Apple Podcasts Episode URL</label>
                 <input type="url" id="appleUrl" name="appleUrl" class="form-input"
@@ -940,13 +940,13 @@ admin.get("/submit", async (c) => {
                 </div>
             </div>
 
-            <details class="form-group" style="margin-top: 1rem;">
-                <summary style="cursor: pointer; font-size: 0.9rem; color: #666;">Advanced options</summary>
-                <div style="margin-top: 0.5rem;">
+            <details style="margin-top: 0.5rem;">
+                <summary style="cursor: pointer; font-size: 0.8rem; color: var(--muted-foreground);">Advanced options</summary>
+                <div class="form-group" style="margin-top: 0.75rem;">
                     <label class="form-label" for="audioUrl">Audio URL (override)</label>
                     <input type="url" id="audioUrl" name="audioUrl" class="form-input"
                         placeholder="https://substackcdn.com/..." />
-                    <p class="form-help">Optional. Direct CDN URL to bypass rate-limited origins. Get it with: curl -sI -o /dev/null -w "%{redirect_url}" "AUDIO_URL"</p>
+                    <p class="form-help">Optional. Direct CDN URL to bypass rate-limited origins.</p>
                 </div>
             </details>
 
