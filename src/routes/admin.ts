@@ -1789,7 +1789,7 @@ admin.get("/podcasts", async (c) => {
                 <form id="settings-form" style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
                     <div class="form-group checkbox-group" style="margin: 0;">
                         <input type="checkbox" id="enabled" name="enabled" ${settings.enabled ? "checked" : ""} />
-                        <label for="enabled">Auto-check (every 1h)</label>
+                        <label for="enabled">Auto-check</label>
                     </div>
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                         <label class="form-label" for="maxEpisodes" style="margin: 0; white-space: nowrap;">Max episodes/check:</label>
