@@ -146,7 +146,15 @@ export async function addPodcastToMonitoring(
     }
 
     // Mark all existing episode GUIDs as processed (prevent backlog cascade)
-    await markEpisodesProcessed(env.TLDL_DATA, podcastId, episodeGuids);
+    // Exclude the latest episode so the check flow can pick it up if the
+    // add flow's own queue-latest step fails silently.
+    const latestGuid = queueLatest && piEpisodes.length > 0
+        ? piEpisodes[0].guid
+        : null;
+    const guidsToMark = latestGuid
+        ? episodeGuids.filter(g => g !== latestGuid)
+        : episodeGuids;
+    await markEpisodesProcessed(env.TLDL_DATA, podcastId, guidsToMark);
 
     // Create the monitored podcast record
     const podcast: MonitoredPodcast = {
@@ -182,6 +190,7 @@ export async function addPodcastToMonitoring(
                 templateId,
                 appleUrl: `https://podcasts.apple.com/us/podcast/podcast/id${podcastId}?i=${latestEpisode.id}`,
             });
+            await markEpisodeProcessed(env.TLDL_DATA, podcastId, latestEpisode.guid);
             queuedLatest = true;
         }
     }
