@@ -3,6 +3,9 @@
  *
  * Tests the monitoring logic for detecting and queuing new episodes.
  * Uses mocked services to avoid external API calls.
+ *
+ * Primary strategy: Podcast Index API (PI-first)
+ * Fallback: RSS feed (when PI fails)
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -83,7 +86,7 @@ async function clearMonitorData() {
 }
 
 // ============================================================================
-// Tests
+// Tests — PI-first strategy
 // ============================================================================
 
 describe("checkPodcastForNewEpisodes", () => {
@@ -92,79 +95,11 @@ describe("checkPodcastForNewEpisodes", () => {
         vi.clearAllMocks();
     });
 
-    it("does NOT mark episode as processed when Podcast Index has no match (allows retry)", async () => {
+    it("queues new episode found via Podcast Index", async () => {
         const podcast = createTestPodcast();
         await saveMonitoredPodcast(env.TLDL_DATA, podcast);
 
-        // Pre-mark one old episode as processed
-        await markEpisodesProcessed(env.TLDL_DATA, podcast.id, ["old-guid-1"]);
-
-        // RSS feed returns two episodes: one old (processed), one new
-        vi.mocked(fetchAndParseFeed).mockResolvedValue({
-            title: "Test Podcast",
-            episodes: [
-                {
-                    guid: "new-guid-1",
-                    title: "Brand New Episode",
-                    pubDate: "2026-03-16T11:00:00.000Z",
-                    audioUrl: "https://example.com/new.mp3",
-                    duration: 1800,
-                },
-                {
-                    guid: "old-guid-1",
-                    title: "Old Episode",
-                    pubDate: "2026-03-01T11:00:00.000Z",
-                    audioUrl: "https://example.com/old.mp3",
-                    duration: 1800,
-                },
-            ],
-        });
-
-        // Podcast Index returns NO episodes (hasn't indexed the new one yet)
-        vi.mocked(getEpisodesByItunesId).mockResolvedValue([]);
-
-        const result = await checkPodcastForNewEpisodes(getTestEnv(), podcast);
-
-        // Should report an error about not finding the episode ID
-        expect(result.errors.length).toBeGreaterThan(0);
-        expect(result.errors[0]).toContain("Brand New Episode");
-
-        // The episode should NOT be queued
-        expect(result.newEpisodes).toBe(0);
-
-        // CRITICAL: The episode GUID should NOT be in the processed list
-        // so the next cron run can retry
-        const processed = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
-        expect(processed).not.toContain("new-guid-1");
-        expect(processed).toContain("old-guid-1"); // old one still there
-    });
-
-    it("queues episode when Podcast Index match is found on retry", async () => {
-        const podcast = createTestPodcast();
-        await saveMonitoredPodcast(env.TLDL_DATA, podcast);
-
-        // RSS feed with one new episode
-        vi.mocked(fetchAndParseFeed).mockResolvedValue({
-            title: "Test Podcast",
-            episodes: [
-                {
-                    guid: "new-guid-1",
-                    title: "Brand New Episode",
-                    pubDate: "2026-03-16T11:00:00.000Z",
-                    audioUrl: "https://example.com/new.mp3",
-                    duration: 1800,
-                },
-            ],
-        });
-
-        // First check: PI has no match
-        vi.mocked(getEpisodesByItunesId).mockResolvedValue([]);
-
-        const result1 = await checkPodcastForNewEpisodes(getTestEnv(), podcast);
-        expect(result1.newEpisodes).toBe(0);
-        expect(result1.errors.length).toBeGreaterThan(0);
-
-        // Second check: PI now has the episode
+        // PI returns one new episode
         vi.mocked(getEpisodesByItunesId).mockResolvedValue([
             {
                 id: 999888,
@@ -176,31 +111,56 @@ describe("checkPodcastForNewEpisodes", () => {
             },
         ]);
 
-        const result2 = await checkPodcastForNewEpisodes(getTestEnv(), podcast);
-        expect(result2.newEpisodes).toBe(1);
-        expect(result2.queued).toContain("Brand New Episode");
+        const result = await checkPodcastForNewEpisodes(getTestEnv(), podcast);
 
-        // Now it should be marked processed
+        expect(result.newEpisodes).toBe(1);
+        expect(result.queued).toContain("Brand New Episode");
+        expect(result.errors).toHaveLength(0);
+
+        // Should be marked as processed
         const processed = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
         expect(processed).toContain("new-guid-1");
+
+        // RSS should NOT have been called (PI succeeded)
+        expect(fetchAndParseFeed).not.toHaveBeenCalled();
+    });
+
+    it("reports no new episodes when all are already processed", async () => {
+        const podcast = createTestPodcast();
+        await saveMonitoredPodcast(env.TLDL_DATA, podcast);
+
+        // All episodes already processed
+        await markEpisodesProcessed(env.TLDL_DATA, podcast.id, ["guid-1", "guid-2"]);
+
+        // PI returns the same episodes (filtered by since, but GUIDs match processed)
+        vi.mocked(getEpisodesByItunesId).mockResolvedValue([
+            {
+                id: 111,
+                guid: "guid-1",
+                title: "Episode 1",
+                datePublished: Math.floor(new Date("2026-03-15T11:00:00.000Z").getTime() / 1000),
+                duration: 1800,
+                enclosureUrl: "https://example.com/1.mp3",
+            },
+            {
+                id: 222,
+                guid: "guid-2",
+                title: "Episode 2",
+                datePublished: Math.floor(new Date("2026-03-14T11:00:00.000Z").getTime() / 1000),
+                duration: 1800,
+                enclosureUrl: "https://example.com/2.mp3",
+            },
+        ]);
+
+        const result = await checkPodcastForNewEpisodes(getTestEnv(), podcast);
+
+        expect(result.newEpisodes).toBe(0);
+        expect(result.errors).toHaveLength(0);
     });
 
     it("marks episode processed when it already exists in KV", async () => {
         const podcast = createTestPodcast();
         await saveMonitoredPodcast(env.TLDL_DATA, podcast);
-
-        vi.mocked(fetchAndParseFeed).mockResolvedValue({
-            title: "Test Podcast",
-            episodes: [
-                {
-                    guid: "existing-guid",
-                    title: "Already Processed Episode",
-                    pubDate: "2026-03-15T11:00:00.000Z",
-                    audioUrl: "https://example.com/existing.mp3",
-                    duration: 1800,
-                },
-            ],
-        });
 
         vi.mocked(getEpisodesByItunesId).mockResolvedValue([
             {
@@ -230,33 +190,42 @@ describe("checkPodcastForNewEpisodes", () => {
         // Should not queue (already exists)
         expect(result.newEpisodes).toBe(0);
 
-        // Should be marked as processed (correct — it genuinely exists)
+        // Should be marked as processed
         const processed = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
         expect(processed).toContain("existing-guid");
     });
 
-    it("reports no new episodes when all are already processed", async () => {
+    it("falls back to RSS when Podcast Index is rate-limited", async () => {
         const podcast = createTestPodcast();
         await saveMonitoredPodcast(env.TLDL_DATA, podcast);
 
-        // All episodes already processed
-        await markEpisodesProcessed(env.TLDL_DATA, podcast.id, ["guid-1", "guid-2"]);
+        const { AppError } = await import("../src/lib/errors");
+        const { ERROR_CODES } = await import("../src/lib/constants");
 
+        // First call (PI-first): rate limited
+        // Second call (RSS fallback PI lookup): returns the episode
+        vi.mocked(getEpisodesByItunesId)
+            .mockRejectedValueOnce(new AppError(ERROR_CODES.RATE_LIMITED, "Rate limited"))
+            .mockResolvedValueOnce([
+                {
+                    id: 999888,
+                    guid: "new-guid-1",
+                    title: "Brand New Episode",
+                    datePublished: Math.floor(new Date("2026-03-16T11:00:00.000Z").getTime() / 1000),
+                    duration: 1800,
+                    enclosureUrl: "https://example.com/new.mp3",
+                },
+            ]);
+
+        // RSS feed for fallback
         vi.mocked(fetchAndParseFeed).mockResolvedValue({
             title: "Test Podcast",
             episodes: [
                 {
-                    guid: "guid-1",
-                    title: "Episode 1",
-                    pubDate: "2026-03-15T11:00:00.000Z",
-                    audioUrl: "https://example.com/1.mp3",
-                    duration: 1800,
-                },
-                {
-                    guid: "guid-2",
-                    title: "Episode 2",
-                    pubDate: "2026-03-14T11:00:00.000Z",
-                    audioUrl: "https://example.com/2.mp3",
+                    guid: "new-guid-1",
+                    title: "Brand New Episode",
+                    pubDate: "2026-03-16T11:00:00.000Z",
+                    audioUrl: "https://example.com/new.mp3",
                     duration: 1800,
                 },
             ],
@@ -264,9 +233,9 @@ describe("checkPodcastForNewEpisodes", () => {
 
         const result = await checkPodcastForNewEpisodes(getTestEnv(), podcast);
 
-        expect(result.newEpisodes).toBe(0);
-        expect(result.errors).toHaveLength(0);
-        // getEpisodesByItunesId should not even be called — no new episodes
-        expect(getEpisodesByItunesId).not.toHaveBeenCalled();
+        expect(result.newEpisodes).toBe(1);
+        expect(result.queued).toContain("Brand New Episode");
+        // RSS should have been called as fallback
+        expect(fetchAndParseFeed).toHaveBeenCalled();
     });
 });

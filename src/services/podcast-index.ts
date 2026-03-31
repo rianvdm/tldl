@@ -173,9 +173,13 @@ export async function getEpisodesByItunesId(
     itunesId: string,
     apiKey: string,
     apiSecret: string,
-    max: number = 1000
+    max: number = 1000,
+    since?: number
 ): Promise<PodcastIndexEpisode[]> {
-    const url = `https://api.podcastindex.org/api/1.0/episodes/byitunesid?id=${itunesId}&max=${max}`;
+    let url = `https://api.podcastindex.org/api/1.0/episodes/byitunesid?id=${itunesId}&max=${max}`;
+    if (since) {
+        url += `&since=${since}`;
+    }
 
     try {
         console.log(JSON.stringify({

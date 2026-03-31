@@ -22,6 +22,8 @@ import { lookupPodcastByItunesId, getEpisodesByItunesId } from "../services/podc
 import { createJob } from "./kv";
 import { enqueueJob, createProcessEpisodeMessage } from "./queue";
 import { createJobDO } from "./job-status-do";
+import { AppError } from "./errors";
+import { ERROR_CODES } from "./constants";
 
 // Generate a UUID v4
 function generateUUID(): string {
@@ -180,6 +182,8 @@ export async function addPodcastToMonitoring(
 
 /**
  * Check a single podcast for new episodes
+ * Primary strategy: Podcast Index API (avoids RSS feed 429s from CDNs)
+ * Fallback: RSS feed (if PI is rate-limited)
  */
 export async function checkPodcastForNewEpisodes(
     env: Env,
@@ -195,82 +199,167 @@ export async function checkPodcastForNewEpisodes(
     };
 
     try {
-        // Fetch RSS feed
-        const feed = await fetchAndParseFeed(podcast.rssUrl);
+        // Calculate "since" timestamp: lastChecked or 7 days ago
+        const sinceDate = podcast.lastChecked
+            ? new Date(podcast.lastChecked)
+            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const sinceEpoch = Math.floor(sinceDate.getTime() / 1000);
 
-        // Get already-processed GUIDs
-        const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
-        const processedSet = new Set(processedGuids);
+        try {
+            // Primary: Podcast Index API with since filter
+            console.log(JSON.stringify({
+                event: "monitor_check_strategy",
+                podcastId: podcast.id,
+                podcastName: podcast.name,
+                strategy: "podcast_index",
+                since: sinceDate.toISOString(),
+                sinceEpoch,
+            }));
 
-        // Find new episodes (not in processed list)
-        const newEpisodes = feed.episodes.filter(ep => !processedSet.has(ep.guid));
+            const piEpisodes = await getEpisodesByItunesId(
+                podcast.id,
+                env.PODCAST_INDEX_KEY,
+                env.PODCAST_INDEX_SECRET,
+                100,
+                sinceEpoch
+            );
 
-        if (newEpisodes.length === 0) {
-            // Update lastChecked even if no new episodes
-            await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {
-                lastChecked: new Date().toISOString(),
-                status: "active",
-            });
-            return result;
-        }
+            console.log(JSON.stringify({
+                event: "monitor_pi_new_episodes",
+                podcastId: podcast.id,
+                podcastName: podcast.name,
+                episodeCount: piEpisodes.length,
+            }));
 
-        // Get Podcast Index episodes for ID mapping
-        const piEpisodes = await getEpisodesByItunesId(
-            podcast.id,
-            env.PODCAST_INDEX_KEY,
-            env.PODCAST_INDEX_SECRET,
-            100
-        );
+            // Filter against already-processed GUIDs
+            const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
+            const processedSet = new Set(processedGuids);
+            const newEpisodes = piEpisodes.filter(ep => !processedSet.has(ep.guid));
 
-        // Process new episodes (up to max)
-        const episodesToProcess = newEpisodes.slice(0, maxEpisodes);
-
-        for (const rssEpisode of episodesToProcess) {
-            try {
-                // Find matching Podcast Index episode
-                const matchedPiEpisode = findMatchingPiEpisode(rssEpisode, piEpisodes);
-
-                if (!matchedPiEpisode) {
-                    result.errors.push(`Could not find episode ID for: ${rssEpisode.title}`);
-                    // Don't mark as processed — Podcast Index may not have indexed
-                    // this episode yet. It will be retried on the next cron check.
-                    console.log(JSON.stringify({
-                        event: "monitor_pi_match_not_found",
-                        podcastId: podcast.id,
-                        episodeTitle: rssEpisode.title,
-                        episodeGuid: rssEpisode.guid,
-                    }));
-                    continue;
-                }
-
-                const episodeId = `${podcast.id}_${matchedPiEpisode.id}`;
-
-                // Check if already in KV by ID or title (handles Apple vs Podcast Index ID mismatch)
-                const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
-                const existsByTitle = await episodeExistsByTitle(env, podcast.id, rssEpisode.title);
-
-                if (existingEpisode || existsByTitle) {
-                    await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
-                    continue;
-                }
-
-                // Queue the episode
-                await queueEpisodeForProcessing(env, {
-                    podcastId: podcast.id,
-                    episodeId,
-                    episodeGuid: rssEpisode.guid,
-                    expectedTitle: rssEpisode.title,
-                    expectedDate: rssEpisode.pubDate,
-                    templateId: podcast.templateId,
-                    appleUrl: `https://podcasts.apple.com/us/podcast/podcast/id${podcast.id}?i=${matchedPiEpisode.id}`,
+            if (newEpisodes.length === 0) {
+                await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {
+                    lastChecked: new Date().toISOString(),
+                    status: "active",
                 });
+                return result;
+            }
 
-                await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
-                result.queued.push(rssEpisode.title);
-                result.newEpisodes++;
+            // Process new episodes (up to max)
+            const episodesToProcess = newEpisodes.slice(0, maxEpisodes);
 
-            } catch (error) {
-                result.errors.push(`Error processing ${rssEpisode.title}: ${error instanceof Error ? error.message : String(error)}`);
+            for (const piEpisode of episodesToProcess) {
+                try {
+                    const episodeId = `${podcast.id}_${piEpisode.id}`;
+
+                    // Check if already in KV by ID or title
+                    const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
+                    const existsByTitle = await episodeExistsByTitle(env, podcast.id, piEpisode.title);
+
+                    if (existingEpisode || existsByTitle) {
+                        await markEpisodeProcessed(env.TLDL_DATA, podcast.id, piEpisode.guid);
+                        continue;
+                    }
+
+                    // Queue the episode — PI provides everything we need
+                    await queueEpisodeForProcessing(env, {
+                        podcastId: podcast.id,
+                        episodeId,
+                        episodeGuid: piEpisode.guid,
+                        expectedTitle: piEpisode.title,
+                        expectedDate: new Date(piEpisode.datePublished * 1000).toISOString(),
+                        templateId: podcast.templateId,
+                        appleUrl: `https://podcasts.apple.com/us/podcast/podcast/id${podcast.id}?i=${piEpisode.id}`,
+                    });
+
+                    await markEpisodeProcessed(env.TLDL_DATA, podcast.id, piEpisode.guid);
+                    result.queued.push(piEpisode.title);
+                    result.newEpisodes++;
+
+                } catch (error) {
+                    result.errors.push(`Error processing ${piEpisode.title}: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+
+        } catch (piError) {
+            // Fallback to RSS if PI fails (e.g. rate limited)
+            const reason = piError instanceof AppError && piError.code === ERROR_CODES.RATE_LIMITED
+                ? "podcast_index_rate_limited"
+                : "podcast_index_error";
+
+            console.log(JSON.stringify({
+                event: "monitor_check_fallback_to_rss",
+                podcastId: podcast.id,
+                podcastName: podcast.name,
+                reason,
+                error: piError instanceof Error ? piError.message : String(piError),
+            }));
+
+            // RSS fallback: original flow
+            const feed = await fetchAndParseFeed(podcast.rssUrl);
+            const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
+            const processedSet = new Set(processedGuids);
+            const newEpisodes = feed.episodes.filter(ep => !processedSet.has(ep.guid));
+
+            if (newEpisodes.length === 0) {
+                await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {
+                    lastChecked: new Date().toISOString(),
+                    status: "active",
+                });
+                return result;
+            }
+
+            // Need PI episodes for ID mapping in RSS fallback
+            // Use a fresh call without since (PI rate limit may have been transient)
+            const piEpisodes = await getEpisodesByItunesId(
+                podcast.id,
+                env.PODCAST_INDEX_KEY,
+                env.PODCAST_INDEX_SECRET,
+                100
+            );
+
+            const episodesToProcess = newEpisodes.slice(0, maxEpisodes);
+
+            for (const rssEpisode of episodesToProcess) {
+                try {
+                    const matchedPiEpisode = findMatchingPiEpisode(rssEpisode, piEpisodes);
+
+                    if (!matchedPiEpisode) {
+                        result.errors.push(`Could not find episode ID for: ${rssEpisode.title}`);
+                        console.log(JSON.stringify({
+                            event: "monitor_pi_match_not_found",
+                            podcastId: podcast.id,
+                            episodeTitle: rssEpisode.title,
+                            episodeGuid: rssEpisode.guid,
+                        }));
+                        continue;
+                    }
+
+                    const episodeId = `${podcast.id}_${matchedPiEpisode.id}`;
+                    const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
+                    const existsByTitle = await episodeExistsByTitle(env, podcast.id, rssEpisode.title);
+
+                    if (existingEpisode || existsByTitle) {
+                        await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
+                        continue;
+                    }
+
+                    await queueEpisodeForProcessing(env, {
+                        podcastId: podcast.id,
+                        episodeId,
+                        episodeGuid: rssEpisode.guid,
+                        expectedTitle: rssEpisode.title,
+                        expectedDate: rssEpisode.pubDate,
+                        templateId: podcast.templateId,
+                        appleUrl: `https://podcasts.apple.com/us/podcast/podcast/id${podcast.id}?i=${matchedPiEpisode.id}`,
+                    });
+
+                    await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
+                    result.queued.push(rssEpisode.title);
+                    result.newEpisodes++;
+
+                } catch (error) {
+                    result.errors.push(`Error processing ${rssEpisode.title}: ${error instanceof Error ? error.message : String(error)}`);
+                }
             }
         }
 
