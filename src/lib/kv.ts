@@ -851,6 +851,33 @@ export async function appendActivityEvent(
 }
 
 /**
+ * Remove a failed activity event by episodeId.
+ */
+export async function removeActivityEvent(
+    kv: KVNamespace,
+    episodeId: string
+): Promise<boolean> {
+    const data = await kv.get(KV_KEYS.activityLog);
+    if (!data) return false;
+
+    try {
+        const log: ActivityEvent[] = JSON.parse(data);
+        const idx = log.findIndex(
+            (e) => e.type === "episode_failed" && e.episodeId === episodeId
+        );
+        if (idx === -1) return false;
+
+        log.splice(idx, 1);
+        await kv.put(KV_KEYS.activityLog, JSON.stringify(log), {
+            expirationTtl: TTL.ACTIVITY_LOG,
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Read the activity log, optionally limited to the most recent N entries.
  */
 export async function getActivityLog(

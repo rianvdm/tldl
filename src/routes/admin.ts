@@ -25,6 +25,7 @@ import {
     deleteMonitoredPodcast,
     updateEpisodeTags,
     getActivityLog,
+    removeActivityEvent,
     getPodcastList,
 } from "../lib/kv";
 import {
@@ -274,6 +275,10 @@ admin.get("/", async (c) => {
                 ? `<span class="activity-details">${escapeHtml(event.details)}</span>`
                 : "";
 
+            const clearBtn = event.type === "episode_failed" && event.episodeId
+                ? `<button type="button" class="activity-clear-btn" onclick="clearFailedJob('${escapeHtml(event.episodeId)}', this)" title="Clear failed job">✕</button>`
+                : "";
+
             return `<div class="activity-item">
                 ${icon}
                 <div class="activity-content">
@@ -281,6 +286,7 @@ admin.get("/", async (c) => {
                     ${detailsHtml}
                 </div>
                 <span class="activity-time">${formatRelativeTime(event.timestamp)}</span>
+                ${clearBtn}
             </div>`;
         }).join("")
         : `<p class="text-muted">No recent activity.</p>`;
@@ -683,6 +689,26 @@ async function cleanupFailedJobs() {
     result.style.display = 'block';
     btn.disabled = false;
     btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg> Clean Up Failed Jobs';
+}
+
+async function clearFailedJob(episodeId, btn) {
+    const item = btn.closest('.activity-item');
+    btn.disabled = true;
+    try {
+        const res = await fetch('/admin/activity/' + encodeURIComponent(episodeId), { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            item.style.transition = 'opacity 0.3s';
+            item.style.opacity = '0';
+            setTimeout(() => item.remove(), 300);
+        } else {
+            alert('Failed to clear job: ' + (data.error || 'Unknown error'));
+            btn.disabled = false;
+        }
+    } catch (e) {
+        alert('Failed to clear job');
+        btn.disabled = false;
+    }
 }
 
 async function backfillTags() {
@@ -1347,6 +1373,41 @@ admin.delete("/jobs/:jobId", async (c) => {
         message: `Job ${jobId} deleted`,
         previousStatus: job?.status || "not found",
     });
+});
+
+// ============================================================================
+// DELETE /activity/:episodeId - Clear a failed job and its activity log entry
+// ============================================================================
+
+admin.delete("/activity/:episodeId", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    const episodeId = c.req.param("episodeId");
+
+    try {
+        // Find the failed job by episodeId
+        const jobs = await listActiveJobsWithDO(c.env, c.env.TLDL_DATA);
+        const failedJob = jobs.find(
+            (j) => j.episodeId === episodeId && j.status === "failed"
+        );
+
+        // Delete the job if it still exists
+        if (failedJob) {
+            await deleteJobDO(c.env, failedJob.id);
+            await deleteJob(c.env.TLDL_DATA, failedJob.id);
+        }
+
+        // Always remove the activity log entry (job may have expired via TTL)
+        await removeActivityEvent(c.env.TLDL_DATA, episodeId);
+
+        return c.json({ success: true });
+    } catch (error) {
+        return c.json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+        }, 500);
+    }
 });
 
 // ============================================================================
