@@ -180,6 +180,16 @@ export async function addPodcastToMonitoring(
         const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
         const existsByTitle = await episodeExistsByTitle(env, podcastId, latestEpisode.title);
 
+        console.log(JSON.stringify({
+            event: "monitor_add_queue_latest_check",
+            podcastId,
+            episodeId,
+            episodeTitle: latestEpisode.title,
+            episodeGuid: latestEpisode.guid,
+            existsById: !!existingEpisode,
+            existsByTitle: existsByTitle,
+        }));
+
         if (!existingEpisode && !existsByTitle) {
             await queueEpisodeForProcessing(env, {
                 podcastId,
