@@ -1235,25 +1235,45 @@ interface EpisodeWithSummary extends EpisodeIndexEntry {
 }
 
 /**
- * Build RSS 2.0 feed XML with summaries
+ * Options for scoping an RSS feed to a specific podcast
+ */
+interface PodcastFeedFilter {
+    podcastId: string;
+    podcastName: string;
+}
+
+/**
+ * Build RSS 2.0 feed XML with summaries.
+ * Pass `podcastFilter` to scope the feed to a single podcast (used by /podcasts/:id/feed).
+ * Pass `tagFilter` to scope the global feed to a topic tag (used by /feed?tag=).
  */
 function buildRssFeed(
     episodes: EpisodeWithSummary[],
     tagFilter: string | undefined,
-    baseUrl: string
+    baseUrl: string,
+    podcastFilter?: PodcastFeedFilter
 ): string {
-    const feedTitle = tagFilter
-        ? `TL;DL - ${tagFilter} episodes`
-        : "TL;DL - Too Long Didn't Listen";
-    const feedDescription = tagFilter
-        ? `AI-generated podcast summaries tagged with "${tagFilter}"`
-        : "AI-generated podcast summaries from Apple Podcasts";
-    const feedLink = tagFilter
-        ? `${baseUrl}/?tag=${encodeURIComponent(tagFilter)}`
-        : baseUrl;
-    const selfLink = tagFilter
-        ? `${baseUrl}/feed?tag=${encodeURIComponent(tagFilter)}`
-        : `${baseUrl}/feed`;
+    let feedTitle: string;
+    let feedDescription: string;
+    let feedLink: string;
+    let selfLink: string;
+
+    if (podcastFilter) {
+        feedTitle = `TL;DL - ${podcastFilter.podcastName}`;
+        feedDescription = `AI-generated summaries for ${podcastFilter.podcastName}`;
+        feedLink = `${baseUrl}/podcasts/${podcastFilter.podcastId}`;
+        selfLink = `${baseUrl}/podcasts/${podcastFilter.podcastId}/feed`;
+    } else if (tagFilter) {
+        feedTitle = `TL;DL - ${tagFilter} episodes`;
+        feedDescription = `AI-generated podcast summaries tagged with "${tagFilter}"`;
+        feedLink = `${baseUrl}/?tag=${encodeURIComponent(tagFilter)}`;
+        selfLink = `${baseUrl}/feed?tag=${encodeURIComponent(tagFilter)}`;
+    } else {
+        feedTitle = "TL;DL - Too Long Didn't Listen";
+        feedDescription = "AI-generated podcast summaries from Apple Podcasts";
+        feedLink = baseUrl;
+        selfLink = `${baseUrl}/feed`;
+    }
 
     const items = episodes.map((ep) => {
         const itemLink = `${baseUrl}/episode/${ep.id}`;
