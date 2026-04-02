@@ -979,14 +979,14 @@ publicRoutes.get("/about", async (c) => {
             </section>
 
             <section id="rss-feed" style="margin-top: 2rem;">
-                <h2>RSS Feed</h2>
+                <h2>RSS Feeds</h2>
                 <p>
                     Subscribe to new episode summaries via the
-                    <a href="/feed">RSS feed</a>.
+                    <a href="/feed">global RSS feed</a>.
                     The feed includes the latest 50 episodes with their summaries.
                 </p>
                 <p>
-                    You can also filter the feed by topic using the <code>tag</code> parameter. For example:
+                    You can filter the global feed by topic using the <code>tag</code> parameter. For example:
                 </p>
                 <ul>
                     <li><a href="/feed?tag=technology">/feed?tag=technology</a> — Technology episodes only</li>
@@ -995,6 +995,17 @@ publicRoutes.get("/about", async (c) => {
                 </ul>
                 <p>
                     See the home page's "Filter by topic" dropdown for the full list of available tags.
+                </p>
+                <p>
+                    Each podcast also has its own dedicated feed, scoped to that podcast's episodes only.
+                    Visit any <a href="/podcasts">podcast page</a> and append <code>/feed</code> to the URL:
+                </p>
+                <ul>
+                    <li><code>/podcasts/1088864895/feed</code> — All summarized episodes from a specific podcast</li>
+                </ul>
+                <p>
+                    The podcast ID is visible in the URL when you browse to any podcast's page.
+                    RSS readers that support autodiscovery will detect the feed automatically.
                 </p>
             </section>
 
