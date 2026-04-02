@@ -979,14 +979,14 @@ publicRoutes.get("/about", async (c) => {
             </section>
 
             <section id="rss-feed" style="margin-top: 2rem;">
-                <h2>RSS Feed</h2>
+                <h2>RSS Feeds</h2>
                 <p>
                     Subscribe to new episode summaries via the
-                    <a href="/feed">RSS feed</a>.
+                    <a href="/feed">global RSS feed</a>.
                     The feed includes the latest 50 episodes with their summaries.
                 </p>
                 <p>
-                    You can also filter the feed by topic using the <code>tag</code> parameter. For example:
+                    You can filter the global feed by topic using the <code>tag</code> parameter. For example:
                 </p>
                 <ul>
                     <li><a href="/feed?tag=technology">/feed?tag=technology</a> — Technology episodes only</li>
@@ -995,6 +995,17 @@ publicRoutes.get("/about", async (c) => {
                 </ul>
                 <p>
                     See the home page's "Filter by topic" dropdown for the full list of available tags.
+                </p>
+                <p>
+                    Each podcast also has its own dedicated feed, scoped to that podcast's episodes only.
+                    Visit any <a href="/podcasts">podcast page</a> and append <code>/feed</code> to the URL:
+                </p>
+                <ul>
+                    <li><code>/podcasts/1088864895/feed</code> — All summarized episodes from a specific podcast</li>
+                </ul>
+                <p>
+                    The podcast ID is visible in the URL when you browse to any podcast's page.
+                    RSS readers that support autodiscovery will detect the feed automatically.
                 </p>
             </section>
 
@@ -1235,25 +1246,66 @@ interface EpisodeWithSummary extends EpisodeIndexEntry {
 }
 
 /**
- * Build RSS 2.0 feed XML with summaries
+ * Enrich episodes with their best available summary text.
+ * Shared by /feed and /podcasts/:podcastId/feed handlers.
+ */
+async function enrichWithSummaries(
+    kv: KVNamespace,
+    episodes: EpisodeIndexEntry[],
+    defaultTemplate: string
+): Promise<EpisodeWithSummary[]> {
+    return Promise.all(
+        episodes.map(async (ep) => {
+            const summaries = await listSummariesForEpisode(kv, ep.id);
+            const summary = summaries.find(s => s.templateId === defaultTemplate) || summaries[0];
+            return {
+                ...ep,
+                summaryText: summary?.text,
+            };
+        })
+    );
+}
+
+/**
+ * Options for scoping an RSS feed to a specific podcast
+ */
+interface PodcastFeedFilter {
+    podcastId: string;
+    podcastName: string;
+}
+
+/**
+ * Build RSS 2.0 feed XML with summaries.
+ * Pass `podcastFilter` to scope the feed to a single podcast (used by /podcasts/:id/feed).
+ * Pass `tagFilter` to scope the global feed to a topic tag (used by /feed?tag=).
  */
 function buildRssFeed(
     episodes: EpisodeWithSummary[],
     tagFilter: string | undefined,
-    baseUrl: string
+    baseUrl: string,
+    podcastFilter?: PodcastFeedFilter
 ): string {
-    const feedTitle = tagFilter
-        ? `TL;DL - ${tagFilter} episodes`
-        : "TL;DL - Too Long Didn't Listen";
-    const feedDescription = tagFilter
-        ? `AI-generated podcast summaries tagged with "${tagFilter}"`
-        : "AI-generated podcast summaries from Apple Podcasts";
-    const feedLink = tagFilter
-        ? `${baseUrl}/?tag=${encodeURIComponent(tagFilter)}`
-        : baseUrl;
-    const selfLink = tagFilter
-        ? `${baseUrl}/feed?tag=${encodeURIComponent(tagFilter)}`
-        : `${baseUrl}/feed`;
+    let feedTitle: string;
+    let feedDescription: string;
+    let feedLink: string;
+    let selfLink: string;
+
+    if (podcastFilter) {
+        feedTitle = `TL;DL - ${podcastFilter.podcastName}`;
+        feedDescription = `AI-generated summaries for ${podcastFilter.podcastName}`;
+        feedLink = `${baseUrl}/podcasts/${podcastFilter.podcastId}`;
+        selfLink = `${baseUrl}/podcasts/${podcastFilter.podcastId}/feed`;
+    } else if (tagFilter) {
+        feedTitle = `TL;DL - ${tagFilter} episodes`;
+        feedDescription = `AI-generated podcast summaries tagged with "${tagFilter}"`;
+        feedLink = `${baseUrl}/?tag=${encodeURIComponent(tagFilter)}`;
+        selfLink = `${baseUrl}/feed?tag=${encodeURIComponent(tagFilter)}`;
+    } else {
+        feedTitle = "TL;DL - Too Long Didn't Listen";
+        feedDescription = "AI-generated podcast summaries from Apple Podcasts";
+        feedLink = baseUrl;
+        selfLink = `${baseUrl}/feed`;
+    }
 
     const items = episodes.map((ep) => {
         const itemLink = `${baseUrl}/episode/${ep.id}`;
@@ -1281,7 +1333,7 @@ function buildRssFeed(
       <pubDate>${toRfc822Date(ep.createdAt)}</pubDate>
       <description>${escapeXml(plainExcerpt)}</description>
       <content:encoded><![CDATA[${summaryHtml}]]></content:encoded>
-      <source url="${baseUrl}/feed">${escapeXml(ep.podcastName)}</source>
+      <source url="${selfLink}">${escapeXml(ep.podcastName)}</source>
 ${categories}
     </item>`;
     }).join("\n");
@@ -1443,6 +1495,51 @@ publicRoutes.get("/podcasts", async (c) => {
 });
 
 // ============================================================================
+// GET /podcasts/:podcastId/feed — Per-Podcast RSS Feed
+// Must be registered before /podcasts/:podcastId so that Hono does not treat
+// "feed" as a podcastId when matching the parameterised route.
+// ============================================================================
+
+publicRoutes.get("/podcasts/:podcastId/feed", async (c) => {
+    const podcastId = c.req.param("podcastId");
+
+    // Validate podcast ID format (numeric only)
+    if (!/^\d+$/.test(podcastId)) {
+        return c.text("Invalid podcast ID", 400);
+    }
+
+    // Fetch up to 50 episodes for this podcast (no pagination needed for feed)
+    const { episodes } = await getEpisodesForPodcast(
+        c.env.TLDL_DATA,
+        podcastId,
+        { page: 1, pageSize: 50 }
+    );
+
+    if (episodes.length === 0) {
+        return c.text("Podcast not found", 404);
+    }
+
+    const podcastName = episodes[0].podcastName;
+
+    const episodesWithSummaries = await enrichWithSummaries(c.env.TLDL_DATA, episodes, c.env.DEFAULT_TEMPLATE);
+
+    const url = new URL(c.req.url);
+    const baseUrl = `${url.protocol}//${url.host}`;
+
+    const xml = buildRssFeed(episodesWithSummaries, undefined, baseUrl, {
+        podcastId,
+        podcastName,
+    });
+
+    return c.text(xml, {
+        headers: {
+            "Content-Type": "application/rss+xml; charset=utf-8",
+            "Cache-Control": "public, max-age=3600",
+        },
+    });
+});
+
+// ============================================================================
 // GET /podcasts/:podcastId — Individual Podcast Page
 // ============================================================================
 
@@ -1574,7 +1671,8 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
         title: podcastName,
         children: content,
         description: `AI-generated summaries for ${total} episode${total !== 1 ? 's' : ''} from ${podcastName}`,
-        canonicalUrl: `${BASE_URL}/podcasts/${podcastId}`
+        canonicalUrl: `${BASE_URL}/podcasts/${podcastId}`,
+        headExtra: `<link rel="alternate" type="application/rss+xml" title="TL;DL - ${escapeHtml(podcastName)}" href="/podcasts/${escapeHtml(podcastId)}/feed" />`,
     }));
 });
 
@@ -1592,24 +1690,11 @@ publicRoutes.get("/feed", async (c) => {
         tag: tagFilter || undefined,
     });
 
-    // Fetch summaries for each episode in parallel
-    const episodesWithSummaries = await Promise.all(
-        episodes.map(async (ep) => {
-            const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, ep.id);
-            // Use the first (most recent) summary, or the default template if available
-            const summary = summaries.find(s => s.templateId === c.env.DEFAULT_TEMPLATE) || summaries[0];
-            return {
-                ...ep,
-                summaryText: summary?.text,
-            };
-        })
-    );
+    const episodesWithSummaries = await enrichWithSummaries(c.env.TLDL_DATA, episodes, c.env.DEFAULT_TEMPLATE);
 
-    // Build the base URL from the request
     const url = new URL(c.req.url);
     const baseUrl = `${url.protocol}//${url.host}`;
 
-    // Generate RSS feed
     const xml = buildRssFeed(episodesWithSummaries, tagFilter || undefined, baseUrl);
 
     // Return with proper content type and caching (1 hour cache)
