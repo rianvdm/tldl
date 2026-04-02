@@ -1463,6 +1463,63 @@ publicRoutes.get("/podcasts", async (c) => {
 });
 
 // ============================================================================
+// GET /podcasts/:podcastId/feed — Per-Podcast RSS Feed
+// Must be registered before /podcasts/:podcastId so that Hono does not treat
+// "feed" as a podcastId when matching the parameterised route.
+// ============================================================================
+
+publicRoutes.get("/podcasts/:podcastId/feed", async (c) => {
+    const podcastId = c.req.param("podcastId");
+
+    // Validate podcast ID format (numeric only)
+    if (!/^\d+$/.test(podcastId)) {
+        return c.text("Invalid podcast ID", 400);
+    }
+
+    // Fetch up to 50 episodes for this podcast (no pagination needed for feed)
+    const { episodes } = await getEpisodesForPodcast(
+        c.env.TLDL_DATA,
+        podcastId,
+        { page: 1, pageSize: 50 }
+    );
+
+    if (episodes.length === 0) {
+        return c.text("Podcast not found", 404);
+    }
+
+    const podcastName = episodes[0].podcastName;
+
+    // Fetch summaries for each episode in parallel (mirrors /feed handler)
+    const episodesWithSummaries = await Promise.all(
+        episodes.map(async (ep) => {
+            const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, ep.id);
+            const summary = summaries.find(s => s.templateId === c.env.DEFAULT_TEMPLATE) || summaries[0];
+            return {
+                ...ep,
+                summaryText: summary?.text,
+            };
+        })
+    );
+
+    // Build the base URL from the request
+    const url = new URL(c.req.url);
+    const baseUrl = `${url.protocol}//${url.host}`;
+
+    // Generate RSS feed scoped to this podcast
+    const xml = buildRssFeed(episodesWithSummaries, undefined, baseUrl, {
+        podcastId,
+        podcastName,
+    });
+
+    return c.text(xml, {
+        headers: {
+            "Content-Type": "application/rss+xml; charset=utf-8",
+            "Cache-Control": "public, max-age=3600",
+        },
+    });
+});
+
+// ============================================================================
 // GET /podcasts/:podcastId — Individual Podcast Page
 // ============================================================================
 
