@@ -1246,6 +1246,27 @@ interface EpisodeWithSummary extends EpisodeIndexEntry {
 }
 
 /**
+ * Enrich episodes with their best available summary text.
+ * Shared by /feed and /podcasts/:podcastId/feed handlers.
+ */
+async function enrichWithSummaries(
+    kv: KVNamespace,
+    episodes: EpisodeIndexEntry[],
+    defaultTemplate: string
+): Promise<EpisodeWithSummary[]> {
+    return Promise.all(
+        episodes.map(async (ep) => {
+            const summaries = await listSummariesForEpisode(kv, ep.id);
+            const summary = summaries.find(s => s.templateId === defaultTemplate) || summaries[0];
+            return {
+                ...ep,
+                summaryText: summary?.text,
+            };
+        })
+    );
+}
+
+/**
  * Options for scoping an RSS feed to a specific podcast
  */
 interface PodcastFeedFilter {
@@ -1312,7 +1333,7 @@ function buildRssFeed(
       <pubDate>${toRfc822Date(ep.createdAt)}</pubDate>
       <description>${escapeXml(plainExcerpt)}</description>
       <content:encoded><![CDATA[${summaryHtml}]]></content:encoded>
-      <source url="${baseUrl}/feed">${escapeXml(ep.podcastName)}</source>
+      <source url="${selfLink}">${escapeXml(ep.podcastName)}</source>
 ${categories}
     </item>`;
     }).join("\n");
@@ -1500,23 +1521,11 @@ publicRoutes.get("/podcasts/:podcastId/feed", async (c) => {
 
     const podcastName = episodes[0].podcastName;
 
-    // Fetch summaries for each episode in parallel (mirrors /feed handler)
-    const episodesWithSummaries = await Promise.all(
-        episodes.map(async (ep) => {
-            const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, ep.id);
-            const summary = summaries.find(s => s.templateId === c.env.DEFAULT_TEMPLATE) || summaries[0];
-            return {
-                ...ep,
-                summaryText: summary?.text,
-            };
-        })
-    );
+    const episodesWithSummaries = await enrichWithSummaries(c.env.TLDL_DATA, episodes, c.env.DEFAULT_TEMPLATE);
 
-    // Build the base URL from the request
     const url = new URL(c.req.url);
     const baseUrl = `${url.protocol}//${url.host}`;
 
-    // Generate RSS feed scoped to this podcast
     const xml = buildRssFeed(episodesWithSummaries, undefined, baseUrl, {
         podcastId,
         podcastName,
@@ -1681,24 +1690,11 @@ publicRoutes.get("/feed", async (c) => {
         tag: tagFilter || undefined,
     });
 
-    // Fetch summaries for each episode in parallel
-    const episodesWithSummaries = await Promise.all(
-        episodes.map(async (ep) => {
-            const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, ep.id);
-            // Use the first (most recent) summary, or the default template if available
-            const summary = summaries.find(s => s.templateId === c.env.DEFAULT_TEMPLATE) || summaries[0];
-            return {
-                ...ep,
-                summaryText: summary?.text,
-            };
-        })
-    );
+    const episodesWithSummaries = await enrichWithSummaries(c.env.TLDL_DATA, episodes, c.env.DEFAULT_TEMPLATE);
 
-    // Build the base URL from the request
     const url = new URL(c.req.url);
     const baseUrl = `${url.protocol}//${url.host}`;
 
-    // Generate RSS feed
     const xml = buildRssFeed(episodesWithSummaries, tagFilter || undefined, baseUrl);
 
     // Return with proper content type and caching (1 hour cache)
