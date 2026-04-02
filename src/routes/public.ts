@@ -1651,7 +1651,8 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
         title: podcastName,
         children: content,
         description: `AI-generated summaries for ${total} episode${total !== 1 ? 's' : ''} from ${podcastName}`,
-        canonicalUrl: `${BASE_URL}/podcasts/${podcastId}`
+        canonicalUrl: `${BASE_URL}/podcasts/${podcastId}`,
+        headExtra: `<link rel="alternate" type="application/rss+xml" title="TL;DL - ${escapeHtml(podcastName)}" href="/podcasts/${escapeHtml(podcastId)}/feed" />`,
     }));
 });
 
