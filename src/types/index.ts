@@ -130,6 +130,8 @@ export interface QueueMessage {
     expectedDate?: string;
     // Override audio URL (bypasses origin rate limiting on redirecting hosts)
     audioUrlOverride?: string;
+    // Pre-resolved audio URL (redirect followed in request handler context to bypass CDN WAF blocking)
+    preResolvedAudioUrl?: string;
     // User who submitted the episode
     submittedBy?: string;
 }

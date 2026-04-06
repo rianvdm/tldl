@@ -82,6 +82,8 @@ interface ProcessingContext {
     expectedDate?: string;
     // Override audio URL (bypasses origin rate limiting on redirecting hosts)
     audioUrlOverride?: string;
+    // Pre-resolved audio URL (redirect followed in request handler context)
+    preResolvedAudioUrl?: string;
     // User who submitted the episode
     submittedBy?: string;
 }
@@ -229,6 +231,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         expectedTitle: msg.expectedTitle,
         expectedDate: msg.expectedDate,
         audioUrlOverride: msg.audioUrlOverride,
+        preResolvedAudioUrl: msg.preResolvedAudioUrl,
         submittedBy: msg.submittedBy,
     };
 
@@ -381,8 +384,17 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const estimatedTranscriptionSeconds = Math.round((durationMinutes / 15) * 90);
         await updateJobEstimateBoth(env, kv, jobId, estimatedTranscriptionSeconds + 30);
 
-        const audioUrl = ctx.audioUrlOverride || metadata.audioUrl;
-        if (ctx.audioUrlOverride) {
+        // Prefer pre-resolved URL (resolved in request handler context to bypass CDN WAF),
+        // then audio URL override, then metadata audio URL.
+        const audioUrl = ctx.preResolvedAudioUrl || ctx.audioUrlOverride || metadata.audioUrl;
+        const skipValidation = !!(ctx.preResolvedAudioUrl || ctx.audioUrlOverride);
+        if (ctx.preResolvedAudioUrl) {
+            console.log(JSON.stringify({
+                event: "using_preresolve_audio_url",
+                resolved: ctx.preResolvedAudioUrl,
+                original: ctx.audioUrlOverride || metadata.audioUrl,
+            }));
+        } else if (ctx.audioUrlOverride) {
             console.log(JSON.stringify({
                 event: "using_audio_url_override",
                 override: ctx.audioUrlOverride,
@@ -391,7 +403,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
 
         const transcriptionResult = await transcribeAudio(
             audioUrl,
-            { apiKey: env.OPENAI_API_KEY, skipValidation: !!ctx.audioUrlOverride },
+            { apiKey: env.OPENAI_API_KEY, skipValidation },
         );
 
         transcriptSource = transcriptionResult.source;

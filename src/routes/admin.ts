@@ -42,6 +42,7 @@ import {
 import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId, getValidTags, validateTags, TEMPLATES, isBlockedPodcast } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
+import { resolveAudioUrl } from "../services/transcription";
 import { generateEpisodeTags } from "../services/tag-generation";
 import { getUserEmailFromJwt, escapeHtml, isAdminUser } from "../lib/auth";
 import {
@@ -1086,6 +1087,23 @@ admin.post("/submit", async (c) => {
     await createJobDO(c.env, job);
     await createJob(c.env.TLDL_DATA, job);
 
+    // Pre-resolve audio URL redirects while in request handler context.
+    // Queue consumers can't fetch some CDNs (Podbean, etc.) because the destination
+    // Cloudflare WAF blocks server-originated requests without a connecting IP.
+    // Resolving here follows the 302 → final CDN URL which may bypass the WAF.
+    let preResolvedAudioUrl: string | undefined;
+    if (audioUrlOverride) {
+        const resolved = await resolveAudioUrl(audioUrlOverride);
+        if (resolved !== audioUrlOverride) {
+            preResolvedAudioUrl = resolved;
+            console.log(JSON.stringify({
+                event: "admin_preresolve_audio_url",
+                original: audioUrlOverride,
+                resolved,
+            }));
+        }
+    }
+
     const message = createProcessEpisodeMessage({
         jobId,
         episodeId,
@@ -1095,6 +1113,7 @@ admin.post("/submit", async (c) => {
         expectedTitle: episodeInfo?.trackName,
         expectedDate: episodeInfo?.releaseDate,
         audioUrlOverride,
+        preResolvedAudioUrl,
     });
     await enqueueJob(c.env.TLDL_QUEUE, message);
 

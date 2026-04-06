@@ -329,7 +329,80 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
             );
         }
 
+        // On 403, try resolving redirect manually and fetching the final CDN URL.
+        // Some CDN WAFs (e.g. Podbean behind Cloudflare) block queue consumer requests
+        // to the download gateway but allow direct CDN access.
+        if (response.status === 403) {
+            console.log(JSON.stringify({
+                event: "fetch_audio_403_retry",
+                url: audioUrl,
+                message: "Attempting redirect resolution fallback",
+            }));
+            const resolvedUrl = await resolveAudioUrl(audioUrl);
+            if (resolvedUrl !== audioUrl) {
+                console.log(JSON.stringify({
+                    event: "fetch_audio_403_resolved",
+                    original: audioUrl,
+                    resolved: resolvedUrl,
+                }));
+                const retryController = new AbortController();
+                const retryTimeoutId = setTimeout(() => retryController.abort(), TIMEOUTS.AUDIO_FETCH_MS);
+                try {
+                    const retryResponse = await fetch(resolvedUrl, {
+                        headers: { "User-Agent": AUDIO_USER_AGENT },
+                        signal: retryController.signal,
+                    });
+                    clearTimeout(retryTimeoutId);
+                    if (retryResponse.ok) {
+                        console.log(JSON.stringify({
+                            event: "fetch_audio_403_resolved_success",
+                            resolvedUrl,
+                            status: retryResponse.status,
+                        }));
+                        return await retryResponse.arrayBuffer();
+                    }
+                } catch {
+                    clearTimeout(retryTimeoutId);
+                }
+            }
+
+            // Log details of the original 403 for diagnostics
+            const respHeaders: Record<string, string> = {};
+            response.headers.forEach((v, k) => { respHeaders[k] = v; });
+            console.log(JSON.stringify({
+                event: "fetch_audio_error_details",
+                status: 403,
+                url: response.url,
+                requestedUrl: audioUrl,
+                redirected: response.redirected,
+                headers: respHeaders,
+            }));
+            throw new AppError(
+                ERROR_CODES.AUDIO_UNAVAILABLE,
+                `Failed to fetch audio: HTTP 403`,
+            );
+        }
+
         if (!response.ok) {
+            // Capture diagnostic details for non-200 responses
+            const respHeaders: Record<string, string> = {};
+            response.headers.forEach((v, k) => { respHeaders[k] = v; });
+            let respBody: string | null = null;
+            try {
+                respBody = await response.text();
+                if (respBody.length > 1000) respBody = respBody.slice(0, 1000);
+            } catch { /* ignore */ }
+            console.log(
+                JSON.stringify({
+                    event: "fetch_audio_error_details",
+                    status: response.status,
+                    url: response.url,
+                    requestedUrl: audioUrl,
+                    redirected: response.redirected,
+                    headers: respHeaders,
+                    body: respBody,
+                })
+            );
             throw new AppError(
                 ERROR_CODES.AUDIO_UNAVAILABLE,
                 `Failed to fetch audio: HTTP ${response.status}`,
