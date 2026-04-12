@@ -1,6 +1,6 @@
 {
   "name": "tldl",
-  "version": "1.1.0",
+  "version": "2.1.0",
   "description": "Too Long Didn't Listen - AI-powered podcast summaries",
   "type": "module",
   "scripts": {
