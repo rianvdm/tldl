@@ -74,7 +74,7 @@ interface ProcessingContext {
     env: Env;
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    appleUrl?: string;
     templateId: string;
     // Pre-fetched iTunes metadata (avoids 403 errors from iTunes API)
     episodeGuid?: string;
@@ -278,6 +278,9 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
  */
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
     const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate, submittedBy } = ctx;
+    if (!appleUrl) {
+        throw new AppError(ERROR_CODES.INVALID_URL, "Missing Apple Podcasts URL for process_episode job");
+    }
     const kv = env.TLDL_DATA;
     const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 121;
 
