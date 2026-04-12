@@ -282,6 +282,22 @@ describe("POST /admin/submit-manual", () => {
         const episodeKeys = await env.TLDL_DATA.list({ prefix: "episode:pod-abc_" });
         expect(episodeKeys.keys.length).toBe(1);
     });
+
+    it("rejects invalid imageUrl", async () => {
+        const form = new FormData();
+        form.append("title", "My Episode");
+        form.append("transcript", longTranscript);
+        form.append("imageUrl", "javascript:alert(1)");
+
+        const response = await SELF.fetch("http://localhost/admin/submit-manual", {
+            method: "POST",
+            body: form,
+        });
+
+        expect(response.status).toBe(400);
+        const html = await response.text();
+        expect(html.toLowerCase()).toContain("image");
+    });
 });
 
 // ============================================================================

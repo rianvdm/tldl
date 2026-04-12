@@ -101,8 +101,8 @@ function generateUUID(): string {
 
 function isValidUrl(s: string): boolean {
     try {
-        new URL(s);
-        return true;
+        const u = new URL(s);
+        return u.protocol === "http:" || u.protocol === "https:";
     } catch {
         return false;
     }
@@ -1242,6 +1242,7 @@ admin.post("/submit-manual", async (c) => {
     const podcastName = getStr("podcastName");
     const pubDate = getStr("pubDate");
     const episodeUrl = getStr("episodeUrl");
+    const imageUrl = getStr("imageUrl");
     const durationRaw = getStr("durationMinutes");
 
     // Transcript: prefer uploaded file if it has content, otherwise pasted text.
@@ -1277,6 +1278,10 @@ admin.post("/submit-manual", async (c) => {
 
     if (episodeUrl && !isValidUrl(episodeUrl)) {
         errors.push("Episode URL is not a valid URL.");
+    }
+
+    if (imageUrl && !isValidUrl(imageUrl)) {
+        errors.push("Cover image URL is invalid.");
     }
 
     let durationSeconds = 0;
