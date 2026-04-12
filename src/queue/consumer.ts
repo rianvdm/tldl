@@ -74,7 +74,7 @@ interface ProcessingContext {
     env: Env;
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    appleUrl?: string;
     templateId: string;
     // Pre-fetched iTunes metadata (avoids 403 errors from iTunes API)
     episodeGuid?: string;
@@ -249,6 +249,8 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         await processEpisode(context);
     } else if (msg.type === "regenerate_summary") {
         await regenerateSummary(context);
+    } else if (msg.type === "process_manual") {
+        await processManualJob(context);
     } else {
         throw new Error(`Unknown message type: ${(msg as QueueMessage).type}`);
     }
@@ -278,6 +280,9 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
  */
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
     const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate, submittedBy } = ctx;
+    if (!appleUrl) {
+        throw new AppError(ERROR_CODES.INVALID_URL, "Missing Apple Podcasts URL for process_episode job");
+    }
     const kv = env.TLDL_DATA;
     const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 121;
 
@@ -556,6 +561,116 @@ async function regenerateSummary(ctx: ProcessingContext): Promise<void> {
         createdAt: new Date().toISOString(),
     };
     await saveSummary(kv, summary);
+
+    // Mark completed
+    await updateJobStatusBoth(env, kv, jobId, "completed");
+}
+
+// ============================================================================
+// Process Manual Transcript Pipeline
+// ============================================================================
+
+/**
+ * Manual transcript processing pipeline:
+ * 1. Load pre-stored transcript and partial episode from KV (seeded by the
+ *    submit handler before enqueuing the job)
+ * 2. Generate summary from the manual transcript
+ * 3. Generate tags (non-critical — failures logged, job still completes)
+ * 4. Update episode with tags and add to the episode index
+ */
+async function processManualJob(ctx: ProcessingContext): Promise<void> {
+    const { env, jobId, episodeId, templateId, submittedBy } = ctx;
+    const kv = env.TLDL_DATA;
+
+    const [transcript, episode] = await Promise.all([
+        getTranscript(kv, episodeId),
+        getEpisode(kv, episodeId),
+    ]);
+
+    if (!transcript) {
+        throw new AppError(
+            ERROR_CODES.TRANSCRIPTION_FAILED,
+            "Manual job is missing its transcript. Submission may have failed to write KV."
+        );
+    }
+    if (!episode) {
+        throw new AppError(
+            ERROR_CODES.EPISODE_NOT_FOUND,
+            "Manual job is missing its episode record."
+        );
+    }
+
+    // Reflect podcast/episode title on the job so the status page renders nicely
+    await updateJobMetadataDO(env, jobId, episode.podcastName, episode.episodeTitle);
+    await updateJobMetadata(kv, jobId, episode.podcastName, episode.episodeTitle);
+
+    // Generate summary
+    await updateJobStatusBoth(env, kv, jobId, "summarizing");
+    await updateJobEstimateBoth(env, kv, jobId, 30);
+
+    const summaryResult = await generateSummary(
+        transcript.text,
+        templateId,
+        env.OPENAI_API_KEY
+    );
+
+    const summary: Summary = {
+        episodeId,
+        templateId,
+        text: summaryResult.text,
+        model: summaryResult.model,
+        createdAt: new Date().toISOString(),
+    };
+    await saveSummary(kv, summary);
+
+    // Generate tags (non-critical)
+    let tags: string[] = [];
+    try {
+        const tagResult = await generateEpisodeTags(
+            summary.text,
+            transcript.text,
+            env.OPENAI_API_KEY
+        );
+        tags = tagResult.tags;
+
+        console.log(
+            JSON.stringify({
+                event: "tags_generated",
+                episodeId,
+                tags,
+                model: tagResult.model,
+            })
+        );
+    } catch (error) {
+        console.error(
+            JSON.stringify({
+                event: "tag_generation_failed",
+                episodeId,
+                error: error instanceof Error ? error.message : "Unknown error",
+            })
+        );
+    }
+
+    // Update episode with new tags (preserve existing tags if generation failed)
+    const updatedEpisode: Episode = {
+        ...episode,
+        tags: tags.length > 0 ? tags : episode.tags,
+        submittedBy: episode.submittedBy ?? submittedBy,
+    };
+    await saveEpisode(kv, updatedEpisode);
+
+    // Add to episode index for home-page listing
+    await addToEpisodeIndex(kv, {
+        id: updatedEpisode.id,
+        podcastName: updatedEpisode.podcastName,
+        episodeTitle: updatedEpisode.episodeTitle,
+        episodeDate: updatedEpisode.episodeDate,
+        episodeDuration: updatedEpisode.episodeDuration,
+        createdAt: updatedEpisode.createdAt,
+        expiresAt: updatedEpisode.expiresAt,
+        tags: updatedEpisode.tags,
+        podcastAuthor: updatedEpisode.podcastAuthor,
+    });
 
     // Mark completed
     await updateJobStatusBoth(env, kv, jobId, "completed");

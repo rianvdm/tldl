@@ -5,13 +5,15 @@
  */
 
 import { Hono } from "hono";
-import type { HonoEnv, Job, MonitorSettings } from "../types";
+import type { HonoEnv, Job, MonitorSettings, Episode, Transcript, QueueMessage } from "../types";
 import { Layout } from "./public";
 import {
     createJob,
     getEpisode,
     getTranscript,
     getSummary,
+    saveEpisode,
+    saveTranscript,
     saveSummary,
     deleteEpisode,
     deleteJob,
@@ -39,7 +41,7 @@ import {
     createProcessEpisodeMessage,
     createRegenerateSummaryMessage,
 } from "../lib/queue";
-import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId } from "../lib/url-parser";
+import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId, deriveManualEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId, getValidTags, validateTags, TEMPLATES, isBlockedPodcast } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { resolveAudioUrl } from "../services/transcription";
@@ -95,6 +97,15 @@ async function requireAdmin(c: import("hono").Context<HonoEnv>): Promise<Respons
 
 function generateUUID(): string {
     return crypto.randomUUID();
+}
+
+function isValidUrl(s: string): boolean {
+    try {
+        const u = new URL(s);
+        return u.protocol === "http:" || u.protocol === "https:";
+    } catch {
+        return false;
+    }
 }
 
 function formatDuration(seconds: number): string {
@@ -333,6 +344,7 @@ admin.get("/", async (c) => {
 
         <div class="admin-quick-actions">
             <a href="/admin/submit" class="button button-primary">Submit Episode</a>
+            <a href="/admin/submit-manual" class="button button-primary">Submit Transcript</a>
             <a href="/admin/podcasts" class="button">Manage Podcasts</a>
             <button type="button" class="button" onclick="checkAllNow()">Check All Now</button>
             <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F" class="button" style="margin-left: auto;">Log Out</a>
@@ -988,6 +1000,94 @@ admin.get("/submit", async (c) => {
 });
 
 // ============================================================================
+// GET /submit-manual - Manual transcript submission form
+// ============================================================================
+
+admin.get("/submit-manual", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    const content = `
+        <div class="page-header">
+            <h1>Submit Transcript</h1>
+            <p class="page-subtitle">Upload a transcript manually when an episode can't be processed via Apple Podcasts URL.</p>
+            <a href="/admin" class="button button-secondary">← Back to Dashboard</a>
+        </div>
+
+        <div class="divider"></div>
+
+        <form method="POST" action="/admin/submit-manual" enctype="multipart/form-data" class="card" style="display: flex; flex-direction: column; gap: 1.5rem;">
+            <p class="form-help">
+                Use this form for transcripts that can't be processed via an Apple Podcasts URL.
+                Only the title and a transcript (file or pasted text) are required — everything else is optional.
+            </p>
+
+            <div class="form-group">
+                <label class="form-label" for="title">Episode Title</label>
+                <input type="text" id="title" name="title" class="form-input" maxlength="300" required />
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="transcriptFile">Transcript File</label>
+                <input type="file" id="transcriptFile" name="transcriptFile" class="form-input" accept=".txt,text/plain" />
+                <p class="form-help">Upload a .txt file, or paste the transcript below.</p>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="transcript">Transcript Text</label>
+                <textarea id="transcript" name="transcript" class="form-input" rows="10" placeholder="Paste transcript text here..."></textarea>
+            </div>
+
+            <fieldset style="border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; display: flex; flex-direction: column; gap: 1rem;">
+                <legend style="padding: 0 0.5rem; font-weight: 600;">Optional metadata</legend>
+
+                <div class="form-group">
+                    <label class="form-label" for="podcastId">Podcast ID</label>
+                    <input type="text" id="podcastId" name="podcastId" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="podcastName">Podcast Name</label>
+                    <input type="text" id="podcastName" name="podcastName" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="pubDate">Publication Date</label>
+                    <input type="date" id="pubDate" name="pubDate" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="episodeUrl">Episode URL</label>
+                    <input type="url" id="episodeUrl" name="episodeUrl" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="durationMinutes">Duration (minutes)</label>
+                    <input type="number" id="durationMinutes" name="durationMinutes" class="form-input" min="1" max="600" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="description">Description</label>
+                    <textarea id="description" name="description" class="form-input" rows="3"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="imageUrl">Image URL</label>
+                    <input type="url" id="imageUrl" name="imageUrl" class="form-input" />
+                </div>
+            </fieldset>
+
+            <button type="submit" class="button button-primary">Submit Transcript</button>
+        </form>
+    `;
+
+    return c.html(Layout({
+        title: "Submit Transcript",
+        children: content,
+    }));
+});
+
+// ============================================================================
 // POST /submit - Process episode submission
 // ============================================================================
 
@@ -1119,6 +1219,174 @@ admin.post("/submit", async (c) => {
 
     // Redirect to admin dashboard (job shows as in-progress on home page)
     return c.redirect("/admin");
+});
+
+// ============================================================================
+// POST /submit-manual - Process manual transcript submission
+// ============================================================================
+
+admin.post("/submit-manual", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    const form = await c.req.formData();
+
+    const getStr = (name: string): string => {
+        const v = form.get(name);
+        return typeof v === "string" ? v.trim() : "";
+    };
+
+    const title = getStr("title");
+    const pastedTranscript = getStr("transcript");
+    const podcastId = getStr("podcastId");
+    const podcastName = getStr("podcastName");
+    const pubDate = getStr("pubDate");
+    const episodeUrl = getStr("episodeUrl");
+    const imageUrl = getStr("imageUrl");
+    const durationRaw = getStr("durationMinutes");
+
+    // Transcript: prefer uploaded file if it has content, otherwise pasted text.
+    let transcriptText = pastedTranscript;
+    const transcriptFile = form.get("transcriptFile");
+    if (transcriptFile instanceof File && transcriptFile.size > 0) {
+        transcriptText = (await transcriptFile.text()).trim();
+    }
+
+    const errors: string[] = [];
+
+    if (!title) {
+        errors.push("Episode title is required.");
+    } else if (title.length > 300) {
+        errors.push("Episode title must be 300 characters or fewer.");
+    }
+
+    if (!transcriptText) {
+        errors.push("Transcript is required (paste text or upload a .txt file).");
+    } else if (transcriptText.length < 200) {
+        errors.push("Transcript must be at least 200 characters.");
+    } else if (transcriptText.length > 500_000) {
+        errors.push("Transcript must be 500,000 characters or fewer.");
+    }
+
+    if (podcastId && !/^[a-zA-Z0-9_-]+$/.test(podcastId)) {
+        errors.push("Podcast ID must only contain letters, numbers, hyphens, or underscores.");
+    }
+
+    if (pubDate && Number.isNaN(Date.parse(pubDate))) {
+        errors.push("Publication date is not a valid date.");
+    }
+
+    if (episodeUrl && !isValidUrl(episodeUrl)) {
+        errors.push("Episode URL is not a valid URL.");
+    }
+
+    if (imageUrl && !isValidUrl(imageUrl)) {
+        errors.push("Cover image URL is invalid.");
+    }
+
+    let durationSeconds = 0;
+    if (durationRaw) {
+        const minutes = Number(durationRaw);
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 600) {
+            errors.push("Duration must be an integer between 1 and 600 minutes.");
+        } else {
+            durationSeconds = minutes * 60;
+        }
+    }
+
+    if (errors.length > 0) {
+        const errorList = errors.map((e) => `<li>${escapeHtml(e)}</li>`).join("");
+        return c.html(
+            Layout({
+                title: "Submission Error",
+                children: `
+                    <div class="alert alert-error">
+                        <strong>Please fix the following:</strong>
+                        <ul>${errorList}</ul>
+                    </div>
+                    <a href="/admin/submit-manual" class="button">Back to Form</a>
+                `,
+            }),
+            400
+        );
+    }
+
+    // Derive episode ID
+    const episodeId = deriveManualEpisodeId(title, podcastId || undefined);
+
+    // Collision check
+    const existing = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (existing) {
+        return c.html(
+            Layout({
+                title: "Episode Already Exists",
+                children: `
+                    <div class="alert alert-error">An episode with this ID already exists: ${escapeHtml(episodeId)}</div>
+                    <a href="/admin/submit-manual" class="button">Back to Form</a>
+                `,
+            }),
+            409
+        );
+    }
+
+    const submittedBy = c.get("userEmail");
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const episodeDate = pubDate ? new Date(pubDate).toISOString().slice(0, 10) : nowIso.slice(0, 10);
+
+    const episode: Episode = {
+        id: episodeId,
+        appleUrl: episodeUrl || "",
+        podcastName: podcastName || "Manual upload",
+        episodeTitle: title,
+        episodeDuration: durationSeconds,
+        episodeDate,
+        audioUrl: "",
+        transcriptSource: "manual",
+        createdAt: nowIso,
+        expiresAt,
+        ...(submittedBy && { submittedBy }),
+    };
+
+    await saveEpisode(c.env.TLDL_DATA, episode);
+
+    const transcript: Transcript = {
+        episodeId,
+        text: transcriptText,
+        source: "manual",
+        createdAt: nowIso,
+    };
+    await saveTranscript(c.env.TLDL_DATA, transcript);
+
+    // Create job record
+    const jobId = generateUUID();
+    const templateId = c.env.DEFAULT_TEMPLATE || "key-takeaways";
+    const job: Job = {
+        id: jobId,
+        episodeId,
+        appleUrl: episodeUrl || "",
+        status: "queued",
+        templateId,
+        podcastName: episode.podcastName,
+        episodeTitle: episode.episodeTitle,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+    };
+    await createJobDO(c.env, job);
+    await createJob(c.env.TLDL_DATA, job);
+
+    // Enqueue message for background processing
+    const msg: QueueMessage = {
+        type: "process_manual",
+        jobId,
+        episodeId,
+        templateId,
+        ...(submittedBy && { submittedBy }),
+    };
+    await enqueueJob(c.env.TLDL_QUEUE, msg);
+
+    return c.redirect("/admin", 303);
 });
 
 // ============================================================================

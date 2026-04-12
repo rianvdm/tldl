@@ -1,6 +1,21 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { SELF } from "cloudflare:test";
+
+// Mock queue so we can inspect enqueued messages without hitting a real consumer.
+// The existing POST /admin/submit tests only exercise validation errors that
+// return before enqueueing, so mocking enqueueJob is safe for them.
+vi.mock("../src/lib/queue", async () => {
+    const actual = await vi.importActual<typeof import("../src/lib/queue")>(
+        "../src/lib/queue"
+    );
+    return {
+        ...actual,
+        enqueueJob: vi.fn(async () => {}),
+    };
+});
+
+import { enqueueJob } from "../src/lib/queue";
 import {
     createJob,
     getJob,
@@ -138,6 +153,150 @@ describe("GET /admin/submit", () => {
         expect(html).toContain("Submit Episode");
         expect(html).toContain("Apple Podcasts Episode URL");
         expect(html).toContain("Summary Style");
+    });
+});
+
+// ============================================================================
+// GET /admin/submit-manual — Manual Transcript Submission Form
+// ============================================================================
+
+describe("GET /admin/submit-manual", () => {
+    it("renders the manual submission form", async () => {
+        const response = await SELF.fetch("http://localhost/admin/submit-manual");
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain('action="/admin/submit-manual"');
+        expect(html).toContain('name="title"');
+        expect(html).toContain('name="transcript"');
+        expect(html).toContain('name="transcriptFile"');
+        expect(html).toContain('name="podcastId"');
+        expect(html).toContain('enctype="multipart/form-data"');
+    });
+});
+
+// ============================================================================
+// POST /admin/submit-manual — Manual Transcript Submission
+// ============================================================================
+
+describe("POST /admin/submit-manual", () => {
+    beforeEach(async () => {
+        await clearTestData();
+        vi.mocked(enqueueJob).mockClear();
+    });
+
+    const longTranscript = "This is a long transcript. ".repeat(20); // ~540 chars
+
+    it("rejects missing title", async () => {
+        const form = new FormData();
+        form.append("transcript", longTranscript);
+
+        const response = await SELF.fetch("http://localhost/admin/submit-manual", {
+            method: "POST",
+            body: form,
+        });
+
+        expect(response.status).toBe(400);
+        const html = await response.text();
+        expect(html.toLowerCase()).toContain("title");
+    });
+
+    it("rejects missing transcript", async () => {
+        const form = new FormData();
+        form.append("title", "My Episode");
+
+        const response = await SELF.fetch("http://localhost/admin/submit-manual", {
+            method: "POST",
+            body: form,
+        });
+
+        expect(response.status).toBe(400);
+        const html = await response.text();
+        expect(html.toLowerCase()).toContain("transcript");
+    });
+
+    it("rejects transcript shorter than 200 chars", async () => {
+        const form = new FormData();
+        form.append("title", "My Episode");
+        form.append("transcript", "Too short.");
+
+        const response = await SELF.fetch("http://localhost/admin/submit-manual", {
+            method: "POST",
+            body: form,
+        });
+
+        expect(response.status).toBe(400);
+        const html = await response.text();
+        expect(html.toLowerCase()).toContain("transcript");
+    });
+
+    it("creates a standalone episode (no podcastId)", async () => {
+        const form = new FormData();
+        form.append("title", "Standalone Episode");
+        form.append("transcript", longTranscript);
+        form.append("podcastName", "Indie Show");
+
+        const response = await SELF.fetch("http://localhost/admin/submit-manual", {
+            method: "POST",
+            body: form,
+            redirect: "manual",
+        });
+
+        expect(response.status).toBe(303);
+        expect(response.headers.get("Location")).toBe("/admin");
+
+        const episodeKeys = await env.TLDL_DATA.list({ prefix: "episode:manual_" });
+        expect(episodeKeys.keys.length).toBe(1);
+        const episodeId = episodeKeys.keys[0].name.replace("episode:", "");
+
+        const episode = await getEpisode(env.TLDL_DATA, episodeId);
+        expect(episode).not.toBeNull();
+        expect(episode?.transcriptSource).toBe("manual");
+        expect(episode?.podcastName).toBe("Indie Show");
+
+        const transcript = await getTranscript(env.TLDL_DATA, episodeId);
+        expect(transcript).not.toBeNull();
+        expect(transcript?.source).toBe("manual");
+        expect(transcript?.text).toBe(longTranscript.trim());
+
+        expect(vi.mocked(enqueueJob)).toHaveBeenCalledTimes(1);
+        const msg = vi.mocked(enqueueJob).mock.calls[0][1];
+        expect(msg.type).toBe("process_manual");
+        expect(msg.episodeId).toBe(episodeId);
+    });
+
+    it("creates an attached episode with podcastId", async () => {
+        const form = new FormData();
+        form.append("title", "Attached Episode");
+        form.append("transcript", longTranscript);
+        form.append("podcastId", "pod-abc");
+        form.append("podcastName", "Pod ABC");
+
+        const response = await SELF.fetch("http://localhost/admin/submit-manual", {
+            method: "POST",
+            body: form,
+            redirect: "manual",
+        });
+
+        expect(response.status).toBe(303);
+
+        const episodeKeys = await env.TLDL_DATA.list({ prefix: "episode:pod-abc_" });
+        expect(episodeKeys.keys.length).toBe(1);
+    });
+
+    it("rejects invalid imageUrl", async () => {
+        const form = new FormData();
+        form.append("title", "My Episode");
+        form.append("transcript", longTranscript);
+        form.append("imageUrl", "javascript:alert(1)");
+
+        const response = await SELF.fetch("http://localhost/admin/submit-manual", {
+            method: "POST",
+            body: form,
+        });
+
+        expect(response.status).toBe(400);
+        const html = await response.text();
+        expect(html.toLowerCase()).toContain("image");
     });
 });
 

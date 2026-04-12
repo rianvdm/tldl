@@ -17,7 +17,7 @@ export type JobStatus =
 /**
  * Source of the transcript - determines how we obtained it
  */
-export type TranscriptSource = "apple" | "rss" | "openai";
+export type TranscriptSource = "apple" | "rss" | "openai" | "manual";
 
 /**
  * Job record - tracks the processing state of a submitted episode
@@ -116,13 +116,14 @@ export interface Template {
 /**
  * Queue message types for background processing
  */
-export type QueueMessageType = "process_episode" | "regenerate_summary";
+export type QueueMessageType = "process_episode" | "regenerate_summary" | "process_manual";
 
 export interface QueueMessage {
     type: QueueMessageType;
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    // URL-based fields (required for process_episode, unused for process_manual/regenerate_summary)
+    appleUrl?: string;
     templateId: string;
     // Pre-fetched iTunes metadata (to avoid 403 errors in queue consumer)
     episodeGuid?: string;
@@ -134,6 +135,21 @@ export interface QueueMessage {
     preResolvedAudioUrl?: string;
     // User who submitted the episode
     submittedBy?: string;
+}
+
+/**
+ * Payload submitted via POST /admin/submit-manual
+ */
+export interface ManualSubmission {
+    title: string;
+    transcript: string;
+    podcastId?: string;
+    podcastName?: string;
+    pubDate?: string;      // ISO date
+    episodeUrl?: string;
+    durationMinutes?: number;
+    description?: string;
+    imageUrl?: string;
 }
 
 /**

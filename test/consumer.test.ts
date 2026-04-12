@@ -40,11 +40,16 @@ vi.mock("../src/services/summarization", () => ({
     generateSummary: vi.fn(),
 }));
 
+vi.mock("../src/services/tag-generation", () => ({
+    generateEpisodeTags: vi.fn(),
+}));
+
 // Import after mocking
 import { getEpisodeMetadata } from "../src/services/apple-podcasts";
 import { fetchTranscript } from "../src/services/rss";
 import { transcribeAudio } from "../src/services/transcription";
 import { generateSummary } from "../src/services/summarization";
+import { generateEpisodeTags } from "../src/services/tag-generation";
 import queueConsumer from "../src/queue/consumer";
 
 // ============================================================================
@@ -517,6 +522,81 @@ describe("Queue Consumer - regenerate_summary", () => {
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
         expect(updatedJob?.error).toContain("Transcript not found");
+    });
+});
+
+// ============================================================================
+// Process Manual Job Tests
+// ============================================================================
+
+describe("Queue Consumer - process_manual", () => {
+    beforeEach(async () => {
+        await clearTestData();
+        vi.clearAllMocks();
+    });
+
+    it("processes a manual transcript submission end-to-end", async () => {
+        // Pre-seed transcript and partial episode (as the manual submit handler would)
+        const episode = createSampleEpisode({
+            transcriptSource: "manual",
+            podcastName: "Manual Podcast",
+            episodeTitle: "Manual Episode",
+        });
+        const transcript = createSampleTranscript({
+            source: "manual",
+            text: "This is a pre-seeded manual transcript.",
+        });
+        await saveEpisode(env.TLDL_DATA, episode);
+        await saveTranscript(env.TLDL_DATA, transcript);
+
+        vi.mocked(generateSummary).mockResolvedValue({
+            text: "# Manual Summary\n\nKey takeaways from manual transcript.",
+            model: "gpt-5.2",
+        });
+
+        vi.mocked(generateEpisodeTags).mockResolvedValue({
+            tags: ["business", "ai"],
+            model: "gpt-5.4",
+        });
+
+        const job = createSampleJob();
+        await createJob(env.TLDL_DATA, job);
+
+        const message = createQueueMessage({
+            type: "process_manual",
+            appleUrl: undefined,
+        });
+        const batch = createMockBatch([message]);
+
+        await queueConsumer.queue(batch, getTestEnv());
+
+        // Acknowledged, not retried
+        expect(batch.messages[0].ack).toHaveBeenCalled();
+        expect(batch.messages[0].retry).not.toHaveBeenCalled();
+
+        // Transcription/metadata services should NOT be called for manual
+        expect(transcribeAudio).not.toHaveBeenCalled();
+        expect(getEpisodeMetadata).not.toHaveBeenCalled();
+        expect(fetchTranscript).not.toHaveBeenCalled();
+
+        // Summary saved
+        const summary = await getSummary(env.TLDL_DATA, "123_456", "key-takeaways");
+        expect(summary).not.toBeNull();
+        expect(summary?.text).toContain("Manual Summary");
+
+        // Episode index contains the episode
+        const indexRaw = await env.TLDL_DATA.get("episodes:index");
+        expect(indexRaw).not.toBeNull();
+        const index = JSON.parse(indexRaw!);
+        expect(index.some((e: { id: string }) => e.id === "123_456")).toBe(true);
+
+        // Episode updated with tags
+        const updatedEpisode = await getEpisode(env.TLDL_DATA, "123_456");
+        expect(updatedEpisode?.tags).toEqual(["business", "ai"]);
+
+        // Job completed
+        const updatedJob = await getJob(env.TLDL_DATA, job.id);
+        expect(updatedJob?.status).toBe("completed");
     });
 });
 

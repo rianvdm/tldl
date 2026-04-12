@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
     parseApplePodcastsUrl,
     deriveEpisodeId,
+    deriveManualEpisodeId,
     type ParsedAppleUrl,
 } from "../src/lib/url-parser";
 
@@ -170,5 +171,36 @@ describe("deriveEpisodeId", () => {
         expect(id1).not.toBe(id2);
         expect(id1).not.toBe(id3);
         expect(id2).not.toBe(id3);
+    });
+});
+
+describe("deriveManualEpisodeId", () => {
+    it("produces an id with podcastId prefix when provided", () => {
+        const id = deriveManualEpisodeId("My Great Episode", "podcast123");
+        expect(id).toMatch(/^podcast123_my-great-episode_\d+$/);
+    });
+
+    it("produces an id with manual_ prefix when no podcastId", () => {
+        const id = deriveManualEpisodeId("My Great Episode");
+        expect(id).toMatch(/^manual_my-great-episode_\d+$/);
+    });
+
+    it("slugifies titles with special characters", () => {
+        const id = deriveManualEpisodeId("Hello, World! How's it going?");
+        expect(id).toMatch(/^manual_hello-world-how-s-it-going_\d+$/);
+    });
+
+    it("produces unique ids on successive calls for the same title", async () => {
+        const id1 = deriveManualEpisodeId("Same Title");
+        await new Promise((r) => setTimeout(r, 10));
+        const id2 = deriveManualEpisodeId("Same Title");
+        expect(id1).not.toEqual(id2);
+    });
+
+    it("truncates very long titles to a reasonable slug length", () => {
+        const longTitle = "a".repeat(300);
+        const id = deriveManualEpisodeId(longTitle);
+        const slugPortion = id.replace(/^manual_/, "").replace(/_\d+$/, "");
+        expect(slugPortion.length).toBeLessThanOrEqual(80);
     });
 });
