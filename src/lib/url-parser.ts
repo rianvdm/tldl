@@ -141,3 +141,26 @@ export function extractPodcastId(episodeId: string): string | null {
     const match = episodeId.match(/^(\d+)_/);
     return match ? match[1] : null;
 }
+
+/**
+ * Derive a stable, unique episode ID for a manually-submitted transcript.
+ *
+ * Format:
+ * - With podcastId:    `{podcastId}_{slug(title)}_{timestamp}`
+ * - Without podcastId: `manual_{slug(title)}_{timestamp}`
+ *
+ * Slug is lowercased, alphanumeric + hyphen only, and capped at 80 chars.
+ * Timestamp is Date.now() in ms, guaranteeing uniqueness across calls.
+ */
+export function deriveManualEpisodeId(title: string, podcastId?: string): string {
+    const slug = title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80)
+        .replace(/-+$/g, "");
+
+    const timestamp = Date.now();
+    const prefix = podcastId && podcastId.length > 0 ? podcastId : "manual";
+    return `${prefix}_${slug}_${timestamp}`;
+}
