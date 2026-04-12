@@ -5,13 +5,15 @@
  */
 
 import { Hono } from "hono";
-import type { HonoEnv, Job, MonitorSettings } from "../types";
+import type { HonoEnv, Job, MonitorSettings, Episode, Transcript, QueueMessage } from "../types";
 import { Layout } from "./public";
 import {
     createJob,
     getEpisode,
     getTranscript,
     getSummary,
+    saveEpisode,
+    saveTranscript,
     saveSummary,
     deleteEpisode,
     deleteJob,
@@ -39,7 +41,7 @@ import {
     createProcessEpisodeMessage,
     createRegenerateSummaryMessage,
 } from "../lib/queue";
-import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId } from "../lib/url-parser";
+import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId, deriveManualEpisodeId } from "../lib/url-parser";
 import { isValidTemplateId, getValidTags, validateTags, TEMPLATES, isBlockedPodcast } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { resolveAudioUrl } from "../services/transcription";
@@ -95,6 +97,15 @@ async function requireAdmin(c: import("hono").Context<HonoEnv>): Promise<Respons
 
 function generateUUID(): string {
     return crypto.randomUUID();
+}
+
+function isValidUrl(s: string): boolean {
+    try {
+        new URL(s);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 function formatDuration(seconds: number): string {
@@ -1208,6 +1219,168 @@ admin.post("/submit", async (c) => {
 
     // Redirect to admin dashboard (job shows as in-progress on home page)
     return c.redirect("/admin");
+});
+
+// ============================================================================
+// POST /submit-manual - Process manual transcript submission
+// ============================================================================
+
+admin.post("/submit-manual", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    const form = await c.req.formData();
+
+    const getStr = (name: string): string => {
+        const v = form.get(name);
+        return typeof v === "string" ? v.trim() : "";
+    };
+
+    const title = getStr("title");
+    const pastedTranscript = getStr("transcript");
+    const podcastId = getStr("podcastId");
+    const podcastName = getStr("podcastName");
+    const pubDate = getStr("pubDate");
+    const episodeUrl = getStr("episodeUrl");
+    const durationRaw = getStr("durationMinutes");
+
+    // Transcript: prefer uploaded file if it has content, otherwise pasted text.
+    let transcriptText = pastedTranscript;
+    const transcriptFile = form.get("transcriptFile");
+    if (transcriptFile instanceof File && transcriptFile.size > 0) {
+        transcriptText = (await transcriptFile.text()).trim();
+    }
+
+    const errors: string[] = [];
+
+    if (!title) {
+        errors.push("Episode title is required.");
+    } else if (title.length > 300) {
+        errors.push("Episode title must be 300 characters or fewer.");
+    }
+
+    if (!transcriptText) {
+        errors.push("Transcript is required (paste text or upload a .txt file).");
+    } else if (transcriptText.length < 200) {
+        errors.push("Transcript must be at least 200 characters.");
+    } else if (transcriptText.length > 500_000) {
+        errors.push("Transcript must be 500,000 characters or fewer.");
+    }
+
+    if (podcastId && !/^[a-zA-Z0-9_-]+$/.test(podcastId)) {
+        errors.push("Podcast ID must only contain letters, numbers, hyphens, or underscores.");
+    }
+
+    if (pubDate && Number.isNaN(Date.parse(pubDate))) {
+        errors.push("Publication date is not a valid date.");
+    }
+
+    if (episodeUrl && !isValidUrl(episodeUrl)) {
+        errors.push("Episode URL is not a valid URL.");
+    }
+
+    let durationSeconds = 0;
+    if (durationRaw) {
+        const minutes = Number(durationRaw);
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 600) {
+            errors.push("Duration must be an integer between 1 and 600 minutes.");
+        } else {
+            durationSeconds = minutes * 60;
+        }
+    }
+
+    if (errors.length > 0) {
+        const errorList = errors.map((e) => `<li>${escapeHtml(e)}</li>`).join("");
+        return c.html(
+            Layout({
+                title: "Submission Error",
+                children: `
+                    <div class="alert alert-error">
+                        <strong>Please fix the following:</strong>
+                        <ul>${errorList}</ul>
+                    </div>
+                    <a href="/admin/submit-manual" class="button">Back to Form</a>
+                `,
+            }),
+            400
+        );
+    }
+
+    // Derive episode ID
+    const episodeId = deriveManualEpisodeId(title, podcastId || undefined);
+
+    // Collision check
+    const existing = await getEpisode(c.env.TLDL_DATA, episodeId);
+    if (existing) {
+        return c.html(
+            Layout({
+                title: "Episode Already Exists",
+                children: `
+                    <div class="alert alert-error">An episode with this ID already exists: ${escapeHtml(episodeId)}</div>
+                    <a href="/admin/submit-manual" class="button">Back to Form</a>
+                `,
+            }),
+            409
+        );
+    }
+
+    const submittedBy = c.get("userEmail");
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const episodeDate = pubDate ? new Date(pubDate).toISOString().slice(0, 10) : nowIso.slice(0, 10);
+
+    const episode: Episode = {
+        id: episodeId,
+        appleUrl: episodeUrl || "",
+        podcastName: podcastName || "Manual upload",
+        episodeTitle: title,
+        episodeDuration: durationSeconds,
+        episodeDate,
+        audioUrl: "",
+        transcriptSource: "manual",
+        createdAt: nowIso,
+        expiresAt,
+        ...(submittedBy && { submittedBy }),
+    };
+
+    await saveEpisode(c.env.TLDL_DATA, episode);
+
+    const transcript: Transcript = {
+        episodeId,
+        text: transcriptText,
+        source: "manual",
+        createdAt: nowIso,
+    };
+    await saveTranscript(c.env.TLDL_DATA, transcript);
+
+    // Create job record
+    const jobId = generateUUID();
+    const templateId = c.env.DEFAULT_TEMPLATE || "key-takeaways";
+    const job: Job = {
+        id: jobId,
+        episodeId,
+        appleUrl: episodeUrl || "",
+        status: "queued",
+        templateId,
+        podcastName: episode.podcastName,
+        episodeTitle: episode.episodeTitle,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+    };
+    await createJob(c.env.TLDL_DATA, job);
+
+    // Enqueue message for background processing
+    const msg: QueueMessage = {
+        type: "process_manual",
+        jobId,
+        episodeId,
+        templateId,
+        ...(submittedBy && { submittedBy }),
+    };
+    await enqueueJob(c.env.TLDL_QUEUE, msg);
+
+    return c.redirect("/admin", 303);
 });
 
 // ============================================================================
