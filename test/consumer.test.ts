@@ -537,16 +537,13 @@ describe("Queue Consumer - process_manual", () => {
 
     it("processes a manual transcript submission end-to-end", async () => {
         // Pre-seed transcript and partial episode (as the manual submit handler would)
-        // Note: TranscriptSource doesn't yet include "manual" — a later task in
-        // this plan extends the union. For now, seed with "rss" so the test
-        // typechecks; the path under test doesn't depend on the source value.
         const episode = createSampleEpisode({
-            transcriptSource: "rss",
+            transcriptSource: "manual",
             podcastName: "Manual Podcast",
             episodeTitle: "Manual Episode",
         });
         const transcript = createSampleTranscript({
-            source: "rss",
+            source: "manual",
             text: "This is a pre-seeded manual transcript.",
         });
         await saveEpisode(env.TLDL_DATA, episode);

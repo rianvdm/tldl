@@ -17,7 +17,7 @@ export type JobStatus =
 /**
  * Source of the transcript - determines how we obtained it
  */
-export type TranscriptSource = "apple" | "rss" | "openai";
+export type TranscriptSource = "apple" | "rss" | "openai" | "manual";
 
 /**
  * Job record - tracks the processing state of a submitted episode
