@@ -1368,6 +1368,7 @@ admin.post("/submit-manual", async (c) => {
         createdAt: nowIso,
         updatedAt: nowIso,
     };
+    await createJobDO(c.env, job);
     await createJob(c.env.TLDL_DATA, job);
 
     // Enqueue message for background processing
