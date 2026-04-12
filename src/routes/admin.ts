@@ -333,6 +333,7 @@ admin.get("/", async (c) => {
 
         <div class="admin-quick-actions">
             <a href="/admin/submit" class="button button-primary">Submit Episode</a>
+            <a href="/admin/submit-manual" class="button button-primary">Submit Transcript</a>
             <a href="/admin/podcasts" class="button">Manage Podcasts</a>
             <button type="button" class="button" onclick="checkAllNow()">Check All Now</button>
             <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F" class="button" style="margin-left: auto;">Log Out</a>
@@ -983,6 +984,94 @@ admin.get("/submit", async (c) => {
 
     return c.html(Layout({
         title: "Submit Episode",
+        children: content,
+    }));
+});
+
+// ============================================================================
+// GET /submit-manual - Manual transcript submission form
+// ============================================================================
+
+admin.get("/submit-manual", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    const content = `
+        <div class="page-header">
+            <h1>Submit Transcript</h1>
+            <p class="page-subtitle">Upload a transcript manually when an episode can't be processed via Apple Podcasts URL.</p>
+            <a href="/admin" class="button button-secondary">← Back to Dashboard</a>
+        </div>
+
+        <div class="divider"></div>
+
+        <form method="POST" action="/admin/submit-manual" enctype="multipart/form-data" class="card" style="display: flex; flex-direction: column; gap: 1.5rem;">
+            <p class="form-help">
+                Use this form for transcripts that can't be processed via an Apple Podcasts URL.
+                Only the title and a transcript (file or pasted text) are required — everything else is optional.
+            </p>
+
+            <div class="form-group">
+                <label class="form-label" for="title">Episode Title</label>
+                <input type="text" id="title" name="title" class="form-input" maxlength="300" required />
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="transcriptFile">Transcript File</label>
+                <input type="file" id="transcriptFile" name="transcriptFile" class="form-input" accept=".txt,text/plain" />
+                <p class="form-help">Upload a .txt file, or paste the transcript below.</p>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="transcript">Transcript Text</label>
+                <textarea id="transcript" name="transcript" class="form-input" rows="10" placeholder="Paste transcript text here..."></textarea>
+            </div>
+
+            <fieldset style="border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; display: flex; flex-direction: column; gap: 1rem;">
+                <legend style="padding: 0 0.5rem; font-weight: 600;">Optional metadata</legend>
+
+                <div class="form-group">
+                    <label class="form-label" for="podcastId">Podcast ID</label>
+                    <input type="text" id="podcastId" name="podcastId" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="podcastName">Podcast Name</label>
+                    <input type="text" id="podcastName" name="podcastName" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="pubDate">Publication Date</label>
+                    <input type="date" id="pubDate" name="pubDate" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="episodeUrl">Episode URL</label>
+                    <input type="url" id="episodeUrl" name="episodeUrl" class="form-input" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="durationMinutes">Duration (minutes)</label>
+                    <input type="number" id="durationMinutes" name="durationMinutes" class="form-input" min="1" max="600" />
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="description">Description</label>
+                    <textarea id="description" name="description" class="form-input" rows="3"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="imageUrl">Image URL</label>
+                    <input type="url" id="imageUrl" name="imageUrl" class="form-input" />
+                </div>
+            </fieldset>
+
+            <button type="submit" class="button button-primary">Submit Transcript</button>
+        </form>
+    `;
+
+    return c.html(Layout({
+        title: "Submit Transcript",
         children: content,
     }));
 });

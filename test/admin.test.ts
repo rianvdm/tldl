@@ -142,6 +142,24 @@ describe("GET /admin/submit", () => {
 });
 
 // ============================================================================
+// GET /admin/submit-manual — Manual Transcript Submission Form
+// ============================================================================
+
+describe("GET /admin/submit-manual", () => {
+    it("renders the manual submission form", async () => {
+        const response = await SELF.fetch("http://localhost/admin/submit-manual");
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain('action="/admin/submit-manual"');
+        expect(html).toContain('name="title"');
+        expect(html).toContain('name="transcript"');
+        expect(html).toContain('name="transcriptFile"');
+        expect(html).toContain('name="podcastId"');
+        expect(html).toContain('enctype="multipart/form-data"');
+    });
+});
+
+// ============================================================================
 // POST /admin/submit — Episode Submission
 // ============================================================================
 
