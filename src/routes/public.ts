@@ -1706,4 +1706,32 @@ publicRoutes.get("/feed", async (c) => {
     });
 });
 
+// GET /widget/latest — JSON endpoint for embedding latest episode on external sites
+publicRoutes.get("/widget/latest", async (c) => {
+    const { episodes } = await listEpisodes(c.env.TLDL_DATA, { pageSize: 1 });
+
+    if (episodes.length === 0) {
+        return c.json({ error: "No episodes found" }, 404);
+    }
+
+    const latest = episodes[0];
+    const url = new URL(c.req.url);
+    const baseUrl = `${url.protocol}//${url.host}`;
+
+    return c.json(
+        {
+            title: `${latest.podcastName} - ${latest.episodeTitle}`,
+            podcastName: latest.podcastName,
+            episodeTitle: latest.episodeTitle,
+            link: `${baseUrl}/episode/${latest.id}`,
+        },
+        {
+            headers: {
+                "Access-Control-Allow-Origin": "https://elezea.com",
+                "Cache-Control": "public, max-age=3600",
+            },
+        }
+    );
+});
+
 export default publicRoutes;
