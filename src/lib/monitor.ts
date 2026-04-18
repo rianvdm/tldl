@@ -17,8 +17,9 @@ import {
     getEpisode,
     getEpisodeIndex,
 } from "./kv";
-import { fetchAndParseFeed, type RssEpisode } from "../services/rss";
+import { fetchAndParseFeed, fetchFeedIfChanged, type RssEpisode } from "../services/rss";
 import { lookupPodcastByItunesId, getEpisodesByItunesId } from "../services/podcast-index";
+import { deriveRssEpisodeId } from "./rss-episode-id";
 import { createJob } from "./kv";
 import { enqueueJob, createProcessEpisodeMessage } from "./queue";
 import { createJobDO } from "./job-status-do";
@@ -223,9 +224,9 @@ export async function addPodcastToMonitoring(
 // ============================================================================
 
 /**
- * Check a single podcast for new episodes
- * Primary strategy: Podcast Index API (avoids RSS feed 429s from CDNs)
- * Fallback: RSS feed (if PI is rate-limited)
+ * Check a single podcast for new episodes.
+ * Primary strategy: RSS feed with conditional GET (etag/lastModified).
+ * Fallback: Podcast Index API (if RSS returns an error).
  */
 export async function checkPodcastForNewEpisodes(
     env: Env,
@@ -240,6 +241,112 @@ export async function checkPodcastForNewEpisodes(
         errors: [],
     };
 
+    try {
+        const fetchResult = await fetchFeedIfChanged(podcast.rssUrl, {
+            etag: podcast.etag,
+            lastModified: podcast.lastModified,
+        });
+
+        if (fetchResult.status === "not_modified") {
+            await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {
+                lastChecked: new Date().toISOString(),
+                status: "active",
+            });
+            console.log(JSON.stringify({ event: "monitor_rss_not_modified", podcastId: podcast.id }));
+            return result;
+        }
+
+        if (fetchResult.status === "error") {
+            console.log(JSON.stringify({
+                event: "monitor_rss_error_fallback_to_pi",
+                podcastId: podcast.id,
+                reason: fetchResult.reason,
+            }));
+            return await checkViaPodcastIndex(env, podcast, maxEpisodes, result);
+        }
+
+        // status === "ok"
+        const feed = fetchResult.feed;
+        const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
+        const processedSet = new Set(processedGuids);
+        const newEpisodes = feed.episodes.filter(ep => !processedSet.has(ep.guid));
+
+        const currentPodcast = await getMonitoredPodcast(env.TLDL_DATA, podcast.id);
+        const baseUpdate: Partial<MonitoredPodcast> = {
+            lastChecked: new Date().toISOString(),
+            status: "active",
+            etag: fetchResult.etag,
+            lastModified: fetchResult.lastModified,
+        };
+
+        if (newEpisodes.length === 0) {
+            await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, baseUpdate);
+            return result;
+        }
+
+        const episodesToProcess = newEpisodes.slice(0, maxEpisodes);
+
+        for (const rssEp of episodesToProcess) {
+            try {
+                const episodeId = await deriveRssEpisodeId(podcast.id, rssEp.guid);
+
+                const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
+                const existsByTitle = await episodeExistsByTitle(env, podcast.id, rssEp.title);
+                if (existingEpisode || existsByTitle) {
+                    await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEp.guid);
+                    continue;
+                }
+
+                await queueRssEpisodeForProcessing(env, {
+                    podcastId: podcast.id,
+                    podcastName: podcast.name,
+                    episodeId,
+                    episodeGuid: rssEp.guid,
+                    expectedTitle: rssEp.title,
+                    expectedDate: rssEp.pubDate,
+                    audioUrl: rssEp.audioUrl,
+                    durationSeconds: rssEp.duration,
+                    transcriptUrl: rssEp.transcriptUrl,
+                    transcriptType: rssEp.transcriptType,
+                    templateId: podcast.templateId,
+                });
+
+                await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEp.guid);
+                result.queued.push(rssEp.title);
+                result.newEpisodes++;
+            } catch (error) {
+                result.errors.push(`Error processing ${rssEp.title}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+
+        await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {
+            ...baseUpdate,
+            episodesProcessed: (currentPodcast?.episodesProcessed || 0) + result.newEpisodes,
+        });
+
+    } catch (error) {
+        result.errors.push(error instanceof Error ? error.message : String(error));
+        await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {
+            lastChecked: new Date().toISOString(),
+            status: "error",
+            lastError: error instanceof Error ? error.message : String(error),
+        });
+    }
+
+    return result;
+}
+
+/**
+ * Fallback: check a podcast for new episodes via the Podcast Index API.
+ * Called when the RSS feed returns an error (e.g. 429 rate-limit).
+ * Preserves the original PI-first logic verbatim.
+ */
+async function checkViaPodcastIndex(
+    env: Env,
+    podcast: MonitoredPodcast,
+    maxEpisodes: number,
+    result: CheckResult
+): Promise<CheckResult> {
     try {
         // Calculate "since" timestamp: lastChecked or 7 days ago
         const sinceDate = podcast.lastChecked
@@ -596,6 +703,70 @@ async function queueEpisodeForProcessing(
 
     console.log(JSON.stringify({
         event: "monitor_episode_queued",
+        jobId,
+        episodeId: params.episodeId,
+        title: params.expectedTitle,
+    }));
+}
+
+interface QueueRssEpisodeParams {
+    podcastId: string;
+    podcastName: string;
+    episodeId: string;
+    episodeGuid: string;
+    expectedTitle: string;
+    expectedDate: string;
+    audioUrl: string;
+    durationSeconds: number;
+    transcriptUrl?: string;
+    transcriptType?: string;
+    templateId: string;
+}
+
+/**
+ * Queue an RSS-sourced episode for processing (creates job and sends to queue).
+ * Passes pre-fetched metadata so the consumer skips PI/iTunes enrichment.
+ */
+async function queueRssEpisodeForProcessing(
+    env: Env,
+    params: QueueRssEpisodeParams
+): Promise<void> {
+    const jobId = generateUUID();
+    const now = new Date().toISOString();
+
+    const job: Job = {
+        id: jobId,
+        episodeId: params.episodeId,
+        appleUrl: "",
+        status: "queued",
+        templateId: params.templateId,
+        createdAt: now,
+        updatedAt: now,
+    };
+
+    await createJobDO(env, job);
+    await createJob(env.TLDL_DATA, job);
+
+    const message = createProcessEpisodeMessage({
+        jobId,
+        episodeId: params.episodeId,
+        templateId: params.templateId,
+        episodeGuid: params.episodeGuid,
+        expectedTitle: params.expectedTitle,
+        expectedDate: params.expectedDate,
+        submittedBy: "monitor@tldl.app",
+        rssSourced: true,
+        audioUrl: params.audioUrl,
+        durationSeconds: params.durationSeconds,
+        transcriptUrl: params.transcriptUrl,
+        transcriptType: params.transcriptType,
+        podcastTitle: params.podcastName,
+    });
+
+    await enqueueJob(env.TLDL_QUEUE, message);
+
+    console.log(JSON.stringify({
+        event: "monitor_rss_episode_queued",
         jobId,
         episodeId: params.episodeId,
         title: params.expectedTitle,
