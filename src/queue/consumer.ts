@@ -26,6 +26,7 @@ import {
     saveSummary,
     addToEpisodeIndex,
     appendActivityEvent,
+    getMonitoredPodcast,
 } from "../lib/kv";
 import {
     updateJobStatusDO,
@@ -33,6 +34,7 @@ import {
     updateJobMetadataDO,
 } from "../lib/job-status-do";
 import { getEpisodeMetadata } from "../services/apple-podcasts";
+import type { EpisodeMetadata } from "../services/apple-podcasts";
 import { fetchTranscript as fetchRssTranscript } from "../services/rss";
 import { transcribeAudio } from "../services/transcription";
 import { generateSummary } from "../services/summarization";
@@ -86,6 +88,13 @@ interface ProcessingContext {
     preResolvedAudioUrl?: string;
     // User who submitted the episode
     submittedBy?: string;
+    // RSS-sourced monitoring: skip Podcast Index / iTunes lookup entirely
+    rssSourced?: boolean;
+    prefetchedAudioUrl?: string;
+    prefetchedDurationSeconds?: number;
+    prefetchedTranscriptUrl?: string;
+    prefetchedTranscriptType?: string;
+    prefetchedPodcastTitle?: string;
 }
 
 // ============================================================================
@@ -233,6 +242,12 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         audioUrlOverride: msg.audioUrlOverride,
         preResolvedAudioUrl: msg.preResolvedAudioUrl,
         submittedBy: msg.submittedBy,
+        rssSourced: msg.rssSourced,
+        prefetchedAudioUrl: msg.audioUrl,
+        prefetchedDurationSeconds: msg.durationSeconds,
+        prefetchedTranscriptUrl: msg.transcriptUrl,
+        prefetchedTranscriptType: msg.transcriptType,
+        prefetchedPodcastTitle: msg.podcastTitle,
     };
 
     console.log(
@@ -280,9 +295,6 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
  */
 async function processEpisode(ctx: ProcessingContext): Promise<void> {
     const { env, jobId, episodeId, appleUrl, templateId, episodeGuid, expectedTitle, expectedDate, submittedBy } = ctx;
-    if (!appleUrl) {
-        throw new AppError(ERROR_CODES.INVALID_URL, "Missing Apple Podcasts URL for process_episode job");
-    }
     const kv = env.TLDL_DATA;
     const maxMinutes = parseInt(env.MAX_EPISODE_MINUTES, 10) || 121;
 
@@ -335,22 +347,58 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     await updateJobStatusBoth(env, kv, jobId, "fetching_metadata");
     await updateJobEstimateBoth(env, kv, jobId, 180); // ~3 minutes initial estimate
 
-    const parsedUrl = parseApplePodcastsUrl(appleUrl);
-    if (!parsedUrl) {
-        throw new AppError(ERROR_CODES.INVALID_URL, "Invalid Apple Podcasts URL");
-    }
+    let metadata: EpisodeMetadata;
 
-    // Use pre-fetched iTunes metadata from queue message (avoids 403 errors)
-    // Pass env for Podcast Index API access (primary source)
-    // Pass appleUrl for redirect-based title extraction when no pre-fetched metadata
-    const metadata = await getEpisodeMetadata(parsedUrl, {
-        maxMinutes,
-        episodeGuid,
-        expectedTitle,
-        expectedDate,
-        env,
-        appleUrl,
-    });
+    if (ctx.rssSourced && ctx.prefetchedAudioUrl) {
+        // RSS-sourced path: metadata was pre-fetched from the feed — skip PI / iTunes entirely
+        const podcastId = episodeId.split("_")[0];
+        const monitored = await getMonitoredPodcast(kv, podcastId);
+        const durationSec = ctx.prefetchedDurationSeconds ?? 0;
+
+        if (durationSec > maxMinutes * 60) {
+            throw new AppError(
+                ERROR_CODES.EPISODE_TOO_LONG,
+                `Episode duration (${Math.round(durationSec / 60)} min) exceeds limit (${maxMinutes} min)`
+            );
+        }
+
+        metadata = {
+            podcastName: ctx.prefetchedPodcastTitle || monitored?.name || "Unknown Podcast",
+            episodeTitle: expectedTitle || "Untitled Episode",
+            episodeDuration: durationSec,
+            episodeDate: expectedDate || new Date().toISOString(),
+            audioUrl: ctx.prefetchedAudioUrl,
+            feedUrl: monitored?.rssUrl || "",
+            ...(ctx.prefetchedTranscriptUrl && { transcriptUrl: ctx.prefetchedTranscriptUrl }),
+            ...(ctx.prefetchedTranscriptType && { transcriptType: ctx.prefetchedTranscriptType }),
+        };
+
+        console.log(JSON.stringify({
+            event: "consumer_rss_sourced_skip_pi",
+            episodeId,
+            audioUrl: ctx.prefetchedAudioUrl,
+        }));
+    } else {
+        if (!appleUrl) {
+            throw new AppError(ERROR_CODES.INVALID_URL, "Missing Apple Podcasts URL for process_episode job");
+        }
+        const parsedUrl = parseApplePodcastsUrl(appleUrl);
+        if (!parsedUrl) {
+            throw new AppError(ERROR_CODES.INVALID_URL, "Invalid Apple Podcasts URL");
+        }
+
+        // Use pre-fetched iTunes metadata from queue message (avoids 403 errors)
+        // Pass env for Podcast Index API access (primary source)
+        // Pass appleUrl for redirect-based title extraction when no pre-fetched metadata
+        metadata = await getEpisodeMetadata(parsedUrl, {
+            maxMinutes,
+            episodeGuid,
+            expectedTitle,
+            expectedDate,
+            env,
+            appleUrl,
+        });
+    }
 
     // Update job with metadata so it shows on the status page
     await updateJobMetadataDO(env, jobId, metadata.podcastName, metadata.episodeTitle);
@@ -479,7 +527,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
 
         const episode: Episode = {
             id: episodeId,
-            appleUrl,
+            appleUrl: appleUrl || "",
             podcastName: metadata.podcastName,
             episodeTitle: metadata.episodeTitle,
             episodeDuration: metadata.episodeDuration,
