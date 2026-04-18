@@ -39,3 +39,6 @@ coverage/
 .cache/
 .wrangler/
 .tmp-build/
+
+# Worktrees
+.worktrees/
