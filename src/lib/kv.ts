@@ -431,6 +431,7 @@ export async function rebuildEpisodeIndex(kv: KVNamespace): Promise<number> {
             expiresAt: ep.expiresAt,
             tags: ep.tags,
             podcastAuthor: ep.podcastAuthor,
+            audioUrl: ep.audioUrl,
         }))
         .sort(
             (a, b) =>

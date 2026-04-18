@@ -180,6 +180,7 @@ export async function addPodcastToMonitoring(
 
         const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
         const existsByTitle = await episodeExistsByTitle(env, podcastId, latestEpisode.title);
+        const existsByAudio = await episodeExistsByAudioUrl(env, podcastId, latestEpisode.enclosureUrl);
 
         console.log(JSON.stringify({
             event: "monitor_add_queue_latest_check",
@@ -189,9 +190,10 @@ export async function addPodcastToMonitoring(
             episodeGuid: latestEpisode.guid,
             existsById: !!existingEpisode,
             existsByTitle: existsByTitle,
+            existsByAudio: existsByAudio,
         }));
 
-        if (!existingEpisode && !existsByTitle) {
+        if (!existingEpisode && !existsByTitle && !existsByAudio) {
             await queueEpisodeForProcessing(env, {
                 podcastId,
                 episodeId,
@@ -292,7 +294,8 @@ export async function checkPodcastForNewEpisodes(
 
                 const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
                 const existsByTitle = await episodeExistsByTitle(env, podcast.id, rssEp.title);
-                if (existingEpisode || existsByTitle) {
+                const existsByAudio = await episodeExistsByAudioUrl(env, podcast.id, rssEp.audioUrl);
+                if (existingEpisode || existsByTitle || existsByAudio) {
                     await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEp.guid);
                     continue;
                 }
@@ -400,11 +403,12 @@ async function checkViaPodcastIndex(
                 try {
                     const episodeId = `${podcast.id}_${piEpisode.id}`;
 
-                    // Check if already in KV by ID or title
+                    // Check if already in KV by ID, title, or audio URL
                     const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
                     const existsByTitle = await episodeExistsByTitle(env, podcast.id, piEpisode.title);
+                    const existsByAudio = await episodeExistsByAudioUrl(env, podcast.id, piEpisode.enclosureUrl);
 
-                    if (existingEpisode || existsByTitle) {
+                    if (existingEpisode || existsByTitle || existsByAudio) {
                         await markEpisodeProcessed(env.TLDL_DATA, podcast.id, piEpisode.guid);
                         continue;
                     }
@@ -486,8 +490,9 @@ async function checkViaPodcastIndex(
                     const episodeId = `${podcast.id}_${matchedPiEpisode.id}`;
                     const existingEpisode = await getEpisode(env.TLDL_DATA, episodeId);
                     const existsByTitle = await episodeExistsByTitle(env, podcast.id, rssEpisode.title);
+                    const existsByAudio = await episodeExistsByAudioUrl(env, podcast.id, rssEpisode.audioUrl);
 
-                    if (existingEpisode || existsByTitle) {
+                    if (existingEpisode || existsByTitle || existsByAudio) {
                         await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEpisode.guid);
                         continue;
                     }
@@ -817,6 +822,41 @@ async function episodeExistsByTitle(
     return index.some(ep =>
         ep.id.startsWith(`${podcastId}_`) &&
         ep.episodeTitle.toLowerCase().trim() === normalizedTitle
+    );
+}
+
+/**
+ * Strip query string + trailing slash from an audio URL so tracking params
+ * don't cause false negatives when comparing. Falls back to the raw string
+ * if URL parsing fails.
+ */
+function normalizeAudioUrl(url: string): string {
+    try {
+        const u = new URL(url);
+        return (u.origin + u.pathname).replace(/\/$/, "").toLowerCase();
+    } catch {
+        return url.toLowerCase();
+    }
+}
+
+/**
+ * Check if an episode already exists by audio URL for a given podcast.
+ * Catches publisher retitles and GUID regenerations that leave the MP3 URL
+ * unchanged. Compares on origin + pathname (ignores query string).
+ */
+async function episodeExistsByAudioUrl(
+    env: Env,
+    podcastId: string,
+    audioUrl: string
+): Promise<boolean> {
+    if (!audioUrl) return false;
+    const index = await getEpisodeIndex(env.TLDL_DATA);
+    const normalized = normalizeAudioUrl(audioUrl);
+
+    return index.some(ep =>
+        ep.id.startsWith(`${podcastId}_`) &&
+        ep.audioUrl !== undefined &&
+        normalizeAudioUrl(ep.audioUrl) === normalized
     );
 }
 
