@@ -3,7 +3,7 @@ import { env } from "cloudflare:test";
 import { checkPodcastForNewEpisodes } from "../src/lib/monitor";
 import * as rss from "../src/services/rss";
 import { saveMonitoredPodcast, getMonitoredPodcast, markEpisodesProcessed } from "../src/lib/kv";
-import type { MonitoredPodcast } from "../src/types";
+import type { MonitoredPodcast, Env } from "../src/types";
 
 // Mock DO and queue to prevent actual Durable Object / queue interactions
 vi.mock("../src/lib/job-status-do", () => ({
@@ -32,6 +32,10 @@ vi.mock("../src/lib/queue", () => ({
 
 // Import after mocking
 import { enqueueJob } from "../src/lib/queue";
+
+function getTestEnv(): Env {
+    return { ...env } as Env;
+}
 
 const PODCAST: MonitoredPodcast = {
     id: "1809663079",
@@ -64,7 +68,7 @@ describe("monitor: RSS-first", () => {
     it("returns no new episodes on 304", async () => {
         vi.spyOn(rss, "fetchFeedIfChanged").mockResolvedValue({ status: "not_modified" });
 
-        const result = await checkPodcastForNewEpisodes(env, PODCAST, 5);
+        const result = await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
 
         expect(result.newEpisodes).toBe(0);
         expect(vi.mocked(enqueueJob)).not.toHaveBeenCalled();
@@ -89,7 +93,7 @@ describe("monitor: RSS-first", () => {
             },
         });
 
-        const result = await checkPodcastForNewEpisodes(env, PODCAST, 5);
+        const result = await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
 
         expect(result.newEpisodes).toBe(1);
         expect(vi.mocked(enqueueJob)).toHaveBeenCalledTimes(1);
@@ -122,7 +126,7 @@ describe("monitor: RSS-first", () => {
             },
         });
 
-        const result = await checkPodcastForNewEpisodes(env, PODCAST, 5);
+        const result = await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
 
         expect(result.newEpisodes).toBe(0);
         expect(vi.mocked(enqueueJob)).not.toHaveBeenCalled();
@@ -131,7 +135,7 @@ describe("monitor: RSS-first", () => {
     it("falls back to PI on RSS error", async () => {
         vi.spyOn(rss, "fetchFeedIfChanged").mockResolvedValue({ status: "error", reason: "http_429" });
         // PI will fail in test env (no real credentials), but result must still be defined
-        const result = await checkPodcastForNewEpisodes(env, PODCAST, 5);
+        const result = await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
         expect(result).toBeDefined();
     });
 });

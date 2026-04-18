@@ -47,7 +47,7 @@ vi.mock("../src/lib/job-status-do", () => ({
 }));
 
 // Import after mocking
-import { fetchAndParseFeed, fetchFeedIfChanged } from "../src/services/rss";
+import { fetchAndParseFeed } from "../src/services/rss";
 import { getEpisodesByItunesId } from "../src/services/podcast-index";
 import { checkPodcastForNewEpisodes } from "../src/lib/monitor";
 

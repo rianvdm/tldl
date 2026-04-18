@@ -66,12 +66,12 @@ function createMockBatch(messages: QueueMessage[]): MessageBatch<QueueMessage> {
     };
 }
 
-function getTestEnv() {
+function getTestEnv(): import("../src/types").Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
         MAX_EPISODE_MINUTES: "121",
-    } as typeof env & { OPENAI_API_KEY: string; MAX_EPISODE_MINUTES: string };
+    } as import("../src/types").Env;
 }
 
 // ============================================================================
