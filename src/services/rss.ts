@@ -514,6 +514,60 @@ export function findEpisodeInFeed(
     return null;
 }
 
+export type FetchFeedResult =
+    | { status: "ok"; feed: ParsedFeed; etag?: string; lastModified?: string }
+    | { status: "not_modified" }
+    | { status: "error"; reason: string };
+
+export interface FetchFeedOptions {
+    etag?: string;
+    lastModified?: string;
+}
+
+/**
+ * Fetch an RSS feed with conditional GET (If-None-Match / If-Modified-Since).
+ * Returns "not_modified" on 304, "ok" with parsed feed + response headers on 200,
+ * "error" on 429 or network failure (caller decides fallback).
+ */
+export async function fetchFeedIfChanged(
+    feedUrl: string,
+    options: FetchFeedOptions
+): Promise<FetchFeedResult> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    const headers: Record<string, string> = {
+        Accept: "application/rss+xml, application/xml, text/xml",
+        "User-Agent": USER_AGENT,
+    };
+    if (options.etag) headers["If-None-Match"] = options.etag;
+    if (options.lastModified) headers["If-Modified-Since"] = options.lastModified;
+
+    try {
+        const response = await fetch(feedUrl, { headers, signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (response.status === 304) return { status: "not_modified" };
+        if (response.status === 429) return { status: "error", reason: "http_429" };
+        if (!response.ok) return { status: "error", reason: `http_${response.status}` };
+
+        const xml = await response.text();
+        const feed = parseFeedXml(xml);
+        return {
+            status: "ok",
+            feed,
+            etag: response.headers.get("ETag") || undefined,
+            lastModified: response.headers.get("Last-Modified") || undefined,
+        };
+    } catch (error) {
+        clearTimeout(timeoutId);
+        return {
+            status: "error",
+            reason: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
 /**
  * Fetch and parse a transcript file
  *
