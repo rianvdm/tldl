@@ -75,6 +75,7 @@ export interface EpisodeIndexEntry {
     expiresAt: string;
     tags?: string[];               // AI-generated episode tags (included for filtering)
     podcastAuthor?: string;        // Podcast author/host name
+    audioUrl?: string;             // Source audio URL — used for dedup when publishers retitle/regenerate GUIDs
 }
 
 /**

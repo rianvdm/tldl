@@ -554,6 +554,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             expiresAt: episode.expiresAt,
             tags: episode.tags,
             podcastAuthor: episode.podcastAuthor,
+            audioUrl: episode.audioUrl,
         });
     }
 
@@ -718,6 +719,7 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
         expiresAt: updatedEpisode.expiresAt,
         tags: updatedEpisode.tags,
         podcastAuthor: updatedEpisode.podcastAuthor,
+        audioUrl: updatedEpisode.audioUrl,
     });
 
     // Mark completed
