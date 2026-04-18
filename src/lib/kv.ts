@@ -790,12 +790,12 @@ export async function markEpisodesProcessed(
 }
 
 /**
- * Update lastChecked timestamp and optionally episodesProcessed count
+ * Update lastChecked timestamp and optionally other fields on a monitored podcast
  */
 export async function updateMonitoredPodcastStatus(
     kv: KVNamespace,
     podcastId: string,
-    updates: { lastChecked?: string; episodesProcessed?: number; status?: "active" | "paused" | "error"; lastError?: string }
+    updates: Partial<MonitoredPodcast>
 ): Promise<void> {
     const podcast = await getMonitoredPodcast(kv, podcastId);
     if (!podcast) return;

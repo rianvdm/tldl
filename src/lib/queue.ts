@@ -21,7 +21,7 @@ export async function enqueueJob(
 export function createProcessEpisodeMessage(params: {
     jobId: string;
     episodeId: string;
-    appleUrl: string;
+    appleUrl?: string;
     templateId: string;
     episodeGuid?: string;
     expectedTitle?: string;
@@ -29,19 +29,32 @@ export function createProcessEpisodeMessage(params: {
     submittedBy?: string;
     audioUrlOverride?: string;
     preResolvedAudioUrl?: string;
+    // RSS-sourced monitoring
+    rssSourced?: boolean;
+    audioUrl?: string;
+    durationSeconds?: number;
+    transcriptUrl?: string;
+    transcriptType?: string;
+    podcastTitle?: string;
 }): QueueMessage {
     return {
         type: "process_episode",
         jobId: params.jobId,
         episodeId: params.episodeId,
-        appleUrl: params.appleUrl,
         templateId: params.templateId,
+        ...(params.appleUrl && { appleUrl: params.appleUrl }),
         ...(params.episodeGuid && { episodeGuid: params.episodeGuid }),
         ...(params.expectedTitle && { expectedTitle: params.expectedTitle }),
         ...(params.expectedDate && { expectedDate: params.expectedDate }),
         ...(params.submittedBy && { submittedBy: params.submittedBy }),
         ...(params.audioUrlOverride && { audioUrlOverride: params.audioUrlOverride }),
         ...(params.preResolvedAudioUrl && { preResolvedAudioUrl: params.preResolvedAudioUrl }),
+        ...(params.rssSourced && { rssSourced: true }),
+        ...(params.audioUrl && { audioUrl: params.audioUrl }),
+        ...(params.durationSeconds !== undefined && { durationSeconds: params.durationSeconds }),
+        ...(params.transcriptUrl && { transcriptUrl: params.transcriptUrl }),
+        ...(params.transcriptType && { transcriptType: params.transcriptType }),
+        ...(params.podcastTitle && { podcastTitle: params.podcastTitle }),
     };
 }
 

@@ -21,6 +21,8 @@ import type { MonitoredPodcast, Env } from "../src/types";
 vi.mock("../src/services/rss", () => ({
     fetchAndParseFeed: vi.fn(),
     fetchTranscript: vi.fn(),
+    // Default: simulate RSS error so tests exercise the PI fallback path
+    fetchFeedIfChanged: vi.fn().mockResolvedValue({ status: "error", reason: "http_429" }),
 }));
 
 vi.mock("../src/services/podcast-index", () => ({

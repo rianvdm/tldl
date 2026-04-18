@@ -135,6 +135,14 @@ export interface QueueMessage {
     preResolvedAudioUrl?: string;
     // User who submitted the episode
     submittedBy?: string;
+
+    // RSS-sourced monitoring: full metadata pre-fetched from the feed
+    rssSourced?: boolean;
+    audioUrl?: string;
+    durationSeconds?: number;
+    transcriptUrl?: string;
+    transcriptType?: string;
+    podcastTitle?: string;
 }
 
 /**
@@ -212,6 +220,10 @@ export interface MonitoredPodcast {
     episodesProcessed: number;     // Count of episodes processed
     status: "active" | "paused" | "error";
     lastError?: string;            // Error message if status is "error"
+
+    // Conditional GET cache headers for RSS polling
+    etag?: string;
+    lastModified?: string;
 }
 
 /**

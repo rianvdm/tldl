@@ -771,9 +771,11 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
                 ` : ''}
             </div>
             <div class="platform-links">
+                ${episode.appleUrl ? `
                 <a href="${escapeHtml(episode.appleUrl)}" target="_blank" rel="noopener noreferrer" class="apple-podcasts-badge" title="Listen on Apple Podcasts">
                     <img src="/apple-podcasts-badge.svg" alt="Listen on Apple Podcasts" height="32">
                 </a>
+                ` : ''}
                 ${episode.podcastWebsiteUrl ? `
                 <a href="${escapeHtml(episode.podcastWebsiteUrl)}" target="_blank" rel="noopener noreferrer" class="website-link" title="Visit podcast website">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
