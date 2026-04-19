@@ -17,7 +17,7 @@ jobs:
               repo: context.repo.repo,
               release_id: context.payload.release.id,
             });
-            const res = await fetch('https://elezea.com/api/publish/release', {
+            const res = await fetch('https://elezea-prod.rian-db8.workers.dev/api/publish/release', {
               method: 'POST',
               headers: {
                 Authorization: `Bearer ${process.env.ELEZEA_PUBLISH_TOKEN}`,
