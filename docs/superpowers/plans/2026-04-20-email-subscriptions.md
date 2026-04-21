@@ -798,7 +798,7 @@ describe("sendTemplate", () => {
             to: "c@d.com",
             templateAlias: "confirm-subscription",
             templateModel: { confirmUrl: "https://x", podcastList: "X", expiresIn: "48 hours" },
-            messageStream: "outbound",
+            messageStream: c.env.POSTMARK_MESSAGE_STREAM,
         });
         expect(result).toEqual({ success: true });
         expect(fetchSpy).toHaveBeenCalledWith(
@@ -824,7 +824,7 @@ describe("sendTemplate", () => {
         );
         const result = await sendTemplate("t", {
             from: "a@b.com", to: "c@d.com",
-            templateAlias: "x", templateModel: {}, messageStream: "outbound",
+            templateAlias: "x", templateModel: {}, messageStream: c.env.POSTMARK_MESSAGE_STREAM,
         });
         expect(result.success).toBe(false);
         expect(result.errorMessage).toBe("bad");
@@ -834,7 +834,7 @@ describe("sendTemplate", () => {
         vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("net"));
         const result = await sendTemplate("t", {
             from: "a@b.com", to: "c@d.com",
-            templateAlias: "x", templateModel: {}, messageStream: "outbound",
+            templateAlias: "x", templateModel: {}, messageStream: c.env.POSTMARK_MESSAGE_STREAM,
         });
         expect(result.success).toBe(false);
     });
@@ -1230,7 +1230,7 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
             podcastList: podcastNames,
             expiresIn: "48 hours",
         },
-        messageStream: "outbound",
+        messageStream: c.env.POSTMARK_MESSAGE_STREAM,
     });
 
     return c.html(pageShell("Check your inbox — tldl", `<h1>Check your inbox</h1><p>If we can reach you, a confirmation email is on its way.</p>`));
@@ -1454,7 +1454,7 @@ subscriptionsRoutes.post("/preferences", async (c) => {
             from: c.env.POSTMARK_FROM_EMAIL, to: email,
             templateAlias: "manage-link",
             templateModel: { manageUrl },
-            messageStream: "outbound",
+            messageStream: c.env.POSTMARK_MESSAGE_STREAM,
         });
     } else if (!subscriber) {
         // Treat as new signup with empty podcast list — user picks podcasts after confirming.
@@ -1471,7 +1471,7 @@ subscriptionsRoutes.post("/preferences", async (c) => {
                 podcastList: "",
                 expiresIn: "48 hours",
             },
-            messageStream: "outbound",
+            messageStream: c.env.POSTMARK_MESSAGE_STREAM,
         });
     }
     // complained + bounced: silently drop.

@@ -146,8 +146,10 @@ The dual-secret verify helper is a v1.1 follow-up; v1 ships with single-secret v
 
 ### Postmark streams
 
-- **`outbound`** (existing transactional stream) — `confirm-subscription` and `manage-link` emails. Time-sensitive 1:1. No separate "welcome" email is sent: the `/confirm` success page itself is the welcome surface, with a "Manage preferences" link inline.
+- **`tldl`** (existing transactional stream, already used by the contact form via `POSTMARK_MESSAGE_STREAM` in `wrangler.toml:14`) — `confirm-subscription` and `manage-link` emails. Time-sensitive 1:1. Isolated from other tldl-Postmark-server projects (Elezea, Protea, Marketing). No separate "welcome" email is sent: the `/confirm` success page itself is the welcome surface, with a "Manage preferences" link inline.
 - **`episode-summaries`** (new broadcast stream — must be created in Postmark before rollout) — per-episode summaries. Broadcast reputation; Postmark auto-adds `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers on broadcast streams by default, but the prerequisites checklist verifies this is enabled on the specific stream before shipping.
+
+The transactional stream is read from `env.POSTMARK_MESSAGE_STREAM` (already a `[vars]` entry); the broadcast stream is a module-level constant `"episode-summaries"` in `notifications.ts` since it has no reason to be per-environment configurable.
 
 ### Sending domain
 
