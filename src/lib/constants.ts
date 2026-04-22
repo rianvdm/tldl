@@ -110,12 +110,60 @@ export function validateTags(tags: string[]): { valid: string[]; invalid: string
 // Summary Templates
 // ============================================================================
 
+/**
+ * Voice guidelines prepended to every template prompt.
+ *
+ * Source of truth for voice standards:
+ * https://github.com/rianvdm/product-ai-public/blob/main/01-context/avoid-ai-patterns.md
+ *
+ * Keep this distilled — the full doc is reference material, this is the prompt.
+ * When the source doc changes meaningfully, port the deltas manually.
+ */
+export const VOICE_GUIDELINES = `Write in a direct, unpretentious voice. The summary should read as if a sharp human drafted it — not an AI performing thoughtfulness.
+
+Words to avoid:
+- Verbs: delve, underscore, leverage, utilize, foster, harness, craft, navigate, boast
+- Adjectives: intricate, nuanced, multifaceted, robust, seamless, pivotal, crucial, transformative, meticulous
+- Nouns: tapestry, journey, landscape (as catch-all), realm, paradigm, ecosystem
+- Filler adverbs: notably, importantly, remarkably, genuinely, truly, fundamentally, deeply
+
+Phrases to avoid:
+- "It's worth noting that...", "It bears mentioning", "Notably", "Interestingly"
+- "In today's [ever-evolving/fast-paced] [world/landscape]"
+- "A testament to", "cannot be overstated", "paving the way"
+- "In conclusion", "In summary", "To sum up" — don't announce the ending
+
+Sentence patterns to avoid:
+- "It's not X — it's Y." (and the "It isn't X. It's Y." variant)
+- "No X. No Y. Just Z." — dramatic countdowns
+- "The X? A Y." — self-posed rhetorical question answered immediately
+- Parallel triplets for rhetorical effect (e.g., "Products impress; platforms empower. Products solve; platforms create.") — avoid the construction, not lists of three items
+- The same sentence opening repeated three or more times in a row
+- Short fragments as standalone paragraphs for manufactured emphasis
+
+Handling numbers:
+Attribute numeric claims to the speaker or paraphrase them. "The guest says they grew 10x" is fine; restating "The company grew 10x" as a standalone fact is not. Never invent precision that isn't in the transcript.
+
+Punctuation:
+Prefer periods and commas. Use em-dashes only for genuine interruptions, not as stylistic decoration. Use straight quotes and hyphens, not unicode characters.
+
+Tonal pitfalls:
+- No "Let's break this down" or "Think of it as..." — skip teacher mode
+- No unsolicited validation ("You're not alone", "You're not imagining it")
+- No "Imagine a world where..." futurism
+- No safe truths that teach nothing ("Consistency matters")
+- Don't announce clarity ("The truth is simple") — just be clear
+
+Vary sentence rhythm. Let some run long; let some land short. Perfect coherence reads as machine-written.`;
+
 export const TEMPLATES: Record<string, Template> = {
     "key-takeaways": {
         id: "key-takeaways",
         name: "Key Takeaways & Practical Steps",
         description: "For craft and professional development podcasts",
-        prompt: `Analyze this podcast transcript and provide a summary using the following structure. Use ## headings (not numbered) to introduce each section.
+        prompt: `${VOICE_GUIDELINES}
+
+Analyze this podcast transcript and provide a summary using the following structure. Use ## headings (not numbered) to introduce each section.
 
 ## Overview
 A brief overview of the episode's main topic (2-3 sentences).
@@ -136,7 +184,9 @@ Keep the tone professional but accessible. Use paragraphs for narrative sections
         id: "narrative-summary",
         name: "Narrative Summary",
         description: "For story-driven and interview podcasts",
-        prompt: `Provide a cohesive narrative summary of this podcast episode. Use ## headings (not numbered) to introduce each section.
+        prompt: `${VOICE_GUIDELINES}
+
+Provide a cohesive narrative summary of this podcast episode. Use ## headings (not numbered) to introduce each section.
 
 ## The Story
 Write in flowing paragraphs that capture the arc of the conversation or story, including key moments and turning points.
@@ -153,7 +203,11 @@ Total length: 400-500 words.`,
         id: "eli5",
         name: "ELI5 (Explain Like I'm 5)",
         description: "For technical and complex topics",
-        prompt: `Explain the main ideas from this podcast in simple, accessible language that anyone could understand. Use ## headings (not numbered) to introduce each section.
+        prompt: `${VOICE_GUIDELINES}
+
+For this template specifically, concrete analogies are encouraged — the voice rule about "teacher mode" doesn't apply here. Simple vocabulary and everyday comparisons are the point.
+
+Explain the main ideas from this podcast in simple, accessible language that anyone could understand. Use ## headings (not numbered) to introduce each section.
 
 Break down complex concepts using everyday analogies, simple vocabulary (avoid jargon, or explain it plainly), and concrete examples.
 

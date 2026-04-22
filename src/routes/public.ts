@@ -365,7 +365,6 @@ publicRoutes.get("/", async (c) => {
         ${introSection}
         <div class="page-header">
             <h2>Recently Added Episodes</h2>
-            <p class="page-subtitle">Browse AI-generated summaries from podcast episodes</p>
         </div>
         <form method="GET" action="/" class="search-form">
             <div class="search-input-wrapper">
