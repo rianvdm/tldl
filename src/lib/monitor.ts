@@ -166,6 +166,7 @@ export async function addPodcastToMonitoring(
         addedAt: new Date().toISOString(),
         episodesProcessed: 0,
         status: "active",
+        ...(podcastInfo.author && { author: podcastInfo.author }),
     };
 
     await saveMonitoredPodcast(env.TLDL_DATA, podcast);

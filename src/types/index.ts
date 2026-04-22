@@ -231,6 +231,7 @@ export interface MonitoredPodcast {
     // Display metadata (used in email notifications and UI)
     coverUrl?: string;             // Podcast cover image URL
     websiteUrl?: string;           // Podcast website URL
+    author?: string;               // Podcast author/host name (e.g., "Lenny Rachitsky")
 
     // Conditional GET cache headers for RSS polling
     etag?: string;

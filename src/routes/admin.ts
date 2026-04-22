@@ -24,6 +24,7 @@ import {
     saveMonitorSettings,
     listMonitoredPodcasts,
     getMonitoredPodcast,
+    saveMonitoredPodcast,
     deleteMonitoredPodcast,
     updateEpisodeTags,
     getActivityLog,
@@ -1999,6 +2000,73 @@ admin.post("/backfill-podcast-info", async (c) => {
     } catch (error) {
         return c.json({
             error: error instanceof Error ? error.message : "Failed to backfill podcast info",
+        }, 500);
+    }
+});
+
+// POST /backfill-monitored-podcast-authors
+admin.post("/backfill-monitored-podcast-authors", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const { lookupPodcastByItunesId } = await import("../services/podcast-index");
+        const podcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
+
+        let processed = 0;
+        let updated = 0;
+        let alreadyHasAuthor = 0;
+        let notFound = 0;
+        let failed = 0;
+
+        for (const podcast of podcasts) {
+            processed++;
+            try {
+                if (podcast.author) {
+                    alreadyHasAuthor++;
+                    continue;
+                }
+
+                const info = await lookupPodcastByItunesId(
+                    podcast.id,
+                    c.env.PODCAST_INDEX_KEY,
+                    c.env.PODCAST_INDEX_SECRET
+                );
+
+                if (!info?.author) {
+                    notFound++;
+                    continue;
+                }
+
+                await saveMonitoredPodcast(c.env.TLDL_DATA, { ...podcast, author: info.author });
+                updated++;
+                console.log(JSON.stringify({
+                    event: "monitored_podcast_author_backfilled",
+                    podcastId: podcast.id,
+                    author: info.author,
+                }));
+            } catch (error) {
+                console.error(JSON.stringify({
+                    event: "backfill_monitored_podcast_author_failed",
+                    podcastId: podcast.id,
+                    error: error instanceof Error ? error.message : "Unknown error",
+                }));
+                failed++;
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed}: ${updated} updated, ${alreadyHasAuthor} already had author, ${notFound} not found in Podcast Index, ${failed} failed`,
+            processed,
+            updated,
+            alreadyHasAuthor,
+            notFound,
+            failed,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to backfill monitored podcast authors",
         }, 500);
     }
 });

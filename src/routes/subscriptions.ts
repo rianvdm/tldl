@@ -27,8 +27,10 @@ const TURNSTILE_SCRIPT = '<script src="https://challenges.cloudflare.com/turnsti
 const CHECKBOX_LIST_STYLES = `
     <style>
         .checkbox-list { display: flex; flex-direction: column; gap: 0.5rem; }
-        .checkbox-row { display: flex; align-items: center; gap: 0.6rem; cursor: pointer; padding: 0.25rem 0; }
-        .checkbox-row input[type="checkbox"] { width: 1.1em; height: 1.1em; }
+        .checkbox-row { display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; padding: 0.25rem 0; }
+        .checkbox-row input[type="checkbox"] { width: 1.1em; height: 1.1em; margin-top: 0.2em; flex-shrink: 0; }
+        .checkbox-row .podcast-name { display: block; }
+        .checkbox-row .podcast-author { display: block; font-size: 0.85em; color: var(--text-muted, #888); }
     </style>`;
 
 function logSendFailure(event: string, email: string, result: { success: boolean; errorMessage?: string }): void {
@@ -73,7 +75,10 @@ subscriptionsRoutes.get("/subscribe", async (c) => {
         : `<div class="checkbox-list">${podcasts.map((p) => `
             <label class="checkbox-row">
                 <input type="checkbox" name="podcastIds" value="${escapeHtml(p.id)}">
-                <span>${escapeHtml(p.name)}</span>
+                <span>
+                    <span class="podcast-name">${escapeHtml(p.name)}</span>
+                    ${p.author ? `<span class="podcast-author">by ${escapeHtml(p.author)}</span>` : ""}
+                </span>
             </label>`).join("")}</div>`;
 
     const content = `
@@ -336,7 +341,10 @@ subscriptionsRoutes.get("/preferences/manage", async (c) => {
         : `<div class="checkbox-list">${allPodcasts.map((p) => `
             <label class="checkbox-row">
                 <input type="checkbox" name="podcastIds" value="${escapeHtml(p.id)}"${current.has(p.id) ? " checked" : ""}>
-                <span>${escapeHtml(p.name)}</span>
+                <span>
+                    <span class="podcast-name">${escapeHtml(p.name)}</span>
+                    ${p.author ? `<span class="podcast-author">by ${escapeHtml(p.author)}</span>` : ""}
+                </span>
             </label>`).join("")}</div>`;
 
     const unsubAllToken = await signToken(c.env.MANAGE_LINK_HMAC_SECRET, unsubAllMessage(subscriber.id));
