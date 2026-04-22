@@ -38,7 +38,6 @@ export async function notifySubscribers(env: Env, input: NotifyInput): Promise<v
 
         const summaryHtml = input.episode.summaryText ? renderMarkdown(input.episode.summaryText) : "";
         const episodeDate = formatDate(input.episode.episodeDate);
-        const websiteUrl = input.episode.podcastWebsiteUrl ?? podcast.websiteUrl;
 
         const results = await Promise.allSettled(subscribers.map(async (sub) => {
             const manageToken = await signToken(env.MANAGE_LINK_HMAC_SECRET, manageMessage(sub.id, sub.email));
@@ -56,7 +55,6 @@ export async function notifySubscribers(env: Env, input: NotifyInput): Promise<v
                 unsubscribePodcastUrl: unsubUrl,
                 manageUrl,
             };
-            if (websiteUrl) model.podcastWebsiteUrl = websiteUrl;
 
             const res = await sendTemplate(env.POSTMARK_API_KEY ?? "", {
                 from: env.POSTMARK_FROM_EMAIL,
