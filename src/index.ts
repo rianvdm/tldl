@@ -12,12 +12,15 @@ import { AppError, logError } from "./lib/errors";
 import api from "./routes/api";
 import admin from "./routes/admin";
 import publicRoutes from "./routes/public";
+import { subscriptionsRoutes } from "./routes/subscriptions";
+import { webhookRoutes } from "./routes/webhooks";
 import queueConsumer from "./queue/consumer";
 import { Footer } from "./lib/components";
 import { checkAllPodcasts } from "./lib/monitor";
 import { appendActivityEvent } from "./lib/kv";
 import { notifyDiscord, DISCORD_COLORS } from "./lib/discord";
 import { listActiveJobsWithDO } from "./lib/job-status-do";
+import { sweepExpiredPending } from "./lib/db";
 import type { Env } from "./types";
 
 // ============================================================================
@@ -307,6 +310,13 @@ Disallow: /debug/
     app.route("/admin", admin);
 
     // ============================================================================
+    // Subscription Routes (/subscribe, /confirm)
+    // ============================================================================
+
+    app.route("/", subscriptionsRoutes);
+    app.route("/", webhookRoutes);
+
+    // ============================================================================
     // Public HTML Routes
     // ============================================================================
 
@@ -496,6 +506,17 @@ async function scheduledHandler(
         } catch {
             // Activity log and Discord are non-critical
         }
+    }
+
+    try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const deleted = await sweepExpiredPending(env.DB, nowSec);
+        if (deleted > 0) console.log(JSON.stringify({ event: "pending_sweep", deleted }));
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: "pending_sweep_error",
+            error: error instanceof Error ? error.message : String(error),
+        }));
     }
 }
 

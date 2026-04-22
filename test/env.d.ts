@@ -6,6 +6,7 @@
  */
 
 import "cloudflare:test";
+import type { D1Migration } from "cloudflare:test";
 
 declare module "cloudflare:test" {
     interface ProvidedEnv {
@@ -14,5 +15,12 @@ declare module "cloudflare:test" {
         CACHE_TTL_DAYS: string;
         DEFAULT_TEMPLATE: string;
         TLDL_QUEUE: Queue;
+        DB: D1Database;
+    }
+}
+
+declare module "vitest" {
+    interface ProvidedContext {
+        DB_MIGRATIONS: D1Migration[];
     }
 }

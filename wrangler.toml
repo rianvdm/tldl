@@ -42,6 +42,12 @@ class_name = "JobStatusDO"
 tag = "v1"
 new_classes = ["JobStatusDO"]
 
+# D1 database for email subscriptions
+[[d1_databases]]
+binding = "DB"
+database_name = "tldl-subscribers"
+database_id = "7492bd0d-f255-4a88-97b4-0966d8d826aa"
+
 # Cron trigger for podcast monitoring
 [triggers]
 crons = ["0 */2 * * *"]  # Every 2 hours

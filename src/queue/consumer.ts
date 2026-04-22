@@ -13,7 +13,7 @@ import type { Env, QueueMessage, Episode, Transcript, Summary, TranscriptSource 
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
 import { generateEpisodeTags } from "../services/tag-generation";
-import { parseApplePodcastsUrl } from "../lib/url-parser";
+import { parseApplePodcastsUrl, extractPodcastId } from "../lib/url-parser";
 import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
 import {
     getJob,
@@ -38,6 +38,7 @@ import type { EpisodeMetadata } from "../services/apple-podcasts";
 import { fetchTranscript as fetchRssTranscript } from "../services/rss";
 import { transcribeAudio } from "../services/transcription";
 import { generateSummary } from "../services/summarization";
+import { notifySubscribers } from "../notifications";
 
 // ============================================================================
 // Helper: Update status in both DO (immediate) and KV (backup)
@@ -556,6 +557,13 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             podcastAuthor: episode.podcastAuthor,
             audioUrl: episode.audioUrl,
         });
+        const notifyPodcastId = extractPodcastId(episodeId);
+        if (notifyPodcastId) {
+            await notifySubscribers(env, {
+                podcastId: notifyPodcastId,
+                episode: { ...episode, summaryText: summary.text },
+            });
+        }
     }
 
     // Step 6: Mark job as completed
@@ -721,6 +729,13 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
         podcastAuthor: updatedEpisode.podcastAuthor,
         audioUrl: updatedEpisode.audioUrl,
     });
+    const notifyPodcastId = extractPodcastId(episodeId);
+    if (notifyPodcastId) {
+        await notifySubscribers(env, {
+            podcastId: notifyPodcastId,
+            episode: { ...updatedEpisode, summaryText: summary.text },
+        });
+    }
 
     // Mark completed
     await updateJobStatusBoth(env, kv, jobId, "completed");

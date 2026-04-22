@@ -66,3 +66,53 @@ export async function sendEmail(
         return { success: false, errorMessage: "Failed to send email" };
     }
 }
+
+export interface SendTemplateOptions {
+    from: string;
+    to: string;
+    templateAlias: string;
+    templateModel: Record<string, unknown>;
+    messageStream: string;
+}
+
+export async function sendTemplate(
+    apiKey: string,
+    options: SendTemplateOptions
+): Promise<{ success: boolean; errorMessage?: string }> {
+    try {
+        const response = await fetch("https://api.postmarkapp.com/email/withTemplate", {
+            method: "POST",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Postmark-Server-Token": apiKey,
+            },
+            body: JSON.stringify({
+                From: options.from,
+                To: options.to,
+                TemplateAlias: options.templateAlias,
+                TemplateModel: options.templateModel,
+                MessageStream: options.messageStream,
+            }),
+        });
+        if (!response.ok) {
+            const error = await response.json() as { ErrorCode: number; Message: string };
+            console.error(JSON.stringify({
+                event: "postmark_send_template_failed",
+                status: response.status,
+                errorCode: error.ErrorCode,
+                message: error.Message,
+                templateAlias: options.templateAlias,
+            }));
+            return { success: false, errorMessage: error.Message || "Failed to send template email" };
+        }
+        return { success: true };
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: "postmark_send_template_error",
+            error: error instanceof Error ? error.message : String(error),
+            templateAlias: options.templateAlias,
+        }));
+        return { success: false, errorMessage: "Failed to send template email" };
+    }
+}

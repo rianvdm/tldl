@@ -181,6 +181,12 @@ export interface Env {
     TURNSTILE_SECRET: string;
     DISCORD_WEBHOOK_URL?: string;  // Optional — notifications disabled if not set
     POSTMARK_API_KEY?: string;     // Optional — request form disabled if not set
+    MANAGE_LINK_HMAC_SECRET: string;
+    POSTMARK_WEBHOOK_AUTH: string;
+    EMAIL_DISPATCH_ENABLED?: string;  // optional; "false" disables dispatch
+
+    // D1 database for email subscriptions
+    DB: D1Database;
 
     // Environment variables (from wrangler.toml [vars])
     TURNSTILE_SITE_KEY: string;
@@ -221,6 +227,10 @@ export interface MonitoredPodcast {
     episodesProcessed: number;     // Count of episodes processed
     status: "active" | "paused" | "error";
     lastError?: string;            // Error message if status is "error"
+
+    // Display metadata (used in email notifications and UI)
+    coverUrl?: string;             // Podcast cover image URL
+    websiteUrl?: string;           // Podcast website URL
 
     // Conditional GET cache headers for RSS polling
     etag?: string;
