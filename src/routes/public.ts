@@ -355,7 +355,7 @@ publicRoutes.get("/", async (c) => {
     const introSection = `
         <div class="hero-section">
             <h1 class="hero-headline">Your favorite podcasts, <span class="text-accent">summarized</span>.</h1>
-            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Browse AI summaries below, or <a href="/request" class="hero-link">request a podcast</a> to be added.</p>
+            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Browse AI summaries below, <a href="/subscribe" class="hero-link">subscribe by email</a>, or <a href="/request" class="hero-link">request a podcast</a> to be added.</p>
         </div>
     `;
 

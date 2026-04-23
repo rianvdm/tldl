@@ -212,7 +212,7 @@ h4 {
 }
 
 .hero-subtitle {
-    font-size: 1rem;
+    font-size: 1.25rem;
     line-height: 1.6;
     color: var(--muted-foreground);
     margin: 0;
