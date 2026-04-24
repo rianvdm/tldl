@@ -61,6 +61,9 @@ export function renderDetailPage(opts: DetailPageOptions): string {
     if (ep.podcastWebsiteUrl) {
         moreLinks.push(`<a href="${escape(ep.podcastWebsiteUrl)}" target="_blank" rel="noopener noreferrer">Podcast website →</a>`);
     }
+    if (ep.appleUrl) {
+        moreLinks.push(`<a href="${escape(ep.appleUrl)}" target="_blank" rel="noopener noreferrer">Listen on Apple Podcasts →</a>`);
+    }
 
     const templates = opts.availableTemplates.map(t => {
         const active = t === opts.activeTemplate ? " active" : "";
