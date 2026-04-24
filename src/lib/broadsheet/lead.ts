@@ -14,7 +14,7 @@ function formatDuration(seconds: number): string {
 function renderTagChips(tags: readonly string[] | undefined): string {
     if (!tags || tags.length === 0) return "";
     const chips = tags.map(t => `<span class="chip">${escape(t)}</span>`).join("");
-    return `<span class="sep">/</span>${chips}`;
+    return `<span class="bs-lead-tags"><span class="sep">/</span>${chips}</span>`;
 }
 
 export function renderLead(ep: Episode): string {

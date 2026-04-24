@@ -40,6 +40,7 @@ export const BROADSHEET_INDEX_CSS = `
   color: var(--bs-red); border: 1px solid var(--bs-red-deep);
   padding: 3px 8px; letter-spacing: 0.14em;
 }
+.bs-lead-tags { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .bs-pull { border-left: 2px solid var(--bs-red); padding: 4px 0 4px 24px; }
 .bs-pull .q-mark {
   font-family: 'Fraunces', Georgia, serif;
@@ -113,6 +114,23 @@ export const BROADSHEET_INDEX_CSS = `
 @media (max-width: 767px) {
   .bs-lead { padding: 20px; grid-template-columns: 1fr; gap: 24px; }
   .bs-lead-title { font-size: 40px; }
+  .bs-lead-meta { gap: 12px; }
+  /* Force tags onto their own row */
+  .bs-lead-tags {
+    flex-basis: 100%;
+    margin-top: 4px;
+    gap: 8px;
+  }
+  .bs-lead-tags .sep { display: none; }
+  /* Tighten the pull quote */
+  .bs-pull { padding: 0 0 0 16px; }
+  .bs-pull .q-mark {
+    font-size: 56px; line-height: 0.7;
+    margin-bottom: 0;
+  }
+  .bs-pull-q { font-size: 19px; line-height: 1.4; }
+  .bs-pull-src { margin-top: 12px; }
+
   .bs-index { padding: 0 20px 32px; }
   .bs-row { grid-template-columns: 36px 1fr; gap: 12px; padding: 18px 0; }
   .bs-row-title { font-size: 20px; }
