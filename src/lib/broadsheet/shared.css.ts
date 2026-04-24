@@ -36,8 +36,10 @@ export const BROADSHEET_SHARED_CSS = `
   border-bottom: 0.5px solid var(--bs-rule);
 }
 .bs-subhead .nav-items { display: flex; gap: 28px; }
-.bs-subhead .nav-items a { color: var(--bs-ink-dim); }
+.bs-subhead .nav-items a { color: var(--bs-ink-dim); transition: color 160ms ease; }
+.bs-subhead .nav-items a:hover { color: var(--bs-ink); }
 .bs-subhead .nav-items a.active { color: var(--bs-red); }
+.bs-subhead .nav-items a.active:hover { color: var(--bs-red); }
 .bs-search { margin: 0; }
 .bs-search input {
   font-family: 'JetBrains Mono', ui-monospace, monospace;

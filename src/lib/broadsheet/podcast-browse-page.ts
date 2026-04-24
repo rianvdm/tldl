@@ -10,20 +10,20 @@ export interface PodcastBrowsePageOptions {
 }
 
 const PODCAST_BROWSE_CSS = `
+.bs-podcastlist-wrap { padding: 0 56px 48px; }
 .bs-podcastlist {
-  padding: 0 56px 48px;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 0 48px;
+  border-bottom: 1px solid var(--bs-rule);
 }
 .bs-podcastlist a {
   display: flex; justify-content: space-between; align-items: baseline;
   gap: 16px;
-  padding: 18px 0;
+  padding: 22px 0;
   border-top: 1px solid var(--bs-rule);
   color: var(--bs-ink);
   text-decoration: none;
-  transition: color 160ms ease;
 }
 .bs-podcastlist a:hover .bs-podcast-name { color: var(--bs-red); }
 .bs-podcast-main { min-width: 0; flex: 1; }
@@ -46,7 +46,8 @@ const PODCAST_BROWSE_CSS = `
   white-space: nowrap;
 }
 @media (max-width: 767px) {
-  .bs-podcastlist { padding: 0 20px 32px; grid-template-columns: 1fr; }
+  .bs-podcastlist-wrap { padding: 0 20px 32px; }
+  .bs-podcastlist { grid-template-columns: 1fr; }
 }
 `;
 
@@ -84,9 +85,9 @@ ${BROADSHEET_FONTS_LINK}
 ${renderMasthead({ now, episodeCount: opts.totalInArchive })}
 ${renderSubnav(activeNav)}
 ${renderSectionBar("Podcasts — All Shows", sectionCount)}
-<div class="bs-podcastlist">
+<div class="bs-podcastlist-wrap"><div class="bs-podcastlist">
 ${rows}
-</div>
+</div></div>
 ${renderFooter()}
 </div>
 </body>

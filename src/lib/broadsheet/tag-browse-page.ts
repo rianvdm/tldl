@@ -9,26 +9,28 @@ export interface TagBrowsePageOptions {
 }
 
 const TAG_BROWSE_CSS = `
+.bs-taglist-wrap { padding: 0 56px 48px; }
 .bs-taglist {
-  padding: 0 56px 48px;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 0 48px;
+  border-bottom: 1px solid var(--bs-rule);
 }
 .bs-taglist a {
   display: flex; justify-content: space-between; align-items: baseline;
-  padding: 18px 0;
+  padding: 22px 0;
   border-top: 1px solid var(--bs-rule);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--bs-ink);
-  transition: color 160ms ease;
   text-decoration: none;
 }
-.bs-taglist a:hover { color: var(--bs-red); }
+.bs-taglist a .t { color: var(--bs-ink); transition: color 160ms ease; }
+.bs-taglist a:hover .t { color: var(--bs-red); }
 .bs-taglist a .n { color: var(--bs-ink-faint); font-size: 11px; }
 @media (max-width: 767px) {
-  .bs-taglist { padding: 0 20px 32px; grid-template-columns: 1fr; }
+  .bs-taglist-wrap { padding: 0 20px 32px; }
+  .bs-taglist { grid-template-columns: 1fr; }
 }
 `;
 
@@ -39,7 +41,7 @@ export function renderTagBrowsePage(opts: TagBrowsePageOptions): string {
     const sectionCount = `${count} ${count === 1 ? "Tag" : "Tags"} in Use`;
 
     const rows = opts.tags
-        .map(([tag, n]) => `<a href="/tag/${encodeURIComponent(tag)}"><span>${escapeText(tag)}</span><span class="n">${n}</span></a>`)
+        .map(([tag, n]) => `<a href="/tag/${encodeURIComponent(tag)}"><span class="t">${escapeText(tag)}</span><span class="n">${n}</span></a>`)
         .join("\n");
 
     return `<!doctype html>
@@ -56,9 +58,9 @@ ${BROADSHEET_FONTS_LINK}
 ${renderMasthead({ now, episodeCount: opts.totalInArchive })}
 ${renderSubnav(activeNav)}
 ${renderSectionBar("Tags — Browse by Subject", sectionCount)}
-<div class="bs-taglist">
+<div class="bs-taglist-wrap"><div class="bs-taglist">
 ${rows}
-</div>
+</div></div>
 ${renderFooter()}
 </div>
 </body>
