@@ -5,7 +5,7 @@ export const BROADSHEET_SHARED_CSS = `
 /* Masthead */
 .bs-mast {
   border-bottom: 2px solid var(--bs-ink);
-  padding: 28px 56px 20px;
+  padding: 40px 56px 32px;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: end;
@@ -28,7 +28,7 @@ export const BROADSHEET_SHARED_CSS = `
 
 /* Subnav */
 .bs-subhead {
-  padding: 10px 56px 14px;
+  padding: 16px 56px 18px;
   display: flex; justify-content: space-between; align-items: baseline;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
@@ -42,7 +42,7 @@ export const BROADSHEET_SHARED_CSS = `
 /* Section bar */
 .bs-section-bar {
   display: flex; align-items: baseline; gap: 16px;
-  padding: 28px 56px 12px;
+  padding: 56px 56px 20px;
 }
 .bs-section-bar h2 {
   font-family: 'Fraunces', Georgia, serif;

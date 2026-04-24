@@ -1,7 +1,7 @@
 export const BROADSHEET_INDEX_CSS = `
 /* LEAD */
 .bs-lead {
-  padding: 40px 56px 32px;
+  padding: 64px 56px 56px;
   display: grid;
   grid-template-columns: 3fr 2fr;
   gap: 48px;
