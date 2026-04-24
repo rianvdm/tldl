@@ -964,6 +964,40 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
     return c.html(html);
 });
 
+// ============================================================================
+// GET /tag/:tag — Episodes filtered by tag
+// ============================================================================
+
+publicRoutes.get("/tag/:tag", async (c) => {
+    const tag = c.req.param("tag");
+    const tagLower = tag.toLowerCase();
+
+    const indexEntries = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
+    const rowsRaw = indexEntries
+        .filter(e => (e.tags ?? []).map(t => t.toLowerCase()).includes(tagLower))
+        .sort((a, b) => {
+            if (a.episodeDate !== b.episodeDate) return b.episodeDate.localeCompare(a.episodeDate);
+            return b.createdAt.localeCompare(a.createdAt);
+        });
+
+    const rowsSliced = rowsRaw.slice(0, 100);
+    const hydrated = await Promise.all(rowsSliced.map(async r => {
+        const ep = await c.env.TLDL_DATA.get<Episode>(`episode:${r.id}`, "json");
+        return { ...r, deck: ep?.deck };
+    }));
+
+    const html = renderIndexPage({
+        lead: null,
+        rows: hydrated,
+        totalInArchive: indexEntries.length,
+        sectionHeading: `Tag — ${tag}`,
+        sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"}`,
+        activeNav: "tags",
+        pageTitle: `#${tag} — TL;DL`,
+    });
+    return c.html(html);
+});
+
 publicRoutes.get("/feed", async (c) => {
     const tagFilter = c.req.query("tag") || "";
 
