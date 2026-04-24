@@ -58,6 +58,10 @@ export interface Episode {
     tags?: string[];               // AI-generated episode tags (1-4 tags)
     podcastAuthor?: string;        // Podcast author/host name
     podcastWebsiteUrl?: string;    // Podcast website URL
+    /** 1-2 sentence deck for Index + Detail hero. Populated going forward; undefined for pre-redesign episodes. */
+    deck?: string;
+    /** One-sentence aphoristic pull quote from the transcript. Populated going forward; undefined for pre-redesign episodes. */
+    pullQuote?: string;
 }
 
 /**
