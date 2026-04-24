@@ -65,7 +65,11 @@ export function renderDetailPage(opts: DetailPageOptions): string {
              <span>Source: ${escape(ep.transcriptSource)}</span>
              <span>${formatDuration(ep.episodeDuration)} runtime</span>
            </div>
-           ${formatTranscriptParagraphs(opts.transcriptText)}`
+           <div class="bsd-transcript-body" data-collapsed="true">
+             ${formatTranscriptParagraphs(opts.transcriptText)}
+             <div class="bsd-transcript-fade"></div>
+           </div>
+           <button type="button" class="bsd-transcript-toggle" data-role="transcript-toggle" aria-expanded="false">Expand transcript →</button>`
         : `<p class="bsd-transcript-missing">— transcript not available for this episode —</p>`;
 
     return `<!doctype html>
@@ -113,6 +117,20 @@ ${BROADSHEET_FONTS_LINK}
     </article>
   </div>
 </div>
+<script>
+(function () {
+  var btn = document.querySelector('[data-role="transcript-toggle"]');
+  if (!btn) return;
+  var body = document.querySelector('.bsd-transcript-body');
+  if (!body) return;
+  btn.addEventListener('click', function () {
+    var collapsed = body.getAttribute('data-collapsed') === 'true';
+    body.setAttribute('data-collapsed', String(!collapsed));
+    btn.setAttribute('aria-expanded', String(collapsed));
+    btn.textContent = collapsed ? 'Collapse transcript ↑' : 'Expand transcript →';
+  });
+})();
+</script>
 </body>
 </html>`;
 }

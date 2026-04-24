@@ -128,6 +128,27 @@ export const BROADSHEET_DETAIL_CSS = `
   max-width: 74ch; margin: 0 0 14px;
 }
 .bsd-transcript .ts { color: var(--bs-red); margin-right: 10px; display: inline-block; }
+.bsd-transcript-body { position: relative; }
+.bsd-transcript-body[data-collapsed="true"] {
+  max-height: 360px;
+  overflow: hidden;
+}
+.bsd-transcript-fade {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 140px; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(16,16,14,0) 0%, var(--bs-paper) 85%);
+  display: none;
+}
+.bsd-transcript-body[data-collapsed="true"] .bsd-transcript-fade { display: block; }
+.bsd-transcript-toggle {
+  display: block; margin: 20px 0 0;
+  background: transparent; border: none; padding: 8px 0; cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--bs-red);
+  transition: transform 160ms ease;
+}
+.bsd-transcript-toggle:hover { transform: translateX(4px); }
 .bsd-transcript-missing {
   font-family: 'Fraunces', Georgia, serif;
   font-style: italic; font-size: 16px; color: var(--bs-ink-faint); margin: 16px 0;
