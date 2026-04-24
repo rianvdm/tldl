@@ -103,7 +103,7 @@ export const BROADSHEET_SHARED_CSS = `
   .bs-mast-left, .bs-mast-right { text-align: center; }
   .bs-wordmark { font-size: 56px; }
   .bs-subhead { padding: 10px 20px; flex-wrap: wrap; gap: 12px; }
-  .bs-section-bar { padding: 20px; }
+  .bs-section-bar { padding: 40px 20px 16px; }
   .bs-footer { padding: 20px; }
 }
 `;
