@@ -371,6 +371,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             episodeDate: expectedDate || new Date().toISOString(),
             audioUrl: ctx.prefetchedAudioUrl,
             feedUrl: monitored?.rssUrl || "",
+            podcastAuthor: monitored?.author,
+            podcastWebsiteUrl: monitored?.websiteUrl,
             ...(ctx.prefetchedTranscriptUrl && { transcriptUrl: ctx.prefetchedTranscriptUrl }),
             ...(ctx.prefetchedTranscriptType && { transcriptType: ctx.prefetchedTranscriptType }),
         };
@@ -545,9 +547,15 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const expiresAt = new Date(now);
         expiresAt.setDate(expiresAt.getDate() + 365);
 
+        // For RSS-ingested episodes we don't have an Apple episode ID, so fall
+        // back to a show-level Apple Podcasts URL using the numeric podcastId.
+        const rssPodcastId = ctx.rssSourced ? episodeId.split("_")[0] : "";
+        const fallbackAppleUrl = ctx.rssSourced && /^\d+$/.test(rssPodcastId)
+            ? `https://podcasts.apple.com/us/podcast/id${rssPodcastId}`
+            : "";
         const episode: Episode = {
             id: episodeId,
-            appleUrl: appleUrl || "",
+            appleUrl: appleUrl || fallbackAppleUrl,
             podcastName: metadata.podcastName,
             episodeTitle: metadata.episodeTitle,
             episodeDuration: metadata.episodeDuration,

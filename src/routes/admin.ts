@@ -2071,6 +2071,87 @@ admin.post("/backfill-monitored-podcast-authors", async (c) => {
     }
 });
 
+// POST /backfill-episode-podcast-metadata
+// Walks episodes:index, finds episodes whose podcastId matches a monitored
+// podcast, and fills in missing podcastAuthor / podcastWebsiteUrl / appleUrl
+// from the MonitoredPodcast record. RSS-ingested episodes pre-redesign are
+// missing these fields — this brings them up to current standards.
+admin.post("/backfill-episode-podcast-metadata", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const podcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
+        const byId = new Map<string, typeof podcasts[number]>();
+        for (const p of podcasts) byId.set(p.id, p);
+
+        const indexEntries = await c.env.TLDL_DATA.get<Array<{ id: string }>>("episodes:index", "json") ?? [];
+
+        let processed = 0;
+        let updated = 0;
+        let skippedNoMatch = 0;
+        let skippedAlreadySet = 0;
+        let failed = 0;
+
+        for (const entry of indexEntries) {
+            processed++;
+            const podcastId = entry.id.split("_")[0];
+            const monitored = byId.get(podcastId);
+            if (!monitored) { skippedNoMatch++; continue; }
+
+            try {
+                const ep = await getEpisode(c.env.TLDL_DATA, entry.id);
+                if (!ep) { failed++; continue; }
+
+                const desiredAuthor = monitored.author;
+                const desiredWebsite = monitored.websiteUrl;
+                const desiredApple = /^\d+$/.test(podcastId)
+                    ? `https://podcasts.apple.com/us/podcast/id${podcastId}`
+                    : "";
+
+                const needsAuthor = !ep.podcastAuthor && desiredAuthor;
+                const needsWebsite = !ep.podcastWebsiteUrl && desiredWebsite;
+                const needsApple = !ep.appleUrl && desiredApple;
+
+                if (!needsAuthor && !needsWebsite && !needsApple) {
+                    skippedAlreadySet++;
+                    continue;
+                }
+
+                const patched: Episode = {
+                    ...ep,
+                    podcastAuthor: needsAuthor ? desiredAuthor : ep.podcastAuthor,
+                    podcastWebsiteUrl: needsWebsite ? desiredWebsite : ep.podcastWebsiteUrl,
+                    appleUrl: needsApple ? desiredApple : ep.appleUrl,
+                };
+                await saveEpisode(c.env.TLDL_DATA, patched);
+                updated++;
+            } catch (error) {
+                console.error(JSON.stringify({
+                    event: "backfill_episode_podcast_metadata_failed",
+                    episodeId: entry.id,
+                    error: error instanceof Error ? error.message : "Unknown error",
+                }));
+                failed++;
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed}: ${updated} updated, ${skippedAlreadySet} already set, ${skippedNoMatch} no matching monitored podcast, ${failed} failed`,
+            processed,
+            updated,
+            skippedAlreadySet,
+            skippedNoMatch,
+            failed,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to backfill episode podcast metadata",
+        }, 500);
+    }
+});
+
 // ============================================================================
 // Podcast Monitoring Routes
 // ============================================================================
