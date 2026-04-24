@@ -149,10 +149,24 @@ publicRoutes.get("/", async (c) => {
         return b.createdAt.localeCompare(a.createdAt);
     });
 
-    const leadEntry = selectLeadEpisode(sorted);
-    const leadFull = leadEntry ? await c.env.TLDL_DATA.get<Episode>(`episode:${leadEntry.id}`, "json") : null;
+    const q = (c.req.query("q") ?? "").trim();
+    const isSearch = q.length > 0;
 
-    const rowsRaw = leadEntry ? sorted.filter(e => e.id !== leadEntry.id) : sorted;
+    let rowsRaw: EpisodeIndexEntry[];
+    let leadFull: Episode | null = null;
+
+    if (isSearch) {
+        const needle = q.toLowerCase();
+        rowsRaw = sorted.filter(e =>
+            e.episodeTitle.toLowerCase().includes(needle) ||
+            e.podcastName.toLowerCase().includes(needle) ||
+            (e.podcastAuthor ?? "").toLowerCase().includes(needle)
+        );
+    } else {
+        const leadEntry = selectLeadEpisode(sorted);
+        leadFull = leadEntry ? await c.env.TLDL_DATA.get<Episode>(`episode:${leadEntry.id}`, "json") : null;
+        rowsRaw = leadEntry ? sorted.filter(e => e.id !== leadEntry.id) : sorted;
+    }
 
     const MAX_ROWS = 50;
     const rowsSliced = rowsRaw.slice(0, MAX_ROWS);
@@ -161,14 +175,19 @@ publicRoutes.get("/", async (c) => {
         return { ...r, deck: ep?.deck };
     }));
 
+    const sectionHeading = isSearch ? `Search — "${q}"` : "The Index";
+    const sectionCount = isSearch
+        ? `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"} Matching`
+        : `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"} · Most Recent First`;
+
     const html = renderIndexPage({
         lead: leadFull,
         rows: hydrated,
         totalInArchive: indexEntries.length,
-        sectionHeading: "The Index",
-        sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"} · Most Recent First`,
+        sectionHeading,
+        sectionCount,
         activeNav: "index",
-        pageTitle: "TL;DL — Too Long, Didn't Listen",
+        pageTitle: isSearch ? `Search "${q}" — TL;DL` : "TL;DL — Too Long, Didn't Listen",
     });
     return c.html(html);
 });
