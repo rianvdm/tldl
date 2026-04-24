@@ -13,6 +13,23 @@ export interface EditorialMeta {
     pullQuote: string;
 }
 
+interface ResponsesApiResponse {
+    id: string;
+    model: string;
+    output: Array<{
+        type: string;
+        content: Array<{
+            type: string;
+            text: string;
+        }>;
+    }>;
+    error?: {
+        message: string;
+        type: string;
+        code: string;
+    };
+}
+
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const MODEL = "gpt-5.4";
 
@@ -62,18 +79,42 @@ export async function generateEditorialMeta(
 }
 
 async function callApi(transcript: string, apiKey: string): Promise<EditorialMeta> {
-    const response = await fetch(OPENAI_RESPONSES_URL, {
-        method: "POST",
-        headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            model: MODEL,
-            instructions: PROMPT,
-            input: transcript,
-        }),
-    });
+    let response: Response;
+
+    try {
+        response = await fetch(OPENAI_RESPONSES_URL, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: MODEL,
+                instructions: PROMPT,
+                input: transcript,
+            }),
+        });
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new AppError(
+            ERROR_CODES.SUMMARIZATION_FAILED,
+            `Could not connect to OpenAI: ${message}`,
+            err instanceof Error ? err : undefined
+        );
+    }
+
+    // Handle rate limiting — do NOT retry (isServerError matches "5xx" only)
+    if (response.status === 429) {
+        throw new AppError(
+            ERROR_CODES.RATE_LIMITED,
+            "OpenAI rate limit exceeded while generating editorial meta."
+        );
+    }
+
+    // Handle server errors — throw plain Error so isServerError triggers retry
+    if (response.status >= 500) {
+        throw new Error(`OpenAI server error: HTTP ${response.status}`);
+    }
 
     if (!response.ok) {
         const body = await response.text().catch(() => "");
@@ -83,8 +124,24 @@ async function callApi(transcript: string, apiKey: string): Promise<EditorialMet
         );
     }
 
-    const data: any = await response.json();
-    const text: string | undefined = data?.output?.[0]?.content?.[0]?.text;
+    let data: ResponsesApiResponse;
+    try {
+        data = await response.json() as ResponsesApiResponse;
+    } catch {
+        throw new AppError(
+            ERROR_CODES.SUMMARIZATION_FAILED,
+            "Failed to parse editorial meta response"
+        );
+    }
+
+    if (data.error) {
+        throw new AppError(
+            ERROR_CODES.SUMMARIZATION_FAILED,
+            `Editorial meta error: ${data.error.message}`
+        );
+    }
+
+    const text = data.output?.[0]?.content?.[0]?.text;
     if (!text) {
         throw new AppError(
             ERROR_CODES.SUMMARIZATION_FAILED,

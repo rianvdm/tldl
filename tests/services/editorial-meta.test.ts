@@ -36,4 +36,23 @@ describe("parseEditorialMeta", () => {
     it("returns null when fields are empty strings", () => {
         expect(parseEditorialMeta(JSON.stringify({ deck: "", pullQuote: "x" }))).toBeNull();
     });
+
+    it("returns null when fields are non-string types", () => {
+        expect(parseEditorialMeta(JSON.stringify({ deck: 123, pullQuote: "x" }))).toBeNull();
+        expect(parseEditorialMeta(JSON.stringify({ deck: "x", pullQuote: null }))).toBeNull();
+    });
+
+    it("returns null when fields are whitespace-only (trim to empty)", () => {
+        expect(parseEditorialMeta(JSON.stringify({ deck: "   ", pullQuote: "x" }))).toBeNull();
+    });
+
+    it("leaves single-period endings alone (ellipsis regex is 3+ dots)", () => {
+        const raw = JSON.stringify({ deck: "A deck.", pullQuote: "A quote.." });
+        // "A deck." → unchanged; "A quote.." → unchanged (2 dots, not 3)
+        expect(parseEditorialMeta(raw)).toEqual({ deck: "A deck.", pullQuote: "A quote.." });
+    });
+
+    it("treats empty pullQuote as invalid", () => {
+        expect(parseEditorialMeta(JSON.stringify({ deck: "x", pullQuote: "" }))).toBeNull();
+    });
 });
