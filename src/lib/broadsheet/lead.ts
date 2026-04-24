@@ -13,7 +13,9 @@ function formatDuration(seconds: number): string {
 
 function renderTagChips(tags: readonly string[] | undefined): string {
     if (!tags || tags.length === 0) return "";
-    const chips = tags.map(t => `<span class="chip">${escape(t)}</span>`).join("");
+    const chips = tags.map(t =>
+        `<a class="chip" href="/tag/${encodeURIComponent(t.toLowerCase())}">${escape(t)}</a>`
+    ).join("");
     return `<span class="bs-lead-tags"><span class="sep">/</span>${chips}</span>`;
 }
 

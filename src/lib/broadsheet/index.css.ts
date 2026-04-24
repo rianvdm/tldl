@@ -39,7 +39,9 @@ export const BROADSHEET_INDEX_CSS = `
 .bs-lead-meta .chip {
   color: var(--bs-red); border: 1px solid var(--bs-red-deep);
   padding: 3px 8px; letter-spacing: 0.14em;
+  transition: background 160ms ease, color 160ms ease;
 }
+.bs-lead-meta a.chip:hover { background: var(--bs-red); color: var(--bs-paper); }
 .bs-lead-tags { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .bs-pull { border-left: 2px solid var(--bs-red); padding: 4px 0 4px 24px; }
 .bs-pull .q-mark {

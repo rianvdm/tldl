@@ -44,8 +44,10 @@ function formatTranscriptParagraphs(text: string): string {
 
 function renderTagChips(tags: readonly string[] | undefined): string {
     if (!tags || tags.length === 0) return "";
-    const chips = tags.map(t => `<span class="chip">${escape(t)}</span>`).join("");
-    return `<span class="sep">/</span>${chips}`;
+    const chips = tags.map(t =>
+        `<a class="chip" href="/tag/${encodeURIComponent(t.toLowerCase())}">${escape(t)}</a>`
+    ).join("");
+    return `<span class="bsd-meta-tags"><span class="sep">/</span>${chips}</span>`;
 }
 
 export function renderDetailPage(opts: DetailPageOptions): string {

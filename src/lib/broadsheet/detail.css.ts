@@ -40,7 +40,13 @@ export const BROADSHEET_DETAIL_CSS = `
   margin-bottom: 44px;
 }
 .bsd-meta .sep { color: var(--bs-rule-strong); }
-.bsd-meta .chip { color: var(--bs-red); border: 1px solid var(--bs-red); padding: 3px 9px; letter-spacing: 0.14em; }
+.bsd-meta .chip {
+  color: var(--bs-red); border: 1px solid var(--bs-red);
+  padding: 3px 9px; letter-spacing: 0.14em;
+  transition: background 160ms ease, color 160ms ease;
+}
+.bsd-meta a.chip:hover { background: var(--bs-red); color: var(--bs-paper); }
+.bsd-meta-tags { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 .bsd-morefrom {
   display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline;
@@ -177,5 +183,8 @@ export const BROADSHEET_DETAIL_CSS = `
   .bsd-title { font-size: 44px; }
   .bsd-grid { grid-template-columns: 1fr; gap: 32px; }
   .bsd-side { position: static; }
+  .bsd-meta { gap: 12px; }
+  .bsd-meta-tags { flex-basis: 100%; margin-top: 4px; gap: 8px; }
+  .bsd-meta-tags .sep { display: none; }
 }
 `;
