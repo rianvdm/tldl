@@ -25,13 +25,14 @@ export function renderMasthead(opts: { now: Date; episodeCount: number }): strin
 </div>`;
 }
 
-export type SubnavKey = "index" | "podcasts" | "archive" | "tags" | "subscribe";
+export type SubnavKey = "index" | "podcasts" | "archive" | "tags" | "about" | "subscribe";
 
 export function renderSubnav(active: SubnavKey, query: string = ""): string {
     const items: Array<{ key: SubnavKey; label: string; href: string }> = [
         { key: "index", label: "Today's Index", href: "/" },
         { key: "podcasts", label: "Podcasts", href: "/podcasts" },
         { key: "tags", label: "By Tag", href: "/tag" },
+        { key: "about", label: "About", href: "/about" },
         { key: "subscribe", label: "Subscribe", href: "/subscribe" },
     ];
     return `<div class="bs-subhead">
