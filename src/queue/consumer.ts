@@ -13,6 +13,7 @@ import type { Env, QueueMessage, Episode, Transcript, Summary, TranscriptSource 
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
 import { generateEpisodeTags } from "../services/tag-generation";
+import { generateEditorialMeta } from "../services/editorial-meta";
 import { parseApplePodcastsUrl, extractPodcastId } from "../lib/url-parser";
 import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
 import {
@@ -520,6 +521,22 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         // Continue with empty tags
     }
 
+    // Step 4.6: Generate editorial meta (deck + pull quote) — non-critical
+    let editorial: { deck?: string; pullQuote?: string } = {};
+    try {
+        const meta = await generateEditorialMeta(transcript.text, env.OPENAI_API_KEY);
+        editorial = { deck: meta.deck, pullQuote: meta.pullQuote };
+    } catch (err) {
+        // Don't fail ingest if editorial-meta generation fails — log and continue.
+        console.error(
+            JSON.stringify({
+                event: "editorial_meta_generation_failed",
+                episodeId,
+                error: err instanceof Error ? err.message : "Unknown error",
+            })
+        );
+    }
+
     // Step 5: Save episode metadata (only if it doesn't exist)
     if (!existingEpisode) {
         const now = new Date();
@@ -539,6 +556,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             expiresAt: expiresAt.toISOString(),
             submittedBy,
             tags: tags.length > 0 ? tags : undefined,
+            deck: editorial.deck,
+            pullQuote: editorial.pullQuote,
             podcastAuthor: metadata.podcastAuthor,
             podcastWebsiteUrl: metadata.podcastWebsiteUrl,
         };
@@ -708,10 +727,27 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
         );
     }
 
+    // Generate editorial meta (deck + pull quote) — non-critical
+    let editorial: { deck?: string; pullQuote?: string } = {};
+    try {
+        const meta = await generateEditorialMeta(transcript.text, env.OPENAI_API_KEY);
+        editorial = { deck: meta.deck, pullQuote: meta.pullQuote };
+    } catch (err) {
+        console.error(
+            JSON.stringify({
+                event: "editorial_meta_generation_failed",
+                episodeId,
+                error: err instanceof Error ? err.message : "Unknown error",
+            })
+        );
+    }
+
     // Update episode with new tags (preserve existing tags if generation failed)
     const updatedEpisode: Episode = {
         ...episode,
         tags: tags.length > 0 ? tags : episode.tags,
+        deck: editorial.deck ?? episode.deck,
+        pullQuote: editorial.pullQuote ?? episode.pullQuote,
         submittedBy: episode.submittedBy ?? submittedBy,
     };
     await saveEpisode(kv, updatedEpisode);
