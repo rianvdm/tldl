@@ -522,6 +522,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     }
 
     // Step 4.6: Generate editorial meta (deck + pull quote) — non-critical
+    // New episode — no existing value to preserve; store raw.
     let editorial: { deck?: string; pullQuote?: string } = {};
     try {
         const meta = await generateEditorialMeta(transcript.text, env.OPENAI_API_KEY);
@@ -532,6 +533,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             JSON.stringify({
                 event: "editorial_meta_generation_failed",
                 episodeId,
+                source: "processEpisode",
                 error: err instanceof Error ? err.message : "Unknown error",
             })
         );
@@ -737,6 +739,7 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
             JSON.stringify({
                 event: "editorial_meta_generation_failed",
                 episodeId,
+                source: "processManualJob",
                 error: err instanceof Error ? err.message : "Unknown error",
             })
         );
