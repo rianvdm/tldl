@@ -57,6 +57,38 @@ export function renderSectionBar(heading: string, count: string): string {
 </div>`;
 }
 
+export interface PaginationOptions {
+    currentPage: number;
+    totalPages: number;
+    basePath: string;                      // e.g. "/", "/podcasts/123", "/tag/ai"
+    extraParams?: Record<string, string>;  // e.g. {q: "term"} — preserved across pages
+}
+
+export function renderPagination(opts: PaginationOptions): string {
+    if (opts.totalPages <= 1) return "";
+    const { currentPage, totalPages, basePath } = opts;
+    const buildHref = (page: number) => {
+        const params = new URLSearchParams();
+        if (page > 1) params.set("page", String(page));
+        for (const [k, v] of Object.entries(opts.extraParams ?? {})) {
+            if (v) params.set(k, v);
+        }
+        const qs = params.toString();
+        return qs ? `${basePath}?${qs}` : basePath;
+    };
+    const prev = currentPage > 1
+        ? `<a href="${escapeHtml(buildHref(currentPage - 1))}">← Previous</a>`
+        : `<span class="disabled">← Previous</span>`;
+    const next = currentPage < totalPages
+        ? `<a href="${escapeHtml(buildHref(currentPage + 1))}">Next →</a>`
+        : `<span class="disabled">Next →</span>`;
+    return `<div class="bs-pagination">
+  ${prev}
+  <span class="page-info">Page ${currentPage} of ${totalPages}</span>
+  ${next}
+</div>`;
+}
+
 export function renderFooter(): string {
     return `<div class="bs-footer">
   <span>TL;DL · A curated audio ledger</span>

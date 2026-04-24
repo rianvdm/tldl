@@ -172,20 +172,30 @@ publicRoutes.get("/", async (c) => {
         rowsRaw = leadFull ? sorted.filter(e => e.id !== leadEntry!.id) : sorted;
     }
 
-    const MAX_ROWS = 50;
-    const rowsSliced = rowsRaw.slice(0, MAX_ROWS);
+    const PAGE_SIZE = 20;
+    const totalMatching = rowsRaw.length;
+    const totalPages = Math.max(1, Math.ceil(totalMatching / PAGE_SIZE));
+    const currentPage = Math.max(1, Math.min(totalPages, parseInt(c.req.query("page") ?? "1", 10) || 1));
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const rowsSliced = rowsRaw.slice(start, start + PAGE_SIZE);
     const hydrated = await Promise.all(rowsSliced.map(async r => {
         const ep = await c.env.TLDL_DATA.get<Episode>(`episode:${r.id}`, "json");
         return { ...r, deck: ep?.deck };
     }));
 
     const sectionHeading = isSearch ? `Search — "${q}"` : "The Index";
+    const totalLabel = `${totalMatching} ${totalMatching === 1 ? "Entry" : "Entries"}`;
     const sectionCount = isSearch
-        ? `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"} Matching`
-        : `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"} · Most Recent First`;
+        ? `${totalLabel} Matching`
+        : `${totalLabel} · Most Recent First`;
+
+    // Lead sits above row 1 only on page 1 of the unfiltered home
+    const showLead = !isSearch && currentPage === 1;
+    const leadForRender = showLead ? leadFull : null;
+    const rowStartNumber = showLead ? 2 + start : 1 + start;
 
     const html = renderIndexPage({
-        lead: leadFull,
+        lead: leadForRender,
         rows: hydrated,
         totalInArchive: indexEntries.length,
         sectionHeading,
@@ -193,6 +203,13 @@ publicRoutes.get("/", async (c) => {
         activeNav: "index",
         pageTitle: isSearch ? `Search "${q}" — TL;DL` : "TL;DL — Too Long, Didn't Listen",
         searchQuery: q,
+        rowStartNumber,
+        pagination: {
+            currentPage,
+            totalPages,
+            basePath: "/",
+            extraParams: isSearch ? { q } : {},
+        },
     });
     return c.html(html);
 });
@@ -851,7 +868,12 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
 
     const podcastName = rowsRaw[0]?.podcastName ?? "Unknown Podcast";
 
-    const rowsSliced = rowsRaw.slice(0, 100);
+    const PAGE_SIZE = 20;
+    const total = rowsRaw.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const currentPage = Math.max(1, Math.min(totalPages, parseInt(c.req.query("page") ?? "1", 10) || 1));
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const rowsSliced = rowsRaw.slice(start, start + PAGE_SIZE);
     const hydrated = await Promise.all(rowsSliced.map(async r => {
         const ep = await c.env.TLDL_DATA.get<Episode>(`episode:${r.id}`, "json");
         return { ...r, deck: ep?.deck };
@@ -862,9 +884,11 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
         rows: hydrated,
         totalInArchive: indexEntries.length,
         sectionHeading: `Podcast — ${podcastName}`,
-        sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"}`,
+        sectionCount: `${total} ${total === 1 ? "Entry" : "Entries"}`,
         activeNav: "podcasts",
         pageTitle: `${podcastName} — TL;DL`,
+        rowStartNumber: start + 1,
+        pagination: { currentPage, totalPages, basePath: `/podcasts/${podcastId}` },
     });
     return c.html(html);
 });
@@ -909,7 +933,12 @@ publicRoutes.get("/tag/:tag", async (c) => {
             return b.createdAt.localeCompare(a.createdAt);
         });
 
-    const rowsSliced = rowsRaw.slice(0, 100);
+    const PAGE_SIZE = 20;
+    const total = rowsRaw.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const currentPage = Math.max(1, Math.min(totalPages, parseInt(c.req.query("page") ?? "1", 10) || 1));
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const rowsSliced = rowsRaw.slice(start, start + PAGE_SIZE);
     const hydrated = await Promise.all(rowsSliced.map(async r => {
         const ep = await c.env.TLDL_DATA.get<Episode>(`episode:${r.id}`, "json");
         return { ...r, deck: ep?.deck };
@@ -920,9 +949,11 @@ publicRoutes.get("/tag/:tag", async (c) => {
         rows: hydrated,
         totalInArchive: indexEntries.length,
         sectionHeading: `Tag — ${tag}`,
-        sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"}`,
+        sectionCount: `${total} ${total === 1 ? "Entry" : "Entries"}`,
         activeNav: "tags",
         pageTitle: `#${tag} — TL;DL`,
+        rowStartNumber: start + 1,
+        pagination: { currentPage, totalPages, basePath: `/tag/${encodeURIComponent(tag)}` },
     });
     return c.html(html);
 });

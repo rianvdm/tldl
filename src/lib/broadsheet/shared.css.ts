@@ -72,6 +72,19 @@ export const BROADSHEET_SHARED_CSS = `
   color: var(--bs-ink-faint);
 }
 
+/* Pagination */
+.bs-pagination {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 32px 56px 48px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--bs-ink-faint);
+}
+.bs-pagination a { color: var(--bs-red); }
+.bs-pagination a:hover { color: var(--bs-ink); }
+.bs-pagination .disabled { color: var(--bs-rule-strong); }
+.bs-pagination .page-info { color: var(--bs-ink-dim); }
+
 /* Footer */
 .bs-footer {
   border-top: 2px solid var(--bs-ink);
