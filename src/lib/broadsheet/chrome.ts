@@ -1,0 +1,58 @@
+import { computeVolume, computeIssueNumber, LAUNCH_YEAR } from "./masthead";
+
+const ROMAN_LAUNCH = "MMXXIV"; // 2024
+
+export function renderMasthead(opts: { now: Date; episodeCount: number }): string {
+    const { now, episodeCount } = opts;
+    const vol = computeVolume(now.getUTCFullYear());
+    const no = computeIssueNumber(now);
+    const longDate = now.toLocaleDateString("en-US", {
+        weekday: "long", year: "numeric", month: "long", day: "numeric",
+    });
+    return `<div class="bs-mast">
+  <div class="bs-mast-left">
+    <div><b>Vol. ${vol} — No. ${no}</b></div>
+    <div>${longDate}</div>
+    <div>Est. ${ROMAN_LAUNCH}</div>
+  </div>
+  <div class="bs-wordmark" aria-label="TL;DL — Too Long, Didn't Listen">T<span class="dot">L</span>;D<span class="l">L</span></div>
+  <div class="bs-mast-right">
+    <div><b>Too Long, Didn't Listen</b></div>
+    <div>A Weekly Ledger of Long-Form Audio</div>
+    <div>${episodeCount} ${episodeCount === 1 ? "Episode" : "Episodes"} in the Archive</div>
+  </div>
+</div>`;
+}
+
+export type SubnavKey = "index" | "podcasts" | "archive" | "tags" | "subscribe";
+
+export function renderSubnav(active: SubnavKey): string {
+    const items: Array<{ key: SubnavKey; label: string; href: string }> = [
+        { key: "index", label: "Today's Index", href: "/" },
+        { key: "tags", label: "By Tag", href: "/tag" },
+        { key: "subscribe", label: "Subscribe", href: "/subscribe" },
+    ];
+    return `<div class="bs-subhead">
+  <div class="nav-items">
+    ${items.map(i => `<a href="${i.href}" class="${i.key === active ? "active" : ""}">${i.label}</a>`).join("")}
+  </div>
+  <div>Issue ∞ — Continuously Revised</div>
+</div>`;
+}
+
+export function renderSectionBar(heading: string, count: string): string {
+    return `<div class="bs-section-bar">
+  <h2>${heading}</h2>
+  <span class="rule"></span>
+  <span class="count">${count}</span>
+</div>`;
+}
+
+export function renderFooter(): string {
+    return `<div class="bs-footer">
+  <span>TL;DL · A curated audio ledger</span>
+  <span>&nbsp;</span>
+</div>`;
+}
+
+export { LAUNCH_YEAR };
