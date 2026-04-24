@@ -108,7 +108,6 @@ ${BROADSHEET_FONTS_LINK}
     <span>Transcript sourced from ${escape(ep.transcriptSource)}</span>
   </div>
   <div class="bsd-morefrom">
-    <span class="label">More from</span>
     ${moreLinks.join(`<span class="sep">·</span>`)}
   </div>
 
