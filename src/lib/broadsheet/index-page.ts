@@ -1,4 +1,5 @@
 import type { Episode, EpisodeIndexEntry } from "../../types";
+import { escapeHtml } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { BROADSHEET_INDEX_CSS } from "./index.css";
@@ -25,7 +26,7 @@ export function renderIndexPage(opts: IndexPageOptions): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeTitle(opts.pageTitle)}</title>
+<title>${escapeHtml(opts.pageTitle)}</title>
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${BROADSHEET_INDEX_CSS}</style>
 </head>
@@ -42,8 +43,4 @@ ${renderFooter()}
 </div>
 </body>
 </html>`;
-}
-
-function escapeTitle(s: string): string {
-    return s.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }

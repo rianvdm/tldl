@@ -1,8 +1,5 @@
 import type { EpisodeIndexEntry } from "../../types";
-
-function escape(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
+import { escapeHtml as escape } from "../auth";
 
 function shortDate(iso: string): string {
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });

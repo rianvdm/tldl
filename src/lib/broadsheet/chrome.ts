@@ -1,3 +1,4 @@
+import { escapeHtml } from "../auth";
 import { computeVolume, computeIssueNumber, LAUNCH_YEAR } from "./masthead";
 
 const ROMAN_LAUNCH = "MMXXV"; // 2025
@@ -38,25 +39,9 @@ export function renderSubnav(active: SubnavKey, query: string = ""): string {
     ${items.map(i => `<a href="${i.href}" class="${i.key === active ? "active" : ""}">${i.label}</a>`).join("")}
   </div>
   <form class="bs-search" action="/" method="get" role="search">
-    <input type="search" name="q" placeholder="Search episodes…" autocomplete="off" value="${escapeAttr(query)}">
+    <input type="search" name="q" placeholder="Search episodes…" autocomplete="off" value="${escapeHtml(query)}">
   </form>
 </div>`;
-}
-
-function escapeAttr(s: string): string {
-    return s
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-}
-
-function escapeText(s: string): string {
-    return s
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
 }
 
 /**
@@ -66,9 +51,9 @@ function escapeText(s: string): string {
  */
 export function renderSectionBar(heading: string, count: string): string {
     return `<div class="bs-section-bar">
-  <h2>${escapeText(heading)}</h2>
+  <h2>${escapeHtml(heading)}</h2>
   <span class="rule"></span>
-  <span class="count">${escapeText(count)}</span>
+  <span class="count">${escapeHtml(count)}</span>
 </div>`;
 }
 

@@ -1,3 +1,4 @@
+import { escapeHtml } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { renderMasthead, renderSubnav, renderSectionBar, renderFooter, type SubnavKey } from "./chrome";
@@ -41,7 +42,7 @@ export function renderTagBrowsePage(opts: TagBrowsePageOptions): string {
     const sectionCount = `${count} ${count === 1 ? "Tag" : "Tags"} in Use`;
 
     const rows = opts.tags
-        .map(([tag, n]) => `<a href="/tag/${encodeURIComponent(tag)}"><span class="t">${escapeText(tag)}</span><span class="n">${n}</span></a>`)
+        .map(([tag, n]) => `<a href="/tag/${encodeURIComponent(tag)}"><span class="t">${escapeHtml(tag)}</span><span class="n">${n}</span></a>`)
         .join("\n");
 
     return `<!doctype html>
@@ -65,9 +66,5 @@ ${renderFooter()}
 </div>
 </body>
 </html>`;
-}
-
-function escapeText(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 

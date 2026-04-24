@@ -1,4 +1,5 @@
 import type { Episode } from "../../types";
+import { escapeHtml as escape } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { BROADSHEET_DETAIL_CSS } from "./detail.css";
@@ -20,9 +21,6 @@ export interface DetailPageOptions {
     now?: Date;
 }
 
-function escape(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
 
 function shortDate(iso: string): string {
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });

@@ -1,4 +1,5 @@
 import type { PodcastInfo } from "../kv";
+import { escapeHtml } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { renderMasthead, renderSubnav, renderSectionBar, renderFooter, type SubnavKey } from "./chrome";
@@ -60,10 +61,10 @@ export function renderPodcastBrowsePage(opts: PodcastBrowsePageOptions): string 
     const rows = opts.podcasts
         .map(p => {
             const epLabel = `${p.episodeCount} ${p.episodeCount === 1 ? "Ep" : "Eps"}`;
-            const author = p.author ? `<div class="bs-podcast-author">${escapeText(p.author)}</div>` : "";
+            const author = p.author ? `<div class="bs-podcast-author">${escapeHtml(p.author)}</div>` : "";
             return `<a href="/podcasts/${encodeURIComponent(p.id)}">
   <div class="bs-podcast-main">
-    <div class="bs-podcast-name">${escapeText(p.name)}</div>
+    <div class="bs-podcast-name">${escapeHtml(p.name)}</div>
     ${author}
   </div>
   <span class="n">${epLabel}</span>
@@ -92,8 +93,4 @@ ${renderFooter()}
 </div>
 </body>
 </html>`;
-}
-
-function escapeText(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
