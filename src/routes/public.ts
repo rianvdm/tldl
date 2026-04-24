@@ -14,7 +14,7 @@ import {
     getPodcastList,
     getEpisodesForPodcast,
 } from "../lib/kv";
-import { getTemplate, isValidTag } from "../lib/constants";
+import { isValidTag } from "../lib/constants";
 
 import { escapeHtml } from "../lib/auth";
 import { renderMarkdown } from "../lib/markdown";
@@ -128,63 +128,6 @@ export function Layout(props: { title: string; children: string; headExtra?: str
             </body>
         </html>`;
 }
-
-// ============================================================================
-// Episode Card Component
-// ============================================================================
-
-function EpisodeCard(
-    episode: EpisodeIndexEntry,
-    summaryTemplates: string[],
-    currentTag?: string
-): string {
-    const templateBadges = summaryTemplates
-        .map((templateId) => {
-            const template = getTemplate(templateId);
-            const name = template?.name || templateId;
-            return `<span class="badge">${escapeHtml(name)}</span>`;
-        })
-        .join("");
-
-    // Render tag badges (sorted alphabetically)
-    const tagBadges = episode.tags && episode.tags.length > 0
-        ? [...episode.tags].sort()
-            .map((tag) => {
-                const isSelected = currentTag === tag;
-                const badgeClass = isSelected ? "tag-badge tag-badge-selected" : "tag-badge";
-                // stopPropagation prevents card click when clicking tag
-                return `<a href="/?tag=${encodeURIComponent(tag)}" class="${badgeClass}" onclick="event.stopPropagation()">${escapeHtml(tag)}</a>`;
-            })
-            .join("")
-        : "";
-
-    return `
-        <div class="episode-card" onclick="window.location.href='/episode/${escapeHtml(episode.id)}'" style="cursor: pointer;">
-            <div class="episode-card-content">
-                <div class="episode-podcast">${escapeHtml(episode.podcastName)}${episode.podcastAuthor ? ` <span class="podcast-author podcast-author-inline">by ${escapeHtml(episode.podcastAuthor)}</span>` : ''}</div>
-                <h3 class="episode-title">${escapeHtml(episode.episodeTitle)}</h3>
-                <div class="episode-meta">
-                    <span>${formatDate(episode.episodeDate)}</span>
-                    <span class="meta-dot">•</span>
-                    <span>${formatDuration(episode.episodeDuration)}</span>
-                </div>
-                ${tagBadges || templateBadges ? `
-                    <div class="episode-badges">
-                        ${tagBadges}
-                        ${tagBadges && templateBadges ? '<span class="meta-dot" style="margin: 0 0.25rem;">•</span>' : ''}
-                        ${templateBadges}
-                    </div>
-                ` : ""}
-            </div>
-            <div class="episode-card-arrow">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>
-                </svg>
-            </div>
-        </div>
-    `;
-}
-
 
 // ============================================================================
 // GET / — Episode List (Home Page)
@@ -969,9 +912,6 @@ publicRoutes.get("/podcasts/:podcastId/feed", async (c) => {
 
 publicRoutes.get("/podcasts/:podcastId", async (c) => {
     const podcastId = c.req.param("podcastId");
-    const pageParam = c.req.query("page");
-    const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
-    const pageSize = 10;
 
     // Validate podcast ID format (numeric only)
     if (!/^\d+$/.test(podcastId)) {
@@ -985,14 +925,15 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
         return c.html(Layout({ title: "Not Found", children: content }), 404);
     }
 
-    // Get paginated episodes for this podcast
-    const { episodes, total, totalPages } = await getEpisodesForPodcast(
-        c.env.TLDL_DATA,
-        podcastId,
-        { page, pageSize }
-    );
+    const indexEntries = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
+    const rowsRaw = indexEntries
+        .filter(e => e.id.startsWith(`${podcastId}_`))
+        .sort((a, b) => {
+            if (a.episodeDate !== b.episodeDate) return b.episodeDate.localeCompare(a.episodeDate);
+            return b.createdAt.localeCompare(a.createdAt);
+        });
 
-    if (episodes.length === 0 && page === 1) {
+    if (rowsRaw.length === 0) {
         const content = `
             <div class="error-page">
                 <h1>Podcast Not Found</h1>
@@ -1003,101 +944,24 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
         return c.html(Layout({ title: "Not Found", children: content }), 404);
     }
 
-    // Get podcast info from first episode (or redirect if page is out of bounds)
-    if (episodes.length === 0) {
-        return c.redirect(`/podcasts/${podcastId}`);
-    }
+    const podcastName = rowsRaw[0]?.podcastName ?? "Unknown Podcast";
 
-    const podcastName = episodes[0].podcastName;
-    const podcastAuthor = episodes[0].podcastAuthor;
-
-    // Get podcast website URL from full episode data
-    const fullEpisode = await getEpisode(c.env.TLDL_DATA, episodes[0].id);
-    const podcastWebsiteUrl = fullEpisode?.podcastWebsiteUrl;
-
-    // Get summary templates for each episode
-    const episodeCards = await Promise.all(
-        episodes.map(async (episode) => {
-            const summaries = await listSummariesForEpisode(
-                c.env.TLDL_DATA,
-                episode.id
-            );
-            const templateIds = summaries.map((s) => s.templateId);
-            return EpisodeCard(episode, templateIds);
-        })
-    );
-
-    // Build pagination
-    const paginationHtml = totalPages > 1 ? `
-        <nav class="pagination" aria-label="Episode pagination">
-            ${page > 1 ? `
-            <a href="/podcasts/${escapeHtml(podcastId)}?page=${page - 1}" class="pagination-link pagination-prev">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </a>
-            ` : `<span class="pagination-link pagination-prev pagination-disabled">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </span>`}
-            <span class="pagination-info">Page ${page} of ${totalPages}</span>
-            ${page < totalPages ? `
-            <a href="/podcasts/${escapeHtml(podcastId)}?page=${page + 1}" class="pagination-link pagination-next">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </a>
-            ` : `<span class="pagination-link pagination-next pagination-disabled">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </span>`}
-        </nav>
-    ` : "";
-
-    const websiteLink = podcastWebsiteUrl && !podcastWebsiteUrl.includes('/rss') && !podcastWebsiteUrl.includes('.xml')
-        ? `<a href="${escapeHtml(podcastWebsiteUrl)}" target="_blank" rel="noopener noreferrer" class="podcast-website-link">
-             Visit Website
-             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                 <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                 <polyline points="15 3 21 3 21 9"/>
-                 <line x1="10" x2="21" y1="14" y2="3"/>
-             </svg>
-           </a>`
-        : "";
-
-    const content = `
-        <a href="/podcasts" class="back-link">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m15 18-6-6 6-6"/>
-            </svg>
-            Back to all podcasts
-        </a>
-        <div class="podcast-header">
-            <h1>${escapeHtml(podcastName)}</h1>
-            ${podcastAuthor ? `<p class="podcast-header-author">by ${escapeHtml(podcastAuthor)}</p>` : ''}
-            <p class="podcast-header-meta">${total} episode${total !== 1 ? 's' : ''} summarized</p>
-            ${websiteLink}
-        </div>
-        <div class="divider"></div>
-        <div class="episode-list">
-            ${episodeCards.join("")}
-        </div>
-        ${paginationHtml}
-    `;
-
-    return c.html(Layout({
-        title: podcastName,
-        children: content,
-        description: `AI-generated summaries for ${total} episode${total !== 1 ? 's' : ''} from ${podcastName}`,
-        canonicalUrl: `${BASE_URL}/podcasts/${podcastId}`,
-        headExtra: `<link rel="alternate" type="application/rss+xml" title="TL;DL - ${escapeHtml(podcastName)}" href="/podcasts/${escapeHtml(podcastId)}/feed" />`,
+    const rowsSliced = rowsRaw.slice(0, 100);
+    const hydrated = await Promise.all(rowsSliced.map(async r => {
+        const ep = await c.env.TLDL_DATA.get<Episode>(`episode:${r.id}`, "json");
+        return { ...r, deck: ep?.deck };
     }));
+
+    const html = renderIndexPage({
+        lead: null,
+        rows: hydrated,
+        totalInArchive: indexEntries.length,
+        sectionHeading: `Podcast — ${podcastName}`,
+        sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"}`,
+        activeNav: "index",
+        pageTitle: `${podcastName} — TL;DL`,
+    });
+    return c.html(html);
 });
 
 publicRoutes.get("/feed", async (c) => {
