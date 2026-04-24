@@ -3,16 +3,16 @@ import { computeVolume, computeIssueNumber } from "../../../src/lib/broadsheet/m
 
 describe("computeVolume", () => {
     it("returns Vol. I in the launch year", () => {
-        expect(computeVolume(2024)).toBe("I");
+        expect(computeVolume(2025)).toBe("I");
     });
     it("returns Vol. II one year later", () => {
-        expect(computeVolume(2025)).toBe("II");
+        expect(computeVolume(2026)).toBe("II");
     });
     it("returns Vol. III two years later", () => {
-        expect(computeVolume(2026)).toBe("III");
+        expect(computeVolume(2027)).toBe("III");
     });
     it("returns Vol. X after nine years", () => {
-        expect(computeVolume(2033)).toBe("X");
+        expect(computeVolume(2034)).toBe("X");
     });
 });
 

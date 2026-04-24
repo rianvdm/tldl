@@ -1,6 +1,6 @@
 import { computeVolume, computeIssueNumber, LAUNCH_YEAR } from "./masthead";
 
-const ROMAN_LAUNCH = "MMXXIV"; // 2024
+const ROMAN_LAUNCH = "MMXXV"; // 2025
 
 export function renderMasthead(opts: { now: Date; episodeCount: number }): string {
     const { now, episodeCount } = opts;

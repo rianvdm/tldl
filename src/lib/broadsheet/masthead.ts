@@ -1,4 +1,4 @@
-export const LAUNCH_YEAR = 2024;
+export const LAUNCH_YEAR = 2025;
 
 const ROMAN = [
     ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"],
