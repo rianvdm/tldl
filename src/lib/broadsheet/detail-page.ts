@@ -3,13 +3,6 @@ import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { BROADSHEET_DETAIL_CSS } from "./detail.css";
 
-// Split the detail CSS so the pullquote-specific rules can be omitted when no
-// pullquote is rendered. This keeps payloads lean on ELI5 pages and keeps the
-// rendered HTML free of the "bsd-pullquote" string when the block is absent.
-const PULLQUOTE_CSS_RE = /\.bsd-pullquote[^{]*\{[^}]*\}\s*/g;
-const DETAIL_CSS_NO_PULLQUOTE = BROADSHEET_DETAIL_CSS.replace(PULLQUOTE_CSS_RE, "");
-const DETAIL_CSS_PULLQUOTE_ONLY = (BROADSHEET_DETAIL_CSS.match(PULLQUOTE_CSS_RE) || []).join("");
-
 export type TemplateId = "key-takeaways" | "narrative-summary" | "eli5";
 
 const TEMPLATE_LABELS: Record<TemplateId, string> = {
@@ -79,7 +72,7 @@ export function renderDetailPage(opts: DetailPageOptions): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escape(ep.episodeTitle)} — TL;DL</title>
 ${BROADSHEET_FONTS_LINK}
-<style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${DETAIL_CSS_NO_PULLQUOTE}${showPullQuote ? DETAIL_CSS_PULLQUOTE_ONLY : ""}</style>
+<style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${BROADSHEET_DETAIL_CSS}</style>
 </head>
 <body>
 <div class="bsd-root">

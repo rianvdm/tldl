@@ -105,7 +105,7 @@ describe("renderDetailPage", () => {
             availableTemplates: ["key-takeaways"],
             transcriptText: null,
         });
-        expect(html).toContain("bsd-pullquote");
+        expect(html).toMatch(/<div[^>]+class="bsd-pullquote"/);
         expect(html).toContain("Memorable line.");
     });
 
@@ -117,6 +117,7 @@ describe("renderDetailPage", () => {
             availableTemplates: ["eli5"],
             transcriptText: null,
         });
-        expect(html).not.toContain("bsd-pullquote");
+        expect(html).not.toMatch(/<div[^>]+class="bsd-pullquote"/);
+        expect(html).not.toContain("Memorable line.");
     });
 });
