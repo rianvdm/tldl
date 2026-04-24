@@ -170,85 +170,11 @@ h4 {
 }
 
 /* ============================================================================
-   Intro Section
-   ============================================================================ */
-
-.intro-section {
-    margin-bottom: 2rem;
-    padding: 1.25rem 1.5rem;
-    background: linear-gradient(135deg, rgba(38, 38, 38, 0.5) 0%, rgba(23, 23, 23, 0.8) 100%);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    border-left: 3px solid var(--accent-red);
-}
-
-.intro-section p {
-    font-size: 1.0625rem;
-    line-height: 1.7;
-    color: var(--muted-foreground);
-    margin: 0;
-}
-
-/* ============================================================================
-   Hero Section (Home Page)
-   ============================================================================ */
-
-.hero-section {
-    text-align: center;
-    margin-bottom: 2rem;
-    padding: 2rem 1.5rem;
-    background: linear-gradient(135deg, rgba(38, 38, 38, 0.5) 0%, rgba(23, 23, 23, 0.8) 100%);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-}
-
-.hero-headline {
-    font-size: 2.25rem;
-    font-weight: 600;
-    letter-spacing: -0.025em;
-    line-height: 1.2;
-    margin-bottom: 0.75rem;
-    color: var(--foreground);
-}
-
-.hero-subtitle {
-    font-size: 1.25rem;
-    line-height: 1.6;
-    color: var(--muted-foreground);
-    margin: 0;
-    max-width: 36rem;
-    margin-left: auto;
-    margin-right: auto;
-}
-
-.hero-link {
-    color: var(--accent-red);
-    text-decoration: none;
-    transition: color 0.2s ease;
-}
-
-.hero-link:hover {
-    color: var(--accent-red-hover);
-}
-
-/* ============================================================================
    Page Header
    ============================================================================ */
 
 .page-header {
     margin-bottom: 2rem;
-}
-
-.page-header-with-action {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 2rem;
-}
-
-.page-header-with-action .page-header {
-    margin-bottom: 0;
 }
 
 .page-header h2 {
@@ -291,24 +217,6 @@ h4 {
 .episode-card-content {
     flex: 1;
     min-width: 0;
-}
-
-.episode-card-arrow {
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    background-color: var(--accent);
-    color: var(--muted-foreground);
-    transition: color 0.2s ease, background-color 0.2s ease;
-}
-
-.episode-card:hover .episode-card-arrow {
-    color: var(--foreground);
-    background-color: var(--accent-red);
 }
 
 .episode-podcast {
@@ -364,175 +272,6 @@ h4 {
     background-color: var(--muted);
     color: var(--foreground);
     border-radius: 9999px;
-}
-
-/* ============================================================================
-   Episode Tags
-   ============================================================================ */
-
-.tag-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.25rem 0.625rem;
-    font-size: 0.75rem;
-    font-weight: 500;
-    background-color: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    border-radius: 9999px;
-    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-    cursor: pointer;
-    text-decoration: none;
-}
-
-.tag-badge:hover {
-    background-color: rgba(59, 130, 246, 0.25);
-    border-color: rgba(59, 130, 246, 0.5);
-    color: #93c5fd;
-}
-
-.tag-badge-selected {
-    background-color: #3b82f6;
-    color: white;
-    border-color: #3b82f6;
-}
-
-.tag-badge-selected:hover {
-    background-color: #2563eb;
-    border-color: #2563eb;
-}
-
-/* Topic Filter Combobox */
-.topic-filter {
-    position: relative;
-    margin-bottom: 1.5rem;
-}
-
-.topic-filter-input-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.topic-filter-input {
-    width: 100%;
-    padding: 0.75rem 2.5rem 0.75rem 2.5rem;
-    font-size: 0.875rem;
-    font-family: inherit;
-    background-color: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--foreground);
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.topic-filter-input::placeholder {
-    color: var(--muted-foreground);
-}
-
-.topic-filter-input:focus {
-    outline: none;
-    border-color: var(--accent-red);
-    box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.1);
-}
-
-.topic-filter-icon {
-    position: absolute;
-    left: 0.875rem;
-    color: var(--muted-foreground);
-    pointer-events: none;
-}
-
-.topic-filter-chevron {
-    position: absolute;
-    right: 0.875rem;
-    color: var(--muted-foreground);
-    pointer-events: none;
-    transition: transform 0.2s ease;
-}
-
-.topic-filter.open .topic-filter-chevron {
-    transform: rotate(180deg);
-}
-
-.topic-filter-dropdown {
-    position: absolute;
-    top: calc(100% + 0.25rem);
-    left: 0;
-    right: 0;
-    max-height: 16rem;
-    overflow-y: auto;
-    background-color: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 100;
-    display: none;
-}
-
-.topic-filter.open .topic-filter-dropdown {
-    display: block;
-}
-
-.topic-filter-option {
-    display: flex;
-    align-items: center;
-    padding: 0.625rem 1rem;
-    font-size: 0.875rem;
-    color: var(--foreground);
-    cursor: pointer;
-    transition: background-color 0.15s ease;
-    text-decoration: none;
-}
-
-.topic-filter-option:hover,
-.topic-filter-option.highlighted {
-    background-color: var(--accent);
-}
-
-.topic-filter-option.selected {
-    background-color: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
-}
-
-.topic-filter-option:first-child {
-    border-radius: var(--radius) var(--radius) 0 0;
-}
-
-.topic-filter-option:last-child {
-    border-radius: 0 0 var(--radius) var(--radius);
-}
-
-.topic-filter-empty {
-    padding: 1rem;
-    text-align: center;
-    color: var(--muted-foreground);
-    font-size: 0.875rem;
-}
-
-/* Selected tag chip */
-.topic-filter-selected {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.625rem;
-    margin-bottom: 0.75rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    background-color: #3b82f6;
-    color: white;
-    border-radius: 9999px;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
-    text-decoration: none;
-}
-
-.topic-filter-selected:hover {
-    background-color: #2563eb;
-}
-
-.topic-filter-selected svg {
-    opacity: 0.8;
 }
 
 .tag-editor {
@@ -600,53 +339,6 @@ h4 {
 }
 
 /* ============================================================================
-   Episode Detail
-   ============================================================================ */
-
-.breadcrumb {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    color: var(--muted-foreground);
-    margin-bottom: 1.5rem;
-}
-
-.breadcrumb-link {
-    transition: color 0.2s ease;
-}
-
-.breadcrumb-link:hover {
-    color: var(--foreground);
-}
-
-.episode-header {
-    margin-bottom: 1.5rem;
-}
-
-.episode-detail-title {
-    margin-top: 0.5rem;
-    margin-bottom: 0.75rem;
-}
-
-.expiry {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-}
-
-/* ============================================================================
-   Actions
-   ============================================================================ */
-
-.actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-}
-
-/* ============================================================================
    Buttons
    ============================================================================ */
 
@@ -682,17 +374,6 @@ h4 {
     border-color: var(--accent-red-hover);
 }
 
-.button-accent {
-    background-color: var(--accent-red);
-    color: white;
-    border-color: var(--accent-red);
-}
-
-.button-accent:hover {
-    background-color: var(--accent-red-hover);
-    border-color: var(--accent-red-hover);
-}
-
 /* ============================================================================
    Divider
    ============================================================================ */
@@ -723,218 +404,12 @@ h4 {
 }
 
 /* ============================================================================
-   Tabs
-   ============================================================================ */
-
-.tabs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-    padding: 0.25rem;
-    background-color: var(--muted);
-    border-radius: var(--radius);
-    margin-bottom: 1rem;
-}
-
-.tab {
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    border-radius: calc(var(--radius) - 2px);
-    transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-.tab:hover {
-    color: var(--foreground);
-}
-
-.tab-active {
-    background-color: var(--card);
-    color: var(--foreground);
-    box-shadow: inset 0 -2px 0 var(--accent-red);
-}
-
-/* ============================================================================
-   Summary
-   ============================================================================ */
-
-.summary-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid var(--border);
-}
-
-.summary-model {
-    font-size: 0.875rem;
-    color: var(--muted-foreground);
-}
-
-/* ============================================================================
-   Prose (Markdown Content)
-   ============================================================================ */
-
-.prose {
-    line-height: 1.7;
-}
-
-.prose h1,
-.prose h2,
-.prose h3,
-.prose h4 {
-    margin-top: 1.5em;
-    margin-bottom: 0.75em;
-}
-
-.prose h1:first-child,
-.prose h2:first-child,
-.prose h3:first-child,
-.prose h4:first-child {
-    margin-top: 0;
-}
-
-.prose p {
-    margin-bottom: 1em;
-}
-
-.prose strong {
-    font-weight: 600;
-}
-
-.prose ul,
-.prose ol {
-    margin: 1em 0;
-    padding-left: 1.5em;
-}
-
-.prose li {
-    margin: 0.5em 0;
-}
-
-.prose code {
-    background-color: var(--muted);
-    padding: 0.2em 0.4em;
-    border-radius: 0.25rem;
-    font-size: 0.875em;
-    font-family: var(--font-mono);
-}
-
-.prose pre {
-    background-color: var(--muted);
-    padding: 1rem;
-    border-radius: var(--radius);
-    overflow-x: auto;
-    margin: 1em 0;
-}
-
-.prose pre code {
-    background-color: transparent;
-    padding: 0;
-}
-
-.prose blockquote {
-    border-left: 4px solid var(--border);
-    padding-left: 1rem;
-    font-style: italic;
-    margin: 1.5em 0;
-    color: var(--muted-foreground);
-}
-
-/* ============================================================================
-   Transcript
-   ============================================================================ */
-
-.transcript-source {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    color: var(--muted-foreground);
-    margin-bottom: 1rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid var(--border);
-}
-
-.source-indicator {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background-color: #22c55e;
-}
-
-.transcript-container {
-    position: relative;
-}
-
-.transcript-container.collapsed {
-    max-height: 24em;
-    overflow: hidden;
-}
-
-.transcript-text {
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-    line-height: 1.8;
-    white-space: pre-wrap;
-    color: var(--muted-foreground);
-}
-
-.transcript-fade {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 6rem;
-    background: linear-gradient(to bottom, transparent, var(--card));
-    pointer-events: none;
-}
-
-.transcript-container:not(.collapsed) .transcript-fade {
-    display: none;
-}
-
-.transcript-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    width: 100%;
-    margin-top: 1rem;
-    padding: 0.75rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    background-color: var(--muted);
-    border: none;
-    border-radius: var(--radius);
-    cursor: pointer;
-    transition: color 0.2s ease, background-color 0.2s ease;
-}
-
-.transcript-toggle:hover {
-    color: var(--foreground);
-    background-color: var(--accent);
-}
-
-.transcript-toggle svg {
-    transition: transform 0.2s ease;
-}
-
-/* ============================================================================
    Empty State
    ============================================================================ */
 
 .empty-state {
     text-align: center;
     padding: 3rem 1rem;
-}
-
-.empty-state-icon {
-    color: var(--muted-foreground);
-    margin-bottom: 1rem;
 }
 
 .empty-state p {
@@ -1002,14 +477,6 @@ h4 {
         margin-left: auto;
     }
 
-    .page-header-with-action {
-        flex-direction: column;
-    }
-
-    .page-header-with-action .button {
-        width: 100%;
-    }
-
     .episode-meta {
         flex-direction: column;
         align-items: flex-start;
@@ -1018,19 +485,6 @@ h4 {
 
     .meta-dot {
         display: none;
-    }
-
-    .tabs {
-        flex-direction: column;
-    }
-
-    .tab {
-        width: 100%;
-        text-align: center;
-    }
-
-    .actions {
-        flex-direction: column;
     }
 
     .button {
@@ -1051,10 +505,6 @@ h4 {
     .episode-podcast {
         flex-direction: column;
         align-items: flex-start;
-    }
-
-    .podcast-author-inline {
-        margin-left: 0 !important;
     }
 }
 
@@ -1104,27 +554,6 @@ h4 {
     outline: none;
     border-color: var(--accent-red);
     box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.15);
-}
-
-.form-hint {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-}
-
-.form-fieldset {
-    border: 0;
-    border: none;
-    padding: 0;
-    margin: 0;
-    min-width: 0;
-}
-
-.form-fieldset legend {
-    padding: 0;
-    margin-bottom: 0.75rem;
-    border: 0;
-    float: none;
-    width: 100%;
 }
 
 .form-actions {
@@ -1245,15 +674,6 @@ h4 {
     accent-color: var(--primary);
 }
 
-.radio-content {
-    flex: 1;
-}
-
-.radio-label {
-    font-weight: 500;
-    margin-bottom: 0.25rem;
-}
-
 .radio-description {
     font-size: 0.75rem;
     color: var(--muted-foreground);
@@ -1309,80 +729,6 @@ h4 {
     color: #22c55e;
 }
 
-/* ============================================================================
-   Utility Classes
-   ============================================================================ */
-
-.text-center {
-    text-align: center;
-}
-
-.text-sm {
-    font-size: 0.875rem;
-}
-
-.mt-4 {
-    margin-top: 1rem;
-}
-
-.link-button {
-    background: none;
-    border: none;
-    color: var(--muted-foreground);
-    font-size: 0.875rem;
-    text-decoration: underline;
-    cursor: pointer;
-    transition: color 0.2s ease;
-}
-
-.link-button:hover {
-    color: var(--foreground);
-}
-
-/* ============================================================================
-   In Progress Cards
-   ============================================================================ */
-
-.episode-card-progress {
-    border-color: #3b82f6;
-    border-style: dashed;
-}
-
-.episode-card-progress:hover {
-    border-color: #60a5fa;
-}
-
-.status-indicator {
-    display: inline-block;
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    margin-right: 0.375rem;
-}
-
-.status-indicator-active {
-    background-color: #3b82f6;
-    animation: pulse 2s infinite;
-}
-
-.episode-card-failed {
-    border-color: var(--destructive);
-    border-style: dashed;
-}
-
-.episode-card-failed:hover {
-    border-color: #ef4444;
-}
-
-.status-indicator-failed {
-    background-color: var(--destructive);
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
-
 .spinner {
     animation: spin 1s linear infinite;
 }
@@ -1390,26 +736,6 @@ h4 {
 @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-}
-
-.section-header {
-    margin-bottom: 1rem;
-}
-
-.section-header h2 {
-    margin-bottom: 0;
-}
-
-.section-header-with-action {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
-}
-
-.section-header-with-action h2 {
-    margin-bottom: 0;
 }
 
 /* ============================================================================
@@ -1453,62 +779,9 @@ h4 {
     color: var(--muted-foreground);
 }
 
-/* ============================================================================
-   Platform Links
-   ============================================================================ */
-
-.platform-links {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    margin-top: 1rem;
-}
-
-.apple-podcasts-badge {
-    display: inline-flex;
-    opacity: 0.85;
-    transition: opacity 0.2s ease;
-}
-
-.apple-podcasts-badge:hover {
-    opacity: 1;
-}
-
-.apple-podcasts-badge img {
-    height: 32px;
-    width: auto;
-}
-
 .podcast-author {
     font-size: 0.875rem;
     color: var(--muted-foreground);
-}
-
-.podcast-author-inline {
-    margin-left: 0.375rem;
-}
-
-.podcast-author-block {
-    margin-top: 0.25rem;
-}
-
-.website-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.875rem;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    background-color: var(--muted);
-    border-radius: var(--radius);
-    transition: color 0.2s ease, background-color 0.2s ease;
-}
-
-.website-link:hover {
-    color: var(--foreground);
-    background-color: var(--accent);
 }
 
 /* ============================================================================
@@ -1616,20 +889,6 @@ h4 {
     outline: none;
     border-color: var(--accent-red);
     box-shadow: 0 0 0 3px rgba(230, 57, 70, 0.15);
-}
-
-.episode-card-actions {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-}
-
-.job-id {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    background-color: var(--muted);
-    padding: 0.125rem 0.375rem;
-    border-radius: 0.25rem;
 }
 
 /* ============================================================================
@@ -1897,47 +1156,6 @@ h4 {
 
 .podcast-header h1 {
     margin-bottom: 0.25rem;
-}
-
-.podcast-header-author {
-    font-size: 0.9375rem;
-    color: var(--muted-foreground);
-    margin-bottom: 0.5rem;
-}
-
-.podcast-header-meta {
-    color: var(--muted-foreground);
-    margin-bottom: 0.75rem;
-}
-
-.podcast-website-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    transition: color 0.2s ease;
-}
-
-.podcast-website-link:hover {
-    color: var(--primary);
-}
-
-/* Back Link */
-
-.back-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-    font-size: 0.875rem;
-    color: var(--muted-foreground);
-    margin-bottom: 1.5rem;
-    transition: color 0.2s ease;
-}
-
-.back-link:hover {
-    color: var(--foreground);
 }
 
 /* Responsive - Podcast Pages */
