@@ -5,7 +5,7 @@
 
 import { Hono } from "hono";
 import { html, raw } from "hono/html";
-import type { HonoEnv, EpisodeIndexEntry, Job, JobStatus } from "../types";
+import type { HonoEnv, Episode, EpisodeIndexEntry } from "../types";
 import {
     listEpisodes,
     getEpisode,
@@ -14,10 +14,7 @@ import {
     getPodcastList,
     getEpisodesForPodcast,
 } from "../lib/kv";
-import {
-    listActiveJobsWithDO,
-} from "../lib/job-status-do";
-import { getTemplate, getValidTags, isValidTag } from "../lib/constants";
+import { getTemplate, isValidTag } from "../lib/constants";
 import { extractPodcastId } from "../lib/url-parser";
 
 import { escapeHtml } from "../lib/auth";
@@ -25,6 +22,8 @@ import { renderMarkdown } from "../lib/markdown";
 import { Footer } from "../lib/components";
 import { verifyTurnstile } from "../lib/turnstile";
 import { sendEmail } from "../services/postmark";
+import { renderIndexPage } from "../lib/broadsheet/index-page";
+import { selectLeadEpisode } from "../lib/broadsheet/lead-picker";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -228,356 +227,41 @@ function EpisodeCard(
     `;
 }
 
-// ============================================================================
-// In Progress Card Component
-// ============================================================================
-
-const STATUS_LABELS_SHORT: Record<JobStatus, string> = {
-    queued: "Waiting to start...",
-    fetching_metadata: "Fetching metadata...",
-    checking_transcript: "Checking transcript...",
-    transcribing: "Transcribing audio...",
-    summarizing: "Generating summary...",
-    completed: "Completed",
-    failed: "Failed",
-};
-
-function InProgressCard(job: Job): string {
-    const statusLabel = STATUS_LABELS_SHORT[job.status] || job.status;
-    const template = getTemplate(job.templateId);
-    const templateName = template?.name || job.templateId;
-    const isFailed = job.status === "failed";
-
-    // Show metadata if available, otherwise show status
-    const podcastDisplay = job.podcastName || (isFailed ? "Failed" : "Processing");
-    const titleDisplay = job.episodeTitle || statusLabel;
-
-    // Build metadata line
-    const metaParts = [formatDate(job.createdAt), escapeHtml(templateName)];
-    // If we have episode title, also show status
-    if (job.episodeTitle) {
-        metaParts.push(escapeHtml(statusLabel));
-    }
-
-    // For failed jobs, show error icon; for in-progress, show spinner
-    const iconHtml = isFailed
-        ? `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>`
-        : `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spinner">
-                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-            </svg>`;
-
-    const cardClass = isFailed ? "episode-card episode-card-failed" : "episode-card episode-card-progress";
-    const indicatorClass = isFailed ? "status-indicator status-indicator-failed" : "status-indicator status-indicator-active";
-
-    return `
-        <div class="${cardClass}">
-            <div class="episode-card-content">
-                <div class="episode-podcast">
-                    <span class="${indicatorClass}"></span>
-                    ${escapeHtml(podcastDisplay)}
-                </div>
-                <h3 class="episode-title">${escapeHtml(titleDisplay)}</h3>
-                <div class="episode-meta">
-                    ${metaParts.map((part, i) =>
-        i > 0 ? `<span class="meta-dot">•</span><span>${part}</span>` : `<span>${part}</span>`
-    ).join('')}
-                </div>
-            </div>
-            <div class="episode-card-arrow">
-                ${iconHtml}
-            </div>
-        </div>
-    `;
-}
 
 // ============================================================================
 // GET / — Episode List (Home Page)
 // ============================================================================
 
 publicRoutes.get("/", async (c) => {
-    // Parse query params
-    const pageParam = c.req.query("page");
-    const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
-    const pageSize = 10;
-    const search = c.req.query("q") || "";
-    const tagFilter = c.req.query("tag") || "";
+    const indexEntries = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
 
-    // Validate tag if provided
-    const isValidTagFilter = tagFilter ? isValidTag(tagFilter) : true;
-    if (tagFilter && !isValidTagFilter) {
-        // Invalid tag - redirect to home without tag filter
-        return c.redirect("/");
-    }
+    const sorted = [...indexEntries].sort((a, b) => {
+        if (a.episodeDate !== b.episodeDate) return b.episodeDate.localeCompare(a.episodeDate);
+        return b.createdAt.localeCompare(a.createdAt);
+    });
 
-    // Fetch both active jobs and completed episodes
-    // Use DO for active jobs (strong consistency) to show real-time status
-    const [activeJobs, paginatedEpisodes] = await Promise.all([
-        listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
-        listEpisodes(c.env.TLDL_DATA, {
-            page,
-            pageSize,
-            search: search || undefined,
-            tag: tagFilter || undefined,
-        }),
-    ]);
+    const leadEntry = selectLeadEpisode(sorted);
+    const leadFull = leadEntry ? await c.env.TLDL_DATA.get<Episode>(`episode:${leadEntry.id}`, "json") : null;
 
-    const { episodes, totalPages } = paginatedEpisodes;
+    const rowsRaw = leadEntry ? sorted.filter(e => e.id !== leadEntry.id) : sorted;
 
-    // Build in-progress cards
-    const inProgressCards = activeJobs.map((job) => InProgressCard(job)).join("");
-
-    // Get summary templates for each episode
-    const episodeCards = await Promise.all(
-        episodes.map(async (episode) => {
-            const summaries = await listSummariesForEpisode(
-                c.env.TLDL_DATA,
-                episode.id
-            );
-            const templateIds = summaries.map((s) => s.templateId);
-            return EpisodeCard(episode, templateIds, tagFilter || undefined);
-        })
-    );
-
-    // Build in-progress section if there are active jobs
-    const inProgressSection = activeJobs.length > 0 ? `
-        <div class="section-header">
-            <h2>In Progress</h2>
-        </div>
-        <div class="episode-list">
-            ${inProgressCards}
-        </div>
-        <div class="divider"></div>
-    ` : "";
-
-    // Intro text for the home page
-    const introSection = `
-        <div class="hero-section">
-            <h1 class="hero-headline">Your favorite podcasts, <span class="text-accent">summarized</span>.</h1>
-            <p class="hero-subtitle">Get key takeaways, a narrative overview, or a simplified explainer. Browse AI summaries below, <a href="/subscribe" class="hero-link">subscribe by email</a>, or <a href="/request" class="hero-link">request a podcast</a> to be added.</p>
-        </div>
-    `;
-
-    const content =
-        episodes.length > 0 || activeJobs.length > 0 || search
-            ? `
-        ${introSection}
-        <div class="page-header">
-            <h2>Recently Added Episodes</h2>
-        </div>
-        <form method="GET" action="/" class="search-form">
-            <div class="search-input-wrapper">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon">
-                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-                </svg>
-                <input type="text" name="q" value="${escapeHtml(search)}" placeholder="Search podcasts or episodes..." class="search-input" id="search-input">
-                ${search ? `<a href="/" class="search-clear" title="Clear search">×</a>` : ""}
-            </div>
-            <button type="submit" class="button">Search</button>
-        </form>
-        <div class="topic-filter" id="topic-filter">
-            ${tagFilter ? `
-            <a href="/" class="topic-filter-selected">
-                ${escapeHtml(tagFilter)}
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
-                </svg>
-            </a>
-            ` : ""}
-            <div class="topic-filter-input-wrapper" ${tagFilter ? 'style="display: none;"' : ""}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topic-filter-icon">
-                    <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
-                </svg>
-                <input 
-                    type="text" 
-                    class="topic-filter-input" 
-                    id="topic-filter-input"
-                    placeholder="Filter by topic..." 
-                    autocomplete="off"
-                />
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topic-filter-chevron">
-                    <path d="m6 9 6 6 6-6"/>
-                </svg>
-            </div>
-            <div class="topic-filter-dropdown" id="topic-filter-dropdown">
-                ${getValidTags().map(tag =>
-                `<a href="/?tag=${encodeURIComponent(tag)}" class="topic-filter-option${tag === tagFilter ? ' selected' : ''}" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</a>`
-            ).join("")}
-            </div>
-        </div>
-        <script>
-        (function() {
-            var filter = document.getElementById('topic-filter');
-            var input = document.getElementById('topic-filter-input');
-            var dropdown = document.getElementById('topic-filter-dropdown');
-            var options = dropdown.querySelectorAll('.topic-filter-option');
-            var allTags = ${JSON.stringify(getValidTags())};
-            var highlightedIndex = -1;
-
-            function openDropdown() {
-                filter.classList.add('open');
-                updateHighlight(-1);
-            }
-
-            function closeDropdown() {
-                filter.classList.remove('open');
-                highlightedIndex = -1;
-            }
-
-            function updateHighlight(index) {
-                var visibleOptions = dropdown.querySelectorAll('.topic-filter-option:not([style*="display: none"])');
-                visibleOptions.forEach(function(opt, i) {
-                    opt.classList.toggle('highlighted', i === index);
-                });
-                highlightedIndex = index;
-                if (index >= 0 && visibleOptions[index]) {
-                    visibleOptions[index].scrollIntoView({ block: 'nearest' });
-                }
-            }
-
-            function filterOptions(query) {
-                var q = query.toLowerCase().trim();
-                var visibleCount = 0;
-                options.forEach(function(opt) {
-                    var tag = opt.getAttribute('data-tag').toLowerCase();
-                    var matches = !q || tag.includes(q);
-                    opt.style.display = matches ? '' : 'none';
-                    if (matches) visibleCount++;
-                });
-                updateHighlight(-1);
-                // Show/hide empty state
-                var existing = dropdown.querySelector('.topic-filter-empty');
-                if (existing) existing.remove();
-                if (visibleCount === 0) {
-                    var empty = document.createElement('div');
-                    empty.className = 'topic-filter-empty';
-                    empty.textContent = 'No topics match "' + query + '"';
-                    dropdown.appendChild(empty);
-                }
-            }
-
-            input.addEventListener('focus', openDropdown);
-            input.addEventListener('input', function() {
-                filterOptions(this.value);
-            });
-
-            input.addEventListener('keydown', function(e) {
-                var visibleOptions = dropdown.querySelectorAll('.topic-filter-option:not([style*="display: none"])');
-                if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    if (!filter.classList.contains('open')) openDropdown();
-                    updateHighlight(Math.min(highlightedIndex + 1, visibleOptions.length - 1));
-                } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    updateHighlight(Math.max(highlightedIndex - 1, 0));
-                } else if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (highlightedIndex >= 0 && visibleOptions[highlightedIndex]) {
-                        window.location.href = visibleOptions[highlightedIndex].href;
-                    }
-                } else if (e.key === 'Escape') {
-                    closeDropdown();
-                    input.blur();
-                }
-            });
-
-            // Close on outside click
-            document.addEventListener('click', function(e) {
-                if (!filter.contains(e.target)) {
-                    closeDropdown();
-                }
-            });
-
-            // Prevent dropdown from closing when clicking inside
-            dropdown.addEventListener('mousedown', function(e) {
-                e.preventDefault();
-            });
-        })();
-        </script>
-        ${search && episodes.length === 0 ? `
-        <div class="empty-state">
-            <p>No episodes found matching "${escapeHtml(search)}"${tagFilter ? ` with tag "${escapeHtml(tagFilter)}"` : ""}</p>
-            <a href="/" class="button">Clear Filters</a>
-        </div>
-        ` : tagFilter && episodes.length === 0 ? `
-        <div class="empty-state">
-            <p>No episodes found with tag "${escapeHtml(tagFilter)}"</p>
-            <a href="/" class="button">Clear Filter</a>
-        </div>
-        ` : ""}
-        ${inProgressSection}
-        ${episodes.length > 0 ? `
-        <div class="episode-list">
-            ${episodeCards.join("")}
-        </div>
-        ${totalPages > 1 ? `
-        <nav class="pagination" aria-label="Episode pagination">
-            ${page > 1 ? `
-            <a href="/?page=${page - 1}${search ? `&q=${encodeURIComponent(search)}` : ""}${tagFilter ? `&tag=${encodeURIComponent(tagFilter)}` : ""}" class="pagination-link pagination-prev">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </a>
-            ` : `<span class="pagination-link pagination-prev pagination-disabled">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </span>`}
-            <span class="pagination-info">Page ${page} of ${totalPages}</span>
-            ${page < totalPages ? `
-            <a href="/?page=${page + 1}${search ? `&q=${encodeURIComponent(search)}` : ""}${tagFilter ? `&tag=${encodeURIComponent(tagFilter)}` : ""}" class="pagination-link pagination-next">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </a>
-            ` : `<span class="pagination-link pagination-next pagination-disabled">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </span>`}
-        </nav>
-        ` : ""}
-        ` : ""}
-    `
-            : `
-        <div class="page-header">
-            <h1>Welcome to TLDL</h1>
-            <p class="page-subtitle">AI-powered podcast summaries from Apple Podcasts URLs</p>
-        </div>
-        <div class="empty-state">
-            <div class="empty-state-icon">
-                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>
-                </svg>
-            </div>
-            <p>No episodes yet. Check back soon!</p>
-        </div>
-    `;
-
-    // Add auto-refresh only when there are truly in-progress jobs (not failed)
-    const hasInProgressJobs = activeJobs.some(job => job.status !== "failed");
-    const refreshMeta = hasInProgressJobs
-        ? '<meta http-equiv="refresh" content="10">'
-        : '';
-
-    // Prevent caching when there are active or failed jobs to ensure fresh status
-    if (activeJobs.length > 0) {
-        c.header("Cache-Control", "no-cache, no-store, must-revalidate");
-        c.header("Pragma", "no-cache");
-        c.header("Expires", "0");
-    }
-
-    return c.html(Layout({
-        title: "Home",
-        children: content,
-        headExtra: refreshMeta,
-        canonicalUrl: BASE_URL + "/"
+    const MAX_ROWS = 50;
+    const rowsSliced = rowsRaw.slice(0, MAX_ROWS);
+    const hydrated = await Promise.all(rowsSliced.map(async r => {
+        const ep = await c.env.TLDL_DATA.get<Episode>(`episode:${r.id}`, "json");
+        return { ...r, deck: ep?.deck };
     }));
+
+    const html = renderIndexPage({
+        lead: leadFull,
+        rows: hydrated,
+        totalInArchive: indexEntries.length,
+        sectionHeading: "The Index",
+        sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"} · Most Recent First`,
+        activeNav: "index",
+        pageTitle: "TL;DL — Too Long, Didn't Listen",
+    });
+    return c.html(html);
 });
 
 // ============================================================================
