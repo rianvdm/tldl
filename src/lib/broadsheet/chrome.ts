@@ -26,9 +26,10 @@ export function renderMasthead(opts: { now: Date; episodeCount: number }): strin
 
 export type SubnavKey = "index" | "podcasts" | "archive" | "tags" | "subscribe";
 
-export function renderSubnav(active: SubnavKey): string {
+export function renderSubnav(active: SubnavKey, query: string = ""): string {
     const items: Array<{ key: SubnavKey; label: string; href: string }> = [
         { key: "index", label: "Today's Index", href: "/" },
+        { key: "podcasts", label: "Podcasts", href: "/podcasts" },
         { key: "tags", label: "By Tag", href: "/tag" },
         { key: "subscribe", label: "Subscribe", href: "/subscribe" },
     ];
@@ -36,8 +37,18 @@ export function renderSubnav(active: SubnavKey): string {
   <div class="nav-items">
     ${items.map(i => `<a href="${i.href}" class="${i.key === active ? "active" : ""}">${i.label}</a>`).join("")}
   </div>
-  <div>Issue ∞ — Continuously Revised</div>
+  <form class="bs-search" action="/" method="get" role="search">
+    <input type="search" name="q" placeholder="Search episodes…" autocomplete="off" value="${escapeAttr(query)}">
+  </form>
 </div>`;
+}
+
+function escapeAttr(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
 }
 
 export function renderSectionBar(heading: string, count: string): string {

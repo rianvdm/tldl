@@ -14,6 +14,7 @@ export interface IndexPageOptions {
     sectionCount: string;
     activeNav: SubnavKey;
     pageTitle: string;
+    searchQuery?: string;
     now?: Date;
 }
 
@@ -31,7 +32,7 @@ ${BROADSHEET_FONTS_LINK}
 <body>
 <div class="bs-page">
 ${renderMasthead({ now, episodeCount: opts.totalInArchive })}
-${renderSubnav(opts.activeNav)}
+${renderSubnav(opts.activeNav, opts.searchQuery ?? "")}
 ${opts.lead ? renderLead(opts.lead) : ""}
 ${renderSectionBar(opts.sectionHeading, opts.sectionCount)}
 <div class="bs-index">

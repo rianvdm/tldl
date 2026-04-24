@@ -188,6 +188,7 @@ publicRoutes.get("/", async (c) => {
         sectionCount,
         activeNav: "index",
         pageTitle: isSearch ? `Search "${q}" — TL;DL` : "TL;DL — Too Long, Didn't Listen",
+        searchQuery: q,
     });
     return c.html(html);
 });

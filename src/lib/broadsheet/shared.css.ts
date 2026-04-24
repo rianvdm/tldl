@@ -38,6 +38,20 @@ export const BROADSHEET_SHARED_CSS = `
 .bs-subhead .nav-items { display: flex; gap: 28px; }
 .bs-subhead .nav-items a { color: var(--bs-ink-dim); }
 .bs-subhead .nav-items a.active { color: var(--bs-red); }
+.bs-search { margin: 0; }
+.bs-search input {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--bs-ink-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--bs-rule);
+  padding: 4px 2px;
+  width: 240px;
+  outline: none;
+}
+.bs-search input:focus { border-bottom-color: var(--bs-red); color: var(--bs-ink); }
+.bs-search input::placeholder { color: var(--bs-ink-faint); }
 
 /* Section bar */
 .bs-section-bar {
