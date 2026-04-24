@@ -50,9 +50,17 @@ function renderTagChips(tags: readonly string[] | undefined): string {
 export function renderDetailPage(opts: DetailPageOptions): string {
     const ep = opts.episode;
     const showPullQuote = opts.activeTemplate !== "eli5" && Boolean(ep.pullQuote);
-    const kicker = `${escape(ep.podcastName).toUpperCase()}${
+    const podcastId = ep.id.split("_")[0];
+    const podcastHref = `/podcasts/${encodeURIComponent(podcastId)}`;
+    const kicker = `<a href="${podcastHref}">${escape(ep.podcastName).toUpperCase()}</a>${
         ep.podcastAuthor ? ` · ${escape(ep.podcastAuthor).toUpperCase()}` : ""
     }`;
+    const moreLinks: string[] = [
+        `<a href="${podcastHref}">All episodes from ${escape(ep.podcastName)} →</a>`,
+    ];
+    if (ep.podcastWebsiteUrl) {
+        moreLinks.push(`<a href="${escape(ep.podcastWebsiteUrl)}" target="_blank" rel="noopener noreferrer">Podcast website →</a>`);
+    }
 
     const templates = opts.availableTemplates.map(t => {
         const active = t === opts.activeTemplate ? " active" : "";
@@ -98,6 +106,10 @@ ${BROADSHEET_FONTS_LINK}
     ${renderTagChips(ep.tags)}
     <span class="sep">/</span>
     <span>Transcript sourced from ${escape(ep.transcriptSource)}</span>
+  </div>
+  <div class="bsd-morefrom">
+    <span class="label">More from</span>
+    ${moreLinks.join(`<span class="sep">·</span>`)}
   </div>
 
   <div class="bsd-grid">

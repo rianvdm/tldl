@@ -19,6 +19,8 @@ export const BROADSHEET_DETAIL_CSS = `
   font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--bs-ink-dim); margin-bottom: 16px;
 }
+.bsd-pod a { color: var(--bs-ink-dim); transition: color 160ms ease; }
+.bsd-pod a:hover { color: var(--bs-red); }
 .bsd-title {
   font-family: 'Fraunces', Georgia, serif;
   font-weight: 500; font-size: 68px; letter-spacing: -0.03em; line-height: 1;
@@ -39,6 +41,19 @@ export const BROADSHEET_DETAIL_CSS = `
 }
 .bsd-meta .sep { color: var(--bs-rule-strong); }
 .bsd-meta .chip { color: var(--bs-red); border: 1px solid var(--bs-red); padding: 3px 9px; letter-spacing: 0.14em; }
+
+.bsd-morefrom {
+  display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--bs-ink-faint);
+  padding-bottom: 22px; border-bottom: 1px solid var(--bs-rule);
+  margin-top: -24px; margin-bottom: 44px;
+}
+.bsd-morefrom .label { color: var(--bs-ink-faint); }
+.bsd-morefrom .sep { color: var(--bs-rule-strong); }
+.bsd-morefrom a { color: var(--bs-red); transition: color 160ms ease; }
+.bsd-morefrom a:hover { color: var(--bs-ink); }
 
 .bsd-grid { display: grid; grid-template-columns: 200px 1fr; gap: 56px; }
 .bsd-side {
