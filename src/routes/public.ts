@@ -22,6 +22,7 @@ import { Footer } from "../lib/components";
 import { verifyTurnstile } from "../lib/turnstile";
 import { sendEmail } from "../services/postmark";
 import { renderIndexPage } from "../lib/broadsheet/index-page";
+import { renderTagBrowsePage } from "../lib/broadsheet/tag-browse-page";
 import { renderDetailPage, type TemplateId } from "../lib/broadsheet/detail-page";
 import { selectLeadEpisode } from "../lib/broadsheet/lead-picker";
 import { marked } from "marked";
@@ -978,6 +979,30 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
         sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"}`,
         activeNav: "index",
         pageTitle: `${podcastName} — TL;DL`,
+    });
+    return c.html(html);
+});
+
+// ============================================================================
+// GET /tag — Browse all tags
+// ============================================================================
+
+publicRoutes.get("/tag", async (c) => {
+    const index = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
+    const counts = new Map<string, number>();
+    for (const e of index) {
+        for (const t of e.tags ?? []) {
+            const key = t.toLowerCase();
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+    }
+    const tags = [...counts.entries()]
+        .filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+    const html = renderTagBrowsePage({
+        tags,
+        totalInArchive: index.length,
     });
     return c.html(html);
 });
