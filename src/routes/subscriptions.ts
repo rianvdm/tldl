@@ -17,6 +17,8 @@ import {
 import { signToken, verifyToken, manageMessage, unsubMessage, unsubAllMessage } from "../lib/emailTokens";
 import { escapeHtml } from "../lib/auth";
 import { Layout } from "./public";
+import { renderFormPage } from "../lib/broadsheet/form-page";
+import type { EpisodeIndexEntry } from "../types";
 
 export const subscriptionsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -63,6 +65,26 @@ function checkInboxPage(message: string): string {
     `;
 }
 
+async function renderSubscribeBanner(
+    env: Env,
+    opts: { heading: string; sectionCount: string; pageTitle: string; bannerHtml: string; kind: "ok" | "err" },
+): Promise<string> {
+    const indexEntries = await env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
+    const bodyHtml = `
+<div class="bs-form-banner ${opts.kind}">
+${opts.bannerHtml}
+</div>
+`;
+    return renderFormPage({
+        activeNav: "subscribe",
+        sectionHeading: opts.heading,
+        sectionCount: opts.sectionCount,
+        bodyHtml,
+        pageTitle: opts.pageTitle,
+        totalInArchive: indexEntries.length,
+    });
+}
+
 // ---- GET /subscribe ----
 subscriptionsRoutes.get("/subscribe", async (c) => {
     const podcastIds = await getMonitoredPodcastIds(c.env.TLDL_DATA);
@@ -70,48 +92,54 @@ subscriptionsRoutes.get("/subscribe", async (c) => {
         .filter((p): p is NonNullable<typeof p> => Boolean(p))
         .sort((a, b) => a.name.localeCompare(b.name));
 
+    // Optional pre-selected IDs from ?podcastIds=... (comma-separated or repeated).
+    const preselectedRaw = c.req.queries("podcastIds") ?? [];
+    const preselected = new Set<string>(
+        preselectedRaw.flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean),
+    );
+
+    const indexEntries = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
+
     const podcastList = podcasts.length === 0
-        ? `<p class="text-muted">No podcasts are monitored yet. Check back soon.</p>`
-        : `<div class="checkbox-list">${podcasts.map((p) => `
-            <label class="checkbox-row">
-                <input type="checkbox" name="podcastIds" value="${escapeHtml(p.id)}">
-                <span class="podcast-label">
-                    <span class="podcast-name">${escapeHtml(p.name)}</span>
-                    ${p.author ? `<span class="podcast-author">by ${escapeHtml(p.author)}</span>` : ""}
+        ? `<p class="bs-form-hint">No podcasts are monitored yet. Check back soon.</p>`
+        : `<div class="bs-form-options">${podcasts.map((p) => `
+            <label class="opt">
+                <input type="checkbox" name="podcastIds" value="${escapeHtml(p.id)}"${preselected.has(p.id) ? " checked" : ""}>
+                <span class="opt-body">
+                    <span class="opt-name">${escapeHtml(p.name)}</span>
+                    ${p.author ? `<span class="opt-author">${escapeHtml(p.author)}</span>` : ""}
                 </span>
             </label>`).join("")}</div>`;
 
-    const content = `
-        <div class="page-header">
-            <h1>Get email summaries</h1>
-            <p class="page-subtitle">Pick the podcasts you want. We'll email you a summary each time a new episode lands.</p>
-        </div>
-        <div class="card">
-            <form method="POST" action="/subscribe" class="form">
-                <div class="form-group">
-                    <label for="email" class="form-label">Email</label>
-                    <input type="email" id="email" name="email" class="form-input"
-                        placeholder="you@example.com" autocomplete="email" required />
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Podcasts</label>
-                    ${podcastList}
-                </div>
-                <div class="cf-turnstile" data-sitekey="${escapeHtml(c.env.TURNSTILE_SITE_KEY)}" data-theme="dark"></div>
-                <div class="form-actions" style="margin-top: 1rem;">
-                    <button type="submit" class="button button-primary">Subscribe</button>
-                </div>
-            </form>
-        </div>
-        ${CHECKBOX_LIST_STYLES}
-    `;
+    const bodyHtml = `
+<div class="bs-form-intro">
+    <p>Pick the podcasts you want. We'll email you a summary each time a new episode lands. Free, and you can unsubscribe any time.</p>
+</div>
+<form method="POST" action="/subscribe" class="bs-form">
+    <div class="bs-form-field">
+        <label for="email">Email Address</label>
+        <input type="email" id="email" name="email"
+            placeholder="you@example.com" autocomplete="email" required />
+    </div>
+    <div class="bs-form-field">
+        <label>Podcasts</label>
+        ${podcastList}
+    </div>
+    <div class="cf-turnstile" data-sitekey="${escapeHtml(c.env.TURNSTILE_SITE_KEY)}" data-theme="dark"></div>
+    <div class="bs-form-actions">
+        <button type="submit" class="bs-form-submit">Subscribe &rarr;</button>
+    </div>
+</form>
+`;
 
-    return c.html(Layout({
-        title: "Subscribe",
-        children: content,
+    return c.html(renderFormPage({
+        activeNav: "subscribe",
+        sectionHeading: "Subscribe — Email Summaries",
+        sectionCount: "Free · Unsubscribe any time",
+        bodyHtml,
+        pageTitle: "Subscribe — TL;DL",
+        totalInArchive: indexEntries.length,
         headExtra: TURNSTILE_SCRIPT,
-        description: "Subscribe to email summaries for the podcasts you follow on TL;DL.",
-        canonicalUrl: `${BASE_URL}/subscribe`,
     }));
 });
 
@@ -127,27 +155,46 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
             ? [rawPodcastIds]
             : [];
 
-    if (!rawEmail || !isValidEmail(rawEmail)) return c.text("Invalid email", 400);
-    if (podcastIds.length === 0) return c.text("Pick at least one podcast", 400);
-    if (podcastIds.length > MAX_PODCAST_IDS) return c.text("Too many podcasts", 400);
+    const errPage = async (message: string, status: 400 | 403) => c.html(
+        await renderSubscribeBanner(c.env, {
+            heading: "Subscribe — Email Summaries",
+            sectionCount: "Something's off",
+            pageTitle: "Subscribe — TL;DL",
+            bannerHtml: `<p>${escapeHtml(message)} <a href="/subscribe">Try again</a>.</p>`,
+            kind: "err",
+        }),
+        status,
+    );
 
-    if (!(await verifyTurnstile(turnstileToken, c.env.TURNSTILE_SECRET))) return c.text("Turnstile failed", 403);
+    if (!rawEmail || !isValidEmail(rawEmail)) return errPage("That email address doesn't look right.", 400);
+    if (podcastIds.length === 0) return errPage("Pick at least one podcast to subscribe to.", 400);
+    if (podcastIds.length > MAX_PODCAST_IDS) return errPage("That's more podcasts than we can handle in one go.", 400);
+
+    if (!(await verifyTurnstile(turnstileToken, c.env.TURNSTILE_SECRET))) return errPage("The anti-spam check didn't pass. Please try again.", 403);
 
     const email = rawEmail.toLowerCase();
     const now = Math.floor(Date.now() / 1000);
 
+    const inboxMessage = "Please check your inbox — if we can reach you, a confirmation email is on its way. Click the link inside to confirm your subscription.";
+
     const existing = await getSubscriberByEmail(c.env.DB, email);
     if (existing?.status === "complained") {
-        return c.html(Layout({
-            title: "Check your inbox",
-            children: checkInboxPage("If we can reach you, a confirmation email is on its way."),
+        return c.html(await renderSubscribeBanner(c.env, {
+            heading: "Subscribe — Email Summaries",
+            sectionCount: "Check your inbox",
+            pageTitle: "Check your inbox — TL;DL",
+            bannerHtml: `<p>${escapeHtml(inboxMessage)}</p>`,
+            kind: "ok",
         }));
     }
 
     if (await hasActivePendingForEmail(c.env.DB, email, now)) {
-        return c.html(Layout({
-            title: "Check your inbox",
-            children: checkInboxPage("If we can reach you, a confirmation email is on its way."),
+        return c.html(await renderSubscribeBanner(c.env, {
+            heading: "Subscribe — Email Summaries",
+            sectionCount: "Check your inbox",
+            pageTitle: "Check your inbox — TL;DL",
+            bannerHtml: `<p>${escapeHtml(inboxMessage)}</p>`,
+            kind: "ok",
         }));
     }
 
@@ -175,9 +222,12 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
     });
     logSendFailure("subscribe_confirm_send_failed", email, sendRes);
 
-    return c.html(Layout({
-        title: "Check your inbox",
-        children: checkInboxPage("If we can reach you, a confirmation email is on its way."),
+    return c.html(await renderSubscribeBanner(c.env, {
+        heading: "Subscribe — Email Summaries",
+        sectionCount: "Check your inbox",
+        pageTitle: "Check your inbox — TL;DL",
+        bannerHtml: `<p>${escapeHtml(inboxMessage)}</p><p style="font-size: 15px; margin-top: 12px; font-style: normal;">Already subscribed? <a href="/preferences">Manage preferences</a>.</p>`,
+        kind: "ok",
     }));
 });
 
