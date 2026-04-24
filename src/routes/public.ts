@@ -165,7 +165,11 @@ publicRoutes.get("/", async (c) => {
     } else {
         const leadEntry = selectLeadEpisode(sorted);
         leadFull = leadEntry ? await c.env.TLDL_DATA.get<Episode>(`episode:${leadEntry.id}`, "json") : null;
-        rowsRaw = leadEntry ? sorted.filter(e => e.id !== leadEntry.id) : sorted;
+        // Only exclude the lead from the row list when we successfully hydrated
+        // it. If KV returns null (race on a fresh write, expired record, data
+        // inconsistency), keep the entry in rows so the newest episode is still
+        // visible on the home page.
+        rowsRaw = leadFull ? sorted.filter(e => e.id !== leadEntry!.id) : sorted;
     }
 
     const MAX_ROWS = 50;
@@ -859,7 +863,7 @@ publicRoutes.get("/podcasts/:podcastId", async (c) => {
         totalInArchive: indexEntries.length,
         sectionHeading: `Podcast — ${podcastName}`,
         sectionCount: `${hydrated.length} ${hydrated.length === 1 ? "Entry" : "Entries"}`,
-        activeNav: "index",
+        activeNav: "podcasts",
         pageTitle: `${podcastName} — TL;DL`,
     });
     return c.html(html);

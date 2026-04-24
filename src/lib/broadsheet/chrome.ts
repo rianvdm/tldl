@@ -51,11 +51,24 @@ function escapeAttr(s: string): string {
         .replace(/"/g, "&quot;");
 }
 
+function escapeText(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+/**
+ * Renders the italic-Fraunces section heading bar used across Index, Podcasts,
+ * Tags, and Search pages. Treats both arguments as untrusted text — they're
+ * escaped internally so callers can safely pass KV or query-param values.
+ */
 export function renderSectionBar(heading: string, count: string): string {
     return `<div class="bs-section-bar">
-  <h2>${heading}</h2>
+  <h2>${escapeText(heading)}</h2>
   <span class="rule"></span>
-  <span class="count">${count}</span>
+  <span class="count">${escapeText(count)}</span>
 </div>`;
 }
 
