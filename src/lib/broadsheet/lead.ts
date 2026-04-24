@@ -14,14 +14,15 @@ function formatDuration(seconds: number): string {
     return h > 0 ? `${h}h ${m.toString().padStart(2, "0")}m` : `${m}m`;
 }
 
-function firstTag(ep: Episode): string {
-    return (ep.tags && ep.tags[0]) || "";
+function renderTagChips(tags: readonly string[] | undefined): string {
+    if (!tags || tags.length === 0) return "";
+    const chips = tags.map(t => `<span class="chip">${escape(t)}</span>`).join("");
+    return `<span class="sep">/</span>${chips}`;
 }
 
 export function renderLead(ep: Episode): string {
     const hasPull = Boolean(ep.pullQuote);
     const deck = ep.deck ?? "";
-    const tag = firstTag(ep);
     const podcastUc = escape(ep.podcastName).toUpperCase();
     const authorUc = ep.podcastAuthor ? ` · BY ${escape(ep.podcastAuthor).toUpperCase()}` : "";
     const href = `/episode/${encodeURIComponent(ep.id)}`;
@@ -36,7 +37,7 @@ export function renderLead(ep: Episode): string {
       <span>${formatDuration(ep.episodeDuration)}</span>
       <span class="sep">/</span>
       <span>${shortDate(ep.episodeDate)}</span>
-      ${tag ? `<span class="sep">/</span><span class="chip">${escape(tag)}</span>` : ""}
+      ${renderTagChips(ep.tags)}
     </div>
   </div>
   ${hasPull ? `<div class="bs-pull">

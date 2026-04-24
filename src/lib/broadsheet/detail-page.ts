@@ -43,9 +43,14 @@ function formatTranscriptParagraphs(text: string): string {
     return lines.map(l => `<p>${escape(l)}</p>`).join("\n");
 }
 
+function renderTagChips(tags: readonly string[] | undefined): string {
+    if (!tags || tags.length === 0) return "";
+    const chips = tags.map(t => `<span class="chip">${escape(t)}</span>`).join("");
+    return `<span class="sep">/</span>${chips}`;
+}
+
 export function renderDetailPage(opts: DetailPageOptions): string {
     const ep = opts.episode;
-    const tag = (ep.tags && ep.tags[0]) || "";
     const showPullQuote = opts.activeTemplate !== "eli5" && Boolean(ep.pullQuote);
     const kicker = `${escape(ep.podcastName).toUpperCase()}${
         ep.podcastAuthor ? ` · ${escape(ep.podcastAuthor).toUpperCase()}` : ""
@@ -88,7 +93,7 @@ ${BROADSHEET_FONTS_LINK}
     <span>${formatDuration(ep.episodeDuration)}</span>
     <span class="sep">/</span>
     <span>${longDate(ep.episodeDate)}</span>
-    ${tag ? `<span class="sep">/</span><span class="chip">${escape(tag)}</span>` : ""}
+    ${renderTagChips(ep.tags)}
     <span class="sep">/</span>
     <span>Transcript sourced from ${escape(ep.transcriptSource)}</span>
   </div>

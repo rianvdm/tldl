@@ -16,7 +16,7 @@ function formatDuration(seconds: number): string {
 
 export function renderIndexRow(ep: EpisodeIndexEntry & { deck?: string }, rowNumber: number): string {
     const num = String(rowNumber).padStart(2, "0");
-    const tag = (ep.tags && ep.tags[0]) ?? "";
+    const tagList = (ep.tags ?? []).map(t => escape(t)).join(", ");
     const deck = ep.deck;
     const href = `/episode/${encodeURIComponent(ep.id)}`;
     const authorPart = ep.podcastAuthor ? ` · ${escape(ep.podcastAuthor)}` : "";
@@ -30,7 +30,7 @@ export function renderIndexRow(ep: EpisodeIndexEntry & { deck?: string }, rowNum
   </div>
   <div class="bs-row-date">${shortDate(ep.episodeDate)}</div>
   <div class="bs-row-dur">${formatDuration(ep.episodeDuration)}</div>
-  <div class="bs-row-tag">${escape(tag)}</div>
+  <div class="bs-row-tag">${tagList}</div>
   <div class="bs-row-arrow">→</div>
 </a>`;
 }

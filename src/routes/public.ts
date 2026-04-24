@@ -190,7 +190,9 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
             : available[0];
 
     const activeSummary = summaries.find(s => s.templateId === activeTemplate);
-    const summaryMarkdown = activeSummary?.text ?? "";
+    // Strip a leading `# Title` line — the page already renders the episode
+    // title as H1, and some summaries start with a duplicate heading.
+    const summaryMarkdown = (activeSummary?.text ?? "").replace(/^\s*#\s+[^\n]*\n+/, "");
     const summaryHtml = marked.parse(summaryMarkdown) as string;
 
     const transcript = await getTranscript(c.env.TLDL_DATA, episodeId);
