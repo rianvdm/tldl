@@ -1,6 +1,7 @@
 import type { PodcastInfo } from "../kv";
 import { escapeHtml } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
+import { renderBroadsheetHead } from "./head";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { renderMasthead, renderSubnav, renderSectionBar, renderFooter, type SubnavKey } from "./chrome";
 
@@ -75,9 +76,7 @@ export function renderPodcastBrowsePage(opts: PodcastBrowsePageOptions): string 
     return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Podcasts — TL;DL</title>
+${renderBroadsheetHead({ title: "Podcasts — TL;DL", canonicalUrl: "https://tldl-pod.com/podcasts" })}
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${PODCAST_BROWSE_CSS}</style>
 </head>

@@ -3,6 +3,7 @@ import { escapeHtml as escape } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { BROADSHEET_DETAIL_CSS } from "./detail.css";
+import { renderBroadsheetHead } from "./head";
 
 export type TemplateId = "key-takeaways" | "narrative-summary" | "eli5";
 
@@ -83,12 +84,15 @@ export function renderDetailPage(opts: DetailPageOptions): string {
            <button type="button" class="bsd-transcript-toggle" data-role="transcript-toggle" aria-expanded="false">Expand transcript →</button>`
         : `<p class="bsd-transcript-missing">— transcript not available for this episode —</p>`;
 
+    const headDescription = ep.deck ?? `Summary of "${ep.episodeTitle}" from ${ep.podcastName}.`;
     return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escape(ep.episodeTitle)} — TL;DL</title>
+${renderBroadsheetHead({
+    title: `${ep.episodeTitle} — TL;DL`,
+    description: headDescription,
+    canonicalUrl: `https://tldl-pod.com/episode/${encodeURIComponent(ep.id)}`,
+})}
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${BROADSHEET_DETAIL_CSS}</style>
 </head>

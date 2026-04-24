@@ -1,5 +1,6 @@
 import { escapeHtml } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
+import { renderBroadsheetHead } from "./head";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { renderMasthead, renderSubnav, renderSectionBar, renderFooter, type SubnavKey } from "./chrome";
 
@@ -48,9 +49,7 @@ export function renderTagBrowsePage(opts: TagBrowsePageOptions): string {
     return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tags — TL;DL</title>
+${renderBroadsheetHead({ title: "Tags — TL;DL", canonicalUrl: "https://tldl-pod.com/tag" })}
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${TAG_BROWSE_CSS}</style>
 </head>

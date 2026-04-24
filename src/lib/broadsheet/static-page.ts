@@ -1,5 +1,5 @@
-import { escapeHtml } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
+import { renderBroadsheetHead } from "./head";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import {
     renderMasthead,
@@ -41,6 +41,8 @@ export interface StaticPageOptions {
     sectionCount: string;
     bodyHtml: string;
     pageTitle: string;
+    description?: string;
+    canonicalUrl?: string;
     now?: Date;
     totalInArchive: number;
 }
@@ -50,9 +52,7 @@ export function renderStaticPage(opts: StaticPageOptions): string {
     return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(opts.pageTitle)}</title>
+${renderBroadsheetHead({ title: opts.pageTitle, description: opts.description, canonicalUrl: opts.canonicalUrl })}
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${BROADSHEET_STATIC_CSS}</style>
 </head>

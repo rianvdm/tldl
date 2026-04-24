@@ -1,11 +1,11 @@
 import type { Episode, EpisodeIndexEntry } from "../../types";
-import { escapeHtml } from "../auth";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { BROADSHEET_INDEX_CSS } from "./index.css";
 import { renderMasthead, renderSubnav, renderSectionBar, renderFooter, renderPagination, type SubnavKey, type PaginationOptions } from "./chrome";
 import { renderLead } from "./lead";
 import { renderIndexRow } from "./index-row";
+import { renderBroadsheetHead } from "./head";
 
 export interface IndexPageOptions {
     lead: Episode | null;
@@ -18,6 +18,8 @@ export interface IndexPageOptions {
     searchQuery?: string;
     pagination?: PaginationOptions;
     rowStartNumber?: number;  // first row's "№" (1 on page 1, 21 on page 2 with size 20)
+    description?: string;
+    canonicalUrl?: string;
     now?: Date;
 }
 
@@ -26,9 +28,7 @@ export function renderIndexPage(opts: IndexPageOptions): string {
     return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(opts.pageTitle)}</title>
+${renderBroadsheetHead({ title: opts.pageTitle, description: opts.description, canonicalUrl: opts.canonicalUrl })}
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${BROADSHEET_INDEX_CSS}</style>
 </head>
