@@ -25,6 +25,7 @@ import { renderIndexPage } from "../lib/broadsheet/index-page";
 import { renderTagBrowsePage } from "../lib/broadsheet/tag-browse-page";
 import { renderPodcastBrowsePage } from "../lib/broadsheet/podcast-browse-page";
 import { renderDetailPage, type TemplateId } from "../lib/broadsheet/detail-page";
+import { renderStaticPage } from "../lib/broadsheet/static-page";
 import { selectLeadEpisode } from "../lib/broadsheet/lead-picker";
 import { marked } from "marked";
 
@@ -260,213 +261,63 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
 // ============================================================================
 
 publicRoutes.get("/about", async (c) => {
-    const content = html`
-        <style>
-            .about-page p {
-                margin-bottom: 1rem;
-            }
-            .about-page p:last-child {
-                margin-bottom: 0;
-            }
-            .about-page a {
-                color: var(--accent-red);
-                text-decoration: underline;
-                transition: opacity 0.2s ease;
-            }
-            .about-page a:hover {
-                opacity: 0.8;
-            }
-            .about-page ul {
-                margin: 0.5rem 0 1rem 1.5rem;
-            }
-            .about-page li {
-                margin-bottom: 0.5rem;
-            }
-            
-            /* Templates table - responsive design */
-            .templates-table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 1rem;
-            }
-            .templates-table th,
-            .templates-table td {
-                padding: 0.875rem 1rem;
-                text-align: left;
-                border-bottom: 1px solid var(--border);
-            }
-            .templates-table th {
-                font-weight: 600;
-                color: var(--muted-foreground);
-                font-size: 0.875rem;
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-            }
-            .templates-table td {
-                color: var(--foreground);
-            }
-            .templates-table td:first-child {
-                white-space: nowrap;
-            }
-            .templates-table tbody tr:last-child td {
-                border-bottom: none;
-            }
-            
-            /* Mobile: stack rows as cards */
-            @media (max-width: 640px) {
-                .templates-table thead {
-                    display: none;
-                }
-                .templates-table tbody tr {
-                    display: block;
-                    padding: 1rem 0;
-                    border-bottom: 1px solid var(--border);
-                }
-                .templates-table tbody tr:last-child {
-                    border-bottom: none;
-                }
-                .templates-table td {
-                    display: block;
-                    padding: 0.25rem 0;
-                    border-bottom: none;
-                }
-                .templates-table td:first-child {
-                    white-space: normal;
-                    padding-bottom: 0.5rem;
-                }
-                .templates-table td:last-child {
-                    color: var(--muted-foreground);
-                    font-size: 0.9375rem;
-                }
-            }
-        </style>
-        <div class="card about-page">
-            <h1>About TL;DL</h1>
+    const indexEntries = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
 
-            <section style="margin-top: 2rem;">
-                <p>
-                    TL;DL (Too Long; Didn't Listen) is a curated archive of AI-powered podcast summaries.
-                    New podcasts and episodes are added regularly. Each episode includes a concise summary
-                    and the full transcript. If there's a podcast you'd like to see here,
-                    <a href="/request">send a request</a>.
-                </p>
-                <p>
-                    All summaries and transcripts are cached for 365 days, so episodes are always
-                    available for quick reference.
-                </p>
-            </section>
+    const bodyHtml = `
+<p>TL;DL (Too Long; Didn't Listen) is a curated archive of AI-powered podcast summaries. New podcasts and episodes are added regularly. Each episode includes a concise summary and the full transcript. If there's a podcast you'd like to see here, <a href="/request">send a request</a>.</p>
 
-            <section style="margin-top: 2rem;">
-                <h2>Summary Templates</h2>
-                <p>Each episode is available in three different summary styles depending on the type of content:</p>
+<p>All summaries and transcripts are cached for 365 days, so episodes are always available for quick reference.</p>
 
-                <table class="templates-table">
-                    <thead>
-                        <tr>
-                            <th>Template</th>
-                            <th>Best For</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td data-label="Template"><strong>Key Takeaways & Practical Steps</strong></td>
-                            <td data-label="Best For">Craft and professional development podcasts. Includes an overview, key insights, actionable steps, and notable quotes.</td>
-                        </tr>
-                        <tr>
-                            <td data-label="Template"><strong>Narrative Summary</strong></td>
-                            <td data-label="Best For">Story-driven and interview podcasts. Captures the arc of the conversation with flowing narrative and main themes.</td>
-                        </tr>
-                        <tr>
-                            <td data-label="Template"><strong>ELI5 (Explain Like I'm 5)</strong></td>
-                            <td data-label="Best For">Technical and complex topics. Breaks down complex concepts using everyday analogies and simple language.</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </section>
+<h2>Summary Templates</h2>
+<p>Each episode is available in three different summary styles depending on the type of content:</p>
+<ul>
+    <li><strong>Key Takeaways &amp; Practical Steps</strong> — Craft and professional development podcasts. Includes an overview, key insights, actionable steps, and notable quotes.</li>
+    <li><strong>Narrative Summary</strong> — Story-driven and interview podcasts. Captures the arc of the conversation with flowing narrative and main themes.</li>
+    <li><strong>ELI5 (Explain Like I'm 5)</strong> — Technical and complex topics. Breaks down complex concepts using everyday analogies and simple language.</li>
+</ul>
 
-            <section id="creator-opt-out" style="margin-top: 2rem;">
-                <h2>A Note for Podcast Creators</h2>
-                <p>
-                    Attribution matters. Every episode page prominently displays the podcast name, creator names, and both a “Listen on Apple Podcasts” link and a “Website” link to the official podcast website. My hope is that TL;DL helps expand a podcast's audience by making the content more accessible. Summaries should bring people <em>to</em> a podcast, not replace the experience of listening—most podcasts have transcripts available already, after all.
-                </p>
-                <p>That said, if you'd prefer to opt out, please reach out at
-                    <a href="https://elezea.com/contact" target="_blank" rel="noopener noreferrer">elezea.com/contact</a>
-                    and I'll add your podcast to the blocklist.</p>
-            </section>
+<h2 id="creator-opt-out">A Note for Podcast Creators</h2>
+<p>Attribution matters. Every episode page prominently displays the podcast name, creator names, and both a &ldquo;Listen on Apple Podcasts&rdquo; link and a &ldquo;Website&rdquo; link to the official podcast website. My hope is that TL;DL helps expand a podcast's audience by making the content more accessible. Summaries should bring people <em>to</em> a podcast, not replace the experience of listening&mdash;most podcasts have transcripts available already, after all.</p>
+<p>That said, if you'd prefer to opt out, please reach out at <a href="https://elezea.com/contact" target="_blank" rel="noopener noreferrer">elezea.com/contact</a> and I'll add your podcast to the blocklist.</p>
 
-            <section id="rss-feed" style="margin-top: 2rem;">
-                <h2>RSS Feeds</h2>
-                <p>
-                    Subscribe to new episode summaries via the
-                    <a href="/feed">global RSS feed</a>.
-                    The feed includes the latest 50 episodes with their summaries.
-                </p>
-                <p>
-                    You can filter the global feed by topic using the <code>tag</code> parameter. For example:
-                </p>
-                <ul>
-                    <li><a href="/feed?tag=technology">/feed?tag=technology</a> — Technology episodes only</li>
-                    <li><a href="/feed?tag=music">/feed?tag=music</a> — Music episodes only</li>
-                    <li><a href="/feed?tag=business">/feed?tag=business</a> — Business episodes only</li>
-                </ul>
-                <p>
-                    See the home page's "Filter by topic" dropdown for the full list of available tags.
-                </p>
-                <p>
-                    Each podcast also has its own dedicated feed, scoped to that podcast's episodes only.
-                    Visit any <a href="/podcasts">podcast page</a> and append <code>/feed</code> to the URL:
-                </p>
-                <ul>
-                    <li><code>/podcasts/1088864895/feed</code> — All summarized episodes from a specific podcast</li>
-                </ul>
-                <p>
-                    The podcast ID is visible in the URL when you browse to any podcast's page.
-                    RSS readers that support autodiscovery will detect the feed automatically.
-                </p>
-            </section>
+<h2 id="rss-feed">RSS Feeds</h2>
+<p>Subscribe to new episode summaries via the <a href="/feed">global RSS feed</a>. The feed includes the latest 50 episodes with their summaries.</p>
+<p>You can filter the global feed by topic using the <code>tag</code> parameter. For example:</p>
+<ul>
+    <li><a href="/feed?tag=technology">/feed?tag=technology</a> — Technology episodes only</li>
+    <li><a href="/feed?tag=music">/feed?tag=music</a> — Music episodes only</li>
+    <li><a href="/feed?tag=business">/feed?tag=business</a> — Business episodes only</li>
+</ul>
+<p>See the home page's &ldquo;Filter by topic&rdquo; dropdown for the full list of available tags.</p>
+<p>Each podcast also has its own dedicated feed, scoped to that podcast's episodes only. Visit any <a href="/podcasts">podcast page</a> and append <code>/feed</code> to the URL:</p>
+<ul>
+    <li><code>/podcasts/1088864895/feed</code> — All summarized episodes from a specific podcast</li>
+</ul>
+<p>The podcast ID is visible in the URL when you browse to any podcast's page. RSS readers that support autodiscovery will detect the feed automatically.</p>
 
-            <section style="margin-top: 2rem;">
-                <h2>Technology</h2>
-                <p>TL;DL is built entirely on Cloudflare's edge platform:</p>
-                <ul>
-                    <li>
-                        <a href="https://developers.cloudflare.com/workers/" target="_blank" rel="noopener noreferrer">Cloudflare Workers</a>
-                        — Serverless compute at the edge
-                    </li>
-                    <li>
-                        <a href="https://developers.cloudflare.com/kv/" target="_blank" rel="noopener noreferrer">Workers KV</a>
-                        — Global key-value storage
-                    </li>
-                    <li>
-                        <a href="https://developers.cloudflare.com/queues/" target="_blank" rel="noopener noreferrer">Cloudflare Queues</a>
-                        — Background job processing
-                    </li>
-                    <li>
-                        <a href="https://developers.cloudflare.com/durable-objects/" target="_blank" rel="noopener noreferrer">Durable Objects</a>
-                        — Strongly consistent coordination
-                    </li>
-                    <li>
-                        <a href="https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/" target="_blank" rel="noopener noreferrer">Cloudflare Access</a>
-                        — Zero Trust authentication
-                    </li>
-                </ul>
-                <p>
-                    Transcription powered by
-                    <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a>'s
-                    gpt-4o-mini-transcribe model. Summarization and tagging by GPT-5.4.
-                </p>
-            </section>
+<h2>Technology</h2>
+<p>TL;DL is built entirely on Cloudflare's edge platform:</p>
+<ul>
+    <li><a href="https://developers.cloudflare.com/workers/" target="_blank" rel="noopener noreferrer">Cloudflare Workers</a> — Serverless compute at the edge</li>
+    <li><a href="https://developers.cloudflare.com/kv/" target="_blank" rel="noopener noreferrer">Workers KV</a> — Global key-value storage</li>
+    <li><a href="https://developers.cloudflare.com/queues/" target="_blank" rel="noopener noreferrer">Cloudflare Queues</a> — Background job processing</li>
+    <li><a href="https://developers.cloudflare.com/durable-objects/" target="_blank" rel="noopener noreferrer">Durable Objects</a> — Strongly consistent coordination</li>
+    <li><a href="https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/" target="_blank" rel="noopener noreferrer">Cloudflare Access</a> — Zero Trust authentication</li>
+</ul>
+<p>Transcription powered by <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a>'s gpt-4o-mini-transcribe model. Summarization and tagging by GPT-5.4.</p>
 
-            <section style="margin-top: 2rem;">
-                <h2>Credits</h2>
-                <p>
-                    TL;DL was created by
-                    <a href="https://elezea.com" target="_blank" rel="noopener noreferrer">Rian van der Merwe</a>.
-                </p>
-            </section>
-        </div>
-    `;
-    return c.html(Layout({ title: "About", children: content.toString(), canonicalUrl: `${BASE_URL}/about` }));
+<h2>Credits</h2>
+<p>TL;DL was created by <a href="https://elezea.com" target="_blank" rel="noopener noreferrer">Rian van der Merwe</a>.</p>
+`;
+
+    return c.html(renderStaticPage({
+        activeNav: "about",
+        sectionHeading: "About — The Ledger",
+        sectionCount: "Colophon & Notes",
+        bodyHtml,
+        pageTitle: "About — TL;DL",
+        totalInArchive: indexEntries.length,
+    }));
 });
 
 // ============================================================================
