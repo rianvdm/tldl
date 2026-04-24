@@ -23,6 +23,7 @@ import { verifyTurnstile } from "../lib/turnstile";
 import { sendEmail } from "../services/postmark";
 import { renderIndexPage } from "../lib/broadsheet/index-page";
 import { renderTagBrowsePage } from "../lib/broadsheet/tag-browse-page";
+import { renderPodcastBrowsePage } from "../lib/broadsheet/podcast-browse-page";
 import { renderDetailPage, type TemplateId } from "../lib/broadsheet/detail-page";
 import { selectLeadEpisode } from "../lib/broadsheet/lead-picker";
 import { marked } from "marked";
@@ -65,18 +66,6 @@ function formatDuration(seconds: number): string {
         return `${hours}h ${minutes}m`;
     }
     return `${minutes}m`;
-}
-
-/**
- * Format ISO date string to readable format
- */
-function formatDate(dateString: string): string {
-    const date = new Date(dateString);
-    return new Intl.DateTimeFormat("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-    }).format(date);
 }
 
 // escapeHtml imported from ../lib/auth
@@ -743,141 +732,14 @@ ${items}
 // ============================================================================
 
 publicRoutes.get("/podcasts", async (c) => {
-    const pageParam = c.req.query("page");
-    const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
-    const pageSize = 10;
-    const search = c.req.query("q") || "";
-
     const allPodcasts = await getPodcastList(c.env.TLDL_DATA);
+    const indexEntries = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
 
-    // Filter by search query (case-insensitive match on podcast name)
-    const filteredPodcasts = search
-        ? allPodcasts.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
-        : allPodcasts;
-
-    if (allPodcasts.length === 0) {
-        const content = `
-            <div class="page-header">
-                <h1>Browse Podcasts</h1>
-                <p class="page-subtitle">All podcasts with AI summaries</p>
-            </div>
-            <div class="empty-state">
-                <p>No podcasts yet. Check back soon!</p>
-            </div>
-        `;
-        return c.html(Layout({ title: "Browse Podcasts", children: content }));
-    }
-
-    // Paginate filtered podcasts
-    const total = filteredPodcasts.length;
-    const totalPages = Math.ceil(total / pageSize);
-    const start = (page - 1) * pageSize;
-    const podcasts = filteredPodcasts.slice(start, start + pageSize);
-
-    // Redirect if page is out of bounds
-    if (podcasts.length === 0 && page > 1) {
-        return c.redirect(`/podcasts${search ? `?q=${encodeURIComponent(search)}` : ''}`);
-    }
-
-    const podcastCards = podcasts.map(podcast => `
-        <div class="podcast-card" onclick="window.location.href='/podcasts/${escapeHtml(podcast.id)}'" style="cursor: pointer;">
-            <div class="podcast-card-content">
-                <div class="podcast-card-icon">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
-                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                        <line x1="12" x2="12" y1="19" y2="22"/>
-                    </svg>
-                </div>
-                <div class="podcast-card-info">
-                    <h3 class="podcast-card-name">${escapeHtml(podcast.name)}</h3>
-                    ${podcast.author ? `<div class="podcast-card-author">by ${escapeHtml(podcast.author)}</div>` : ''}
-                    <div class="podcast-card-meta">
-                        <span>${podcast.episodeCount} episode${podcast.episodeCount !== 1 ? 's' : ''}</span>
-                        <span class="meta-dot">•</span>
-                        <span>Updated ${formatDate(podcast.latestEpisodeDate)}</span>
-                    </div>
-                </div>
-            </div>
-            <div class="podcast-card-arrow">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>
-                </svg>
-            </div>
-        </div>
-    `).join("");
-
-    // Build pagination with search query preserved
-    const paginationHtml = totalPages > 1 ? `
-        <nav class="pagination" aria-label="Podcast pagination">
-            ${page > 1 ? `
-            <a href="/podcasts?page=${page - 1}${search ? `&q=${encodeURIComponent(search)}` : ''}" class="pagination-link pagination-prev">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </a>
-            ` : `<span class="pagination-link pagination-prev pagination-disabled">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </span>`}
-            <span class="pagination-info">Page ${page} of ${totalPages}</span>
-            ${page < totalPages ? `
-            <a href="/podcasts?page=${page + 1}${search ? `&q=${encodeURIComponent(search)}` : ''}" class="pagination-link pagination-next">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </a>
-            ` : `<span class="pagination-link pagination-next pagination-disabled">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </span>`}
-        </nav>
-    ` : "";
-
-    // Search form (reuses home page styling)
-    const searchForm = `
-        <form method="GET" action="/podcasts" class="search-form">
-            <div class="search-input-wrapper">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon">
-                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-                </svg>
-                <input type="text" name="q" value="${escapeHtml(search)}" placeholder="Search podcasts..." class="search-input" id="search-input">
-                ${search ? `<a href="/podcasts" class="search-clear" title="Clear search">×</a>` : ""}
-            </div>
-            <button type="submit" class="button">Search</button>
-        </form>
-    `;
-
-    // Empty state for no search results
-    const noResultsHtml = search && filteredPodcasts.length === 0 ? `
-        <div class="empty-state">
-            <p>No podcasts found matching "${escapeHtml(search)}"</p>
-            <a href="/podcasts" class="button">Clear Search</a>
-        </div>
-    ` : "";
-
-    const content = `
-        <div class="page-header">
-            <h1>Browse Podcasts</h1>
-            <p class="page-subtitle">${allPodcasts.length} podcast${allPodcasts.length !== 1 ? 's' : ''} with AI summaries</p>
-        </div>
-        ${searchForm}
-        ${noResultsHtml}
-        ${filteredPodcasts.length > 0 ? `
-        <div class="podcast-list">
-            ${podcastCards}
-        </div>
-        ${paginationHtml}
-        ` : ""}
-    `;
-
-    return c.html(Layout({ title: "Browse Podcasts", children: content, canonicalUrl: `${BASE_URL}/podcasts` }));
+    const html = renderPodcastBrowsePage({
+        podcasts: allPodcasts,
+        totalInArchive: indexEntries.length,
+    });
+    return c.html(html);
 });
 
 // ============================================================================
