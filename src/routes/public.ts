@@ -15,7 +15,6 @@ import {
     getEpisodesForPodcast,
 } from "../lib/kv";
 import { getTemplate, isValidTag } from "../lib/constants";
-import { extractPodcastId } from "../lib/url-parser";
 
 import { escapeHtml } from "../lib/auth";
 import { renderMarkdown } from "../lib/markdown";
@@ -23,7 +22,9 @@ import { Footer } from "../lib/components";
 import { verifyTurnstile } from "../lib/turnstile";
 import { sendEmail } from "../services/postmark";
 import { renderIndexPage } from "../lib/broadsheet/index-page";
+import { renderDetailPage, type TemplateId } from "../lib/broadsheet/detail-page";
 import { selectLeadEpisode } from "../lib/broadsheet/lead-picker";
+import { marked } from "marked";
 
 const publicRoutes = new Hono<HonoEnv>();
 
@@ -59,50 +60,7 @@ function formatDate(dateString: string): string {
     }).format(date);
 }
 
-/**
- * Calculate days remaining until expiration
- */
-function calculateDaysRemaining(expiresAt: string): number {
-    const now = new Date();
-    const expires = new Date(expiresAt);
-    const diffTime = expires.getTime() - now.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return Math.max(0, diffDays);
-}
-
 // escapeHtml imported from ../lib/auth
-
-/**
- * Extract the first sentence from text for use in meta descriptions
- * Skips markdown headings (lines starting with #)
- */
-function getFirstSentence(text: string, maxLength: number = 160): string {
-    if (!text) return "";
-
-    // Skip markdown headings and find the first content line
-    const lines = text.split('\n');
-    let contentText = "";
-    for (const line of lines) {
-        const trimmed = line.trim();
-        // Skip empty lines and markdown headings
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        contentText = trimmed;
-        break;
-    }
-
-    if (!contentText) return "";
-
-    // Find the first sentence-ending punctuation
-    const match = contentText.match(/^[^.!?]+[.!?]/);
-    const firstSentence = match ? match[0].trim() : contentText.substring(0, maxLength);
-
-    // Truncate if too long for meta descriptions
-    if (firstSentence.length > maxLength) {
-        return firstSentence.substring(0, maxLength - 3).trim() + "...";
-    }
-
-    return firstSentence;
-}
 
 // ============================================================================
 // Layout Component
@@ -270,221 +228,39 @@ publicRoutes.get("/", async (c) => {
 
 publicRoutes.get("/episode/:episodeId", async (c) => {
     const episodeId = c.req.param("episodeId");
-    const selectedTemplate = c.req.query("template");
+    const requestedTemplate = (c.req.query("template") ?? "") as TemplateId;
+    const validTemplates: TemplateId[] = ["key-takeaways", "narrative-summary", "eli5"];
 
-    // Fetch episode
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
-    if (!episode) {
-        const content = `
-            <div class="error-page">
-                <h1>Episode Not Found</h1>
-                <p>This episode doesn't exist or has expired.</p>
-                <a href="/" class="button">Back to Home</a>
-            </div>
-        `;
-        return c.html(Layout({ title: "Not Found", children: content }), 404);
-    }
+    if (!episode) return c.notFound();
 
-    // Fetch transcript and summaries
-    const [transcript, summaries] = await Promise.all([
-        getTranscript(c.env.TLDL_DATA, episodeId),
-        listSummariesForEpisode(c.env.TLDL_DATA, episodeId),
-    ]);
-
-    // Determine which summary to show
-    const activeTemplateId =
-        selectedTemplate ||
-        (summaries.length > 0 ? summaries[0].templateId : null);
-    const activeSummary = activeTemplateId
-        ? summaries.find((s) => s.templateId === activeTemplateId)
-        : null;
-
-    const daysRemaining = calculateDaysRemaining(episode.expiresAt);
-
-    // Build summary tabs
-    const summaryTabs = summaries
-        .map((summary) => {
-            const template = getTemplate(summary.templateId);
-            const isActive = summary.templateId === activeTemplateId;
-            return `
-                <a href="/episode/${escapeHtml(episodeId)}?template=${escapeHtml(summary.templateId)}"
-                   class="tab ${isActive ? "tab-active" : ""}">
-                    ${escapeHtml(template?.name || summary.templateId)}
-                </a>
-            `;
-        })
-        .join("");
-
-    // Build summary content
-    const transcribeModelLabel = transcript?.model
-        ? `Audio transcribed with ${escapeHtml(transcript.model)}. `
-        : "";
-    const summaryContent = activeSummary
-        ? `
-        <div class="summary-header">
-            <div class="summary-model">${transcribeModelLabel}Summary generated with ${escapeHtml(activeSummary.model)}</div>
-        </div>
-        <div class="prose">
-            ${renderMarkdown(activeSummary.text)}
-        </div>
-    `
-        : `
-        <div class="empty-state">
-            <p>No summary available for this episode.</p>
-        </div>
-    `;
-
-    // Build transcript content with collapse/expand
-    // Collapse if transcript is longer than ~20 lines worth of characters
-    const needsCollapse = transcript ? transcript.text.length > 2000 : false;
-
-    const transcriptContent = transcript
-        ? `
-        <div class="transcript-source">
-            <span class="source-indicator"></span>
-            ${escapeHtml(transcript.source)} transcript
-        </div>
-        <div class="transcript-container${needsCollapse ? ' collapsed' : ''}" id="transcript-container">
-            <div class="transcript-text" id="transcript-text">
-                ${escapeHtml(transcript.text)}
-            </div>
-            ${needsCollapse ? '<div class="transcript-fade"></div>' : ''}
-        </div>
-        ${needsCollapse ? `
-        <button class="transcript-toggle" id="transcript-toggle" onclick="toggleTranscript()">
-            <span id="toggle-text">Show full transcript</span>
-            <svg id="toggle-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m6 9 6 6 6-6"/>
-            </svg>
-        </button>
-        <script>
-            function toggleTranscript() {
-                const container = document.getElementById('transcript-container');
-                const toggleText = document.getElementById('toggle-text');
-                const toggleIcon = document.getElementById('toggle-icon');
-                const isCollapsed = container.classList.contains('collapsed');
-
-                if (isCollapsed) {
-                    container.classList.remove('collapsed');
-                    toggleText.textContent = 'Show less';
-                    toggleIcon.style.transform = 'rotate(180deg)';
-                } else {
-                    container.classList.add('collapsed');
-                    toggleText.textContent = 'Show full transcript';
-                    toggleIcon.style.transform = 'rotate(0deg)';
-                }
-            }
-        </script>
-        ` : ''}
-    `
-        : `
-        <div class="empty-state">
-            <p>No transcript available for this episode.</p>
-        </div>
-    `;
-
-    const content = `
-        <div class="breadcrumb">
-            <a href="/" class="breadcrumb-link">Episodes</a>
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m9 18 6-6-6-6"/>
-            </svg>
-            <span>${escapeHtml(episode.podcastName)}</span>
-        </div>
-
-        <div class="episode-header">
-            <div class="episode-podcast">${escapeHtml(episode.podcastName)}</div>
-            ${episode.podcastAuthor ? `<div class="podcast-author podcast-author-block">by ${escapeHtml(episode.podcastAuthor)}</div>` : ''}
-            <h1 class="episode-detail-title">${escapeHtml(episode.episodeTitle)}</h1>
-            <div class="episode-meta">
-                <span>${formatDate(episode.episodeDate)}</span>
-                <span class="meta-dot">•</span>
-                <span>${formatDuration(episode.episodeDuration)}</span>
-                <span class="meta-dot">•</span>
-                <span class="expiry">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                    Expires in ${daysRemaining} days
-                </span>
-                ${episode.tags && episode.tags.length > 0 ? `
-                <span class="meta-dot">•</span>
-                <div style="display: inline-flex; gap: 0.375rem;">
-                    ${[...episode.tags].sort().map(tag =>
-        `<a href="/?tag=${encodeURIComponent(tag)}" class="tag-badge" style="text-decoration: none;">${escapeHtml(tag)}</a>`
-    ).join('')}
-                </div>
-                ` : ''}
-            </div>
-            <div class="platform-links">
-                ${episode.appleUrl ? `
-                <a href="${escapeHtml(episode.appleUrl)}" target="_blank" rel="noopener noreferrer" class="apple-podcasts-badge" title="Listen on Apple Podcasts">
-                    <img src="/apple-podcasts-badge.svg" alt="Listen on Apple Podcasts" height="32">
-                </a>
-                ` : ''}
-                ${episode.podcastWebsiteUrl ? `
-                <a href="${escapeHtml(episode.podcastWebsiteUrl)}" target="_blank" rel="noopener noreferrer" class="website-link" title="Visit podcast website">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                    </svg>
-                    Visit Website
-                </a>
-                ` : ''}
-                ${(() => {
-            const podId = extractPodcastId(episode.id);
-            return podId ? `
-                <a href="/podcasts/${podId}" class="website-link" title="More episodes from this podcast">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="m12 8-9.04 9.06a2.82 2.82 0 1 0 3.98 3.98L16 12"/>
-                        <circle cx="17" cy="7" r="5"/>
-                    </svg>
-                    More from ${escapeHtml(episode.podcastName)}
-                </a>
-                    ` : '';
-        })()}
-            </div>
-        </div>
-
-        <div class="divider"></div>
-
-        <section class="section">
-            <h2>Summary</h2>
-            ${summaries.length > 1 ? `<div class="tabs">${summaryTabs}</div>` : ""}
-            <div class="card">
-                ${summaryContent}
-            </div>
-        </section>
-
-        <div class="divider"></div>
-
-        <section class="section">
-            <div class="section-header-with-action">
-                <h2>Full Transcript</h2>
-                ${transcript ? `
-                <a href="/api/episode/${escapeHtml(episodeId)}/transcript.txt" class="button button-sm" download>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" x2="12" y1="15" y2="3"/>
-                    </svg>
-                    Download
-                </a>
-                ` : ''}
-            </div>
-            <div class="card">
-                ${transcriptContent}
-            </div>
-        </section>
-    `;
-
-    // Extract first sentence of summary for meta description
-    const episodeDescription = activeSummary
-        ? getFirstSentence(activeSummary.text)
-        : `AI-generated summary of "${episode.episodeTitle}" from ${episode.podcastName}`;
-
-    return c.html(
-        Layout({ title: episode.episodeTitle, children: content, description: episodeDescription, canonicalUrl: `${BASE_URL}/episode/${episodeId}` })
+    // Discover which templates have summaries generated for this episode
+    const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);
+    const available: TemplateId[] = validTemplates.filter(t =>
+        summaries.some(s => s.templateId === t)
     );
+    if (available.length === 0) return c.notFound();
+
+    const activeTemplate: TemplateId =
+        validTemplates.includes(requestedTemplate) && available.includes(requestedTemplate)
+            ? requestedTemplate
+            : available[0];
+
+    const activeSummary = summaries.find(s => s.templateId === activeTemplate);
+    const summaryMarkdown = activeSummary?.text ?? "";
+    const summaryHtml = marked.parse(summaryMarkdown) as string;
+
+    const transcript = await getTranscript(c.env.TLDL_DATA, episodeId);
+    const transcriptText = transcript?.text ?? null;
+
+    const html = renderDetailPage({
+        episode,
+        summaryHtml,
+        activeTemplate,
+        availableTemplates: available,
+        transcriptText,
+    });
+    return c.html(html);
 });
 
 // ============================================================================
