@@ -38,6 +38,24 @@ const BASE_URL = "https://tldl-pod.com";
 /**
  * Format duration in seconds to human readable string
  */
+/**
+ * If a summary's first heading (h1/h2/h3) references the episode title, strip
+ * it — the detail page already renders the title as H1. Only strips when the
+ * heading looks title-like (contains the episode title or a meaningful chunk
+ * of it), so legitimate ## Overview / ## The Story headings stay intact.
+ */
+function stripDuplicateTitleHeading(md: string, episodeTitle: string): string {
+    const match = md.match(/^\s*(#{1,3})\s+([^\n]+)\n+/);
+    if (!match) return md;
+    const headingLower = match[2].toLowerCase();
+    const titleLower = episodeTitle.toLowerCase();
+    const titleKey = titleLower.slice(0, Math.min(titleLower.length, 18));
+    if (titleKey.length >= 6 && headingLower.includes(titleKey)) {
+        return md.slice(match[0].length);
+    }
+    return md;
+}
+
 function formatDuration(seconds: number): string {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -190,9 +208,7 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
             : available[0];
 
     const activeSummary = summaries.find(s => s.templateId === activeTemplate);
-    // Strip a leading `# Title` line — the page already renders the episode
-    // title as H1, and some summaries start with a duplicate heading.
-    const summaryMarkdown = (activeSummary?.text ?? "").replace(/^\s*#\s+[^\n]*\n+/, "");
+    const summaryMarkdown = stripDuplicateTitleHeading(activeSummary?.text ?? "", episode.episodeTitle);
     const summaryHtml = marked.parse(summaryMarkdown) as string;
 
     const transcript = await getTranscript(c.env.TLDL_DATA, episodeId);
