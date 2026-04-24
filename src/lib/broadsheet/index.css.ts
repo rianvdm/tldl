@@ -109,11 +109,23 @@ export const BROADSHEET_INDEX_CSS = `
 @media (max-width: 1023px) {
   .bs-lead, .bs-index { padding-left: 40px; padding-right: 40px; }
 }
+.bs-row-meta-mobile { display: none; }
 @media (max-width: 767px) {
   .bs-lead { padding: 20px; grid-template-columns: 1fr; gap: 24px; }
   .bs-lead-title { font-size: 40px; }
   .bs-index { padding: 0 20px 32px; }
-  .bs-row { grid-template-columns: 40px 1fr 80px 80px; gap: 16px; }
-  .bs-row .bs-row-arrow, .bs-row .bs-row-tag { display: none; }
+  .bs-row { grid-template-columns: 36px 1fr; gap: 12px; padding: 18px 0; }
+  .bs-row-title { font-size: 20px; }
+  .bs-row .bs-row-date,
+  .bs-row .bs-row-dur,
+  .bs-row .bs-row-tag,
+  .bs-row .bs-row-arrow { display: none; }
+  .bs-row-meta-mobile {
+    display: block;
+    margin-top: 10px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--bs-ink-faint);
+  }
 }
 `;

@@ -18,12 +18,19 @@ export function renderIndexRow(ep: EpisodeIndexEntry & { deck?: string }, rowNum
     const href = `/episode/${encodeURIComponent(ep.id)}`;
     const authorPart = ep.podcastAuthor ? ` · ${escape(ep.podcastAuthor)}` : "";
 
+    const mobileMetaParts = [
+        shortDate(ep.episodeDate),
+        formatDuration(ep.episodeDuration),
+        tagList,
+    ].filter(Boolean);
+
     return `<a href="${href}" class="bs-row">
   <div class="bs-row-num">№ ${num}</div>
   <div class="bs-row-body">
     <div class="bs-row-pod"><b>${escape(ep.podcastName)}</b>${authorPart}</div>
     <div class="bs-row-title">${escape(ep.episodeTitle)}</div>
     ${deck ? `<div class="bs-row-blurb">${escape(deck)}</div>` : ""}
+    <div class="bs-row-meta-mobile">${mobileMetaParts.join(" · ")}</div>
   </div>
   <div class="bs-row-date">${shortDate(ep.episodeDate)}</div>
   <div class="bs-row-dur">${formatDuration(ep.episodeDuration)}</div>
