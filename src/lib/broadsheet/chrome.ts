@@ -93,7 +93,7 @@ export function renderPagination(opts: PaginationOptions): string {
 export function renderFooter(): string {
     return `<div class="bs-footer">
   <span>TL;DL · A curated audio ledger</span>
-  <span>&nbsp;</span>
+  <span><a href="/request">Request a Podcast</a></span>
 </div>`;
 }
 

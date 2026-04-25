@@ -9,6 +9,7 @@ import {
     getTranscript,
     getSummary,
     appendActivityEvent,
+    addToEpisodeIndex,
 } from "../../src/lib/kv";
 import type { Episode, Transcript, Summary } from "../../src/types";
 
@@ -89,6 +90,15 @@ describe("Integration: Episode View Flow", () => {
         const summary = createSampleSummary({ episodeId: episode.id });
 
         await saveEpisode(env.TLDL_DATA, episode);
+        await addToEpisodeIndex(env.TLDL_DATA, {
+            id: episode.id,
+            podcastName: episode.podcastName,
+            episodeTitle: episode.episodeTitle,
+            episodeDate: episode.episodeDate,
+            episodeDuration: episode.episodeDuration,
+            createdAt: episode.createdAt,
+            expiresAt: episode.expiresAt,
+        });
         await saveTranscript(env.TLDL_DATA, transcript);
         await saveSummary(env.TLDL_DATA, summary);
 
@@ -96,7 +106,8 @@ describe("Integration: Episode View Flow", () => {
         const listResponse = await SELF.fetch("http://localhost/");
         expect(listResponse.status).toBe(200);
         const listHtml = await listResponse.text();
-        expect(listHtml).toContain("Integration Test Podcast");
+        // Broadsheet lead uppercases the podcast name, so check case-insensitively.
+        expect(listHtml.toLowerCase()).toContain("integration test podcast");
         expect(listHtml).toContain("Integration Test Episode");
 
         // Step 2: View episode list (JSON API)
@@ -261,7 +272,7 @@ describe("Integration: Error Handling", () => {
         const response = await SELF.fetch("http://localhost/episode/non-existent-id");
         expect(response.status).toBe(404);
         const html = await response.text();
-        expect(html).toContain("Episode Not Found");
+        expect(html).toContain("Page not found");
     });
 
     it("empty URL on admin submit shows validation error", async () => {
@@ -551,16 +562,6 @@ describe("Integration: Request a Podcast", () => {
         // which would redirect to ?error=captcha. Either error is acceptable.
         const location = response.headers.get("Location") || "";
         expect(location).toMatch(/\/request\?error=(captcha|missing-name)/);
-    });
-
-    it("home page hero links to /request", async () => {
-        // Hero section only renders when there are episodes
-        await saveEpisode(env.TLDL_DATA, createSampleEpisode());
-
-        const response = await SELF.fetch("http://localhost/");
-        const html = await response.text();
-        expect(html).toContain('href="/request"');
-        expect(html).toContain("request a podcast");
     });
 
     it("footer links to /request", async () => {

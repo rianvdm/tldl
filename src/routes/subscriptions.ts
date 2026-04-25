@@ -16,7 +16,6 @@ import {
 } from "../lib/db";
 import { signToken, verifyToken, manageMessage, unsubMessage, unsubAllMessage } from "../lib/emailTokens";
 import { escapeHtml } from "../lib/auth";
-import { Layout } from "./public";
 import { renderFormPage } from "../lib/broadsheet/form-page";
 import type { EpisodeIndexEntry } from "../types";
 
@@ -26,14 +25,38 @@ const BASE_URL = "https://tldl-pod.com";
 const PENDING_TTL_SECONDS = 48 * 3600;
 const MAX_PODCAST_IDS = 50;
 const TURNSTILE_SCRIPT = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>';
-const CHECKBOX_LIST_STYLES = `
-    <style>
-        .checkbox-list { display: flex; flex-direction: column; gap: 0.75rem; }
-        .checkbox-row { display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; padding: 0.25rem 0; line-height: 1.3; }
-        .checkbox-row input[type="checkbox"] { width: 1.1em; height: 1.1em; margin: 0.28em 0 0 0; flex-shrink: 0; }
-        .checkbox-row .podcast-label { display: flex; flex-direction: column; gap: 0.15rem; }
-        .checkbox-row .podcast-author { font-size: 0.85em; color: var(--text-muted, #888); line-height: 1.25; }
-    </style>`;
+
+async function getTotalInArchive(env: Env): Promise<number> {
+    const indexEntries = await env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
+    return indexEntries.length;
+}
+
+interface BannerPageOpts {
+    heading: string;
+    sectionCount: string;
+    pageTitle: string;
+    bannerHtml: string;
+    kind: "ok" | "err";
+    activeNav?: "subscribe";
+    canonicalUrl?: string;
+}
+
+async function renderBannerPage(env: Env, opts: BannerPageOpts): Promise<string> {
+    const bodyHtml = `
+<div class="bs-form-banner ${opts.kind}">
+${opts.bannerHtml}
+</div>
+`;
+    return renderFormPage({
+        activeNav: opts.activeNav ?? "subscribe",
+        sectionHeading: opts.heading,
+        sectionCount: opts.sectionCount,
+        bodyHtml,
+        pageTitle: opts.pageTitle,
+        canonicalUrl: opts.canonicalUrl,
+        totalInArchive: await getTotalInArchive(env),
+    });
+}
 
 function logSendFailure(event: string, email: string, result: { success: boolean; errorMessage?: string }): void {
     if (!result.success) {
@@ -54,36 +77,6 @@ function randomTokenHex(bytes: number): string {
     return hex;
 }
 
-function checkInboxPage(message: string): string {
-    return `
-        <div class="page-header">
-            <h1>Please check your inbox</h1>
-        </div>
-        <div class="card">
-            <p>${escapeHtml(message)}</p>
-        </div>
-    `;
-}
-
-async function renderSubscribeBanner(
-    env: Env,
-    opts: { heading: string; sectionCount: string; pageTitle: string; bannerHtml: string; kind: "ok" | "err" },
-): Promise<string> {
-    const indexEntries = await env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
-    const bodyHtml = `
-<div class="bs-form-banner ${opts.kind}">
-${opts.bannerHtml}
-</div>
-`;
-    return renderFormPage({
-        activeNav: "subscribe",
-        sectionHeading: opts.heading,
-        sectionCount: opts.sectionCount,
-        bodyHtml,
-        pageTitle: opts.pageTitle,
-        totalInArchive: indexEntries.length,
-    });
-}
 
 // ---- GET /subscribe ----
 subscriptionsRoutes.get("/subscribe", async (c) => {
@@ -156,7 +149,7 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
             : [];
 
     const errPage = async (message: string, status: 400 | 403) => c.html(
-        await renderSubscribeBanner(c.env, {
+        await renderBannerPage(c.env, {
             heading: "Subscribe — Email Summaries",
             sectionCount: "Something's off",
             pageTitle: "Subscribe — TL;DL",
@@ -179,7 +172,7 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
 
     const existing = await getSubscriberByEmail(c.env.DB, email);
     if (existing?.status === "complained") {
-        return c.html(await renderSubscribeBanner(c.env, {
+        return c.html(await renderBannerPage(c.env, {
             heading: "Subscribe — Email Summaries",
             sectionCount: "Check your inbox",
             pageTitle: "Check your inbox — TL;DL",
@@ -189,7 +182,7 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
     }
 
     if (await hasActivePendingForEmail(c.env.DB, email, now)) {
-        return c.html(await renderSubscribeBanner(c.env, {
+        return c.html(await renderBannerPage(c.env, {
             heading: "Subscribe — Email Summaries",
             sectionCount: "Check your inbox",
             pageTitle: "Check your inbox — TL;DL",
@@ -222,7 +215,7 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
     });
     logSendFailure("subscribe_confirm_send_failed", email, sendRes);
 
-    return c.html(await renderSubscribeBanner(c.env, {
+    return c.html(await renderBannerPage(c.env, {
         heading: "Subscribe — Email Summaries",
         sectionCount: "Check your inbox",
         pageTitle: "Check your inbox — TL;DL",
@@ -233,25 +226,20 @@ subscriptionsRoutes.post("/subscribe", async (c) => {
 
 // ---- GET /confirm ----
 subscriptionsRoutes.get("/confirm", async (c) => {
-    const invalidPage = Layout({
-        title: "Invalid link",
-        children: `
-            <div class="page-header">
-                <h1>Invalid or expired link</h1>
-            </div>
-            <div class="card">
-                <p>This confirmation link didn't work. It may have expired, or the subscription was already completed.</p>
-                <a href="/subscribe" class="button button-primary">Subscribe again</a>
-            </div>
-        `,
+    const renderInvalid = () => renderBannerPage(c.env, {
+        heading: "Subscribe — Email Summaries",
+        sectionCount: "Invalid or expired link",
+        pageTitle: "Invalid link — TL;DL",
+        bannerHtml: `<p>This confirmation link didn't work. It may have expired, or the subscription was already completed. <a href="/subscribe">Subscribe again</a>.</p>`,
+        kind: "err",
     });
 
     const token = c.req.query("token");
-    if (!token) return c.html(invalidPage, 400);
+    if (!token) return c.html(await renderInvalid(), 400);
 
     const now = Math.floor(Date.now() / 1000);
     const subscriber = await confirmSubscriber(c.env.DB, token, now);
-    if (!subscriber) return c.html(invalidPage, 400);
+    if (!subscriber) return c.html(await renderInvalid(), 400);
 
     const subs = await listSubscriptionsForSubscriber(c.env.DB, subscriber.id);
     if (subs.length === 0) {
@@ -260,57 +248,51 @@ subscriptionsRoutes.get("/confirm", async (c) => {
             manageMessage(subscriber.id, subscriber.email),
         );
         const manageUrl = `/preferences/manage?s=${subscriber.id}&token=${manageToken}`;
-        return c.html(Layout({
-            title: "Almost done",
-            children: `
-                <div class="page-header">
-                    <h1>Email confirmed</h1>
-                    <p class="page-subtitle">Now pick the podcasts you want summaries for.</p>
-                </div>
-                <div class="card">
-                    <a href="${manageUrl}" class="button button-primary">Choose podcasts</a>
-                </div>
-            `,
+        return c.html(await renderBannerPage(c.env, {
+            heading: "Email Confirmed",
+            sectionCount: "Almost done",
+            pageTitle: "Almost done — TL;DL",
+            bannerHtml: `<p>Now pick the podcasts you want summaries for. <a href="${escapeHtml(manageUrl)}">Choose podcasts &rarr;</a></p>`,
+            kind: "ok",
         }));
     }
 
-    return c.html(Layout({
-        title: "Subscribed",
-        children: `
-            <div class="page-header">
-                <h1>You're subscribed</h1>
-                <p class="page-subtitle">We'll email you when a new summary goes up for any of your podcasts.</p>
-            </div>
-            <div class="card">
-                <a href="/preferences" class="button button-primary">Manage preferences</a>
-            </div>
-        `,
+    return c.html(await renderBannerPage(c.env, {
+        heading: "You're Subscribed",
+        sectionCount: "Confirmed",
+        pageTitle: "Subscribed — TL;DL",
+        bannerHtml: `<p>We'll email you when a new summary goes up for any of your podcasts. <a href="/preferences">Manage preferences</a>.</p>`,
+        kind: "ok",
     }));
 });
 
 // ---- GET /preferences ----
-subscriptionsRoutes.get("/preferences", (c) => c.html(Layout({
-    title: "Manage preferences",
-    children: `
-        <div class="page-header">
-            <h1>Manage preferences</h1>
-            <p class="page-subtitle">Enter your email and we'll send you a link to change or remove your subscriptions.</p>
-        </div>
-        <div class="card">
-            <form method="POST" action="/preferences" class="form">
-                <div class="form-group">
-                    <label for="email" class="form-label">Email</label>
-                    <input type="email" id="email" name="email" class="form-input"
-                        placeholder="you@example.com" autocomplete="email" required />
-                </div>
-                <div class="form-actions" style="margin-top: 1rem;">
-                    <button type="submit" class="button button-primary">Send me the link</button>
-                </div>
-            </form>
-        </div>
-    `,
-    canonicalUrl: `${BASE_URL}/preferences`,
-})));
+subscriptionsRoutes.get("/preferences", async (c) => {
+    const bodyHtml = `
+<div class="bs-form-intro">
+    <p>Enter your email and we'll send you a link to change or remove your subscriptions.</p>
+</div>
+<form method="POST" action="/preferences" class="bs-form">
+    <div class="bs-form-field">
+        <label for="email">Email Address</label>
+        <input type="email" id="email" name="email"
+            placeholder="you@example.com" autocomplete="email" required />
+    </div>
+    <div class="bs-form-actions">
+        <button type="submit" class="bs-form-submit">Send me the link &rarr;</button>
+    </div>
+</form>
+`;
+    return c.html(renderFormPage({
+        activeNav: "subscribe",
+        sectionHeading: "Manage Preferences",
+        sectionCount: "Email me a link",
+        bodyHtml,
+        pageTitle: "Manage preferences — TL;DL",
+        canonicalUrl: `${BASE_URL}/preferences`,
+        totalInArchive: await getTotalInArchive(c.env),
+    }));
+});
 
 // ---- POST /preferences ----
 subscriptionsRoutes.post("/preferences", async (c) => {
@@ -319,6 +301,14 @@ subscriptionsRoutes.post("/preferences", async (c) => {
     if (!rawEmail || !isValidEmail(rawEmail)) return c.text("Invalid email", 400);
     const email = rawEmail.toLowerCase();
     const now = Math.floor(Date.now() / 1000);
+
+    const inboxBanner = () => renderBannerPage(c.env, {
+        heading: "Please Check Your Inbox",
+        sectionCount: "On its way",
+        pageTitle: "Check your inbox — TL;DL",
+        bannerHtml: `<p>If we can reach you, a link is on its way.</p>`,
+        kind: "ok",
+    });
 
     const subscriber = await getSubscriberByEmail(c.env.DB, email);
     if (subscriber && subscriber.status === "active" && subscriber.confirmedAt !== null) {
@@ -335,10 +325,7 @@ subscriptionsRoutes.post("/preferences", async (c) => {
     } else if (!subscriber) {
         // Throttle: don't email-bomb a victim by rotating IPs through /preferences.
         if (await hasActivePendingForEmail(c.env.DB, email, now)) {
-            return c.html(Layout({
-                title: "Check your inbox",
-                children: checkInboxPage("If we can reach you, a link is on its way."),
-            }));
+            return c.html(await inboxBanner());
         }
         const token = randomTokenHex(32);
         await upsertPendingConfirmation(c.env.DB, {
@@ -360,10 +347,7 @@ subscriptionsRoutes.post("/preferences", async (c) => {
     }
     // complained / bounced: silently drop.
 
-    return c.html(Layout({
-        title: "Check your inbox",
-        children: checkInboxPage("If we can reach you, a link is on its way."),
-    }));
+    return c.html(await inboxBanner());
 });
 
 // ---- GET /preferences/manage ----
@@ -387,49 +371,52 @@ subscriptionsRoutes.get("/preferences/manage", async (c) => {
     const current = new Set(await listSubscriptionsForSubscriber(c.env.DB, subscriber.id));
 
     const podcastList = allPodcasts.length === 0
-        ? `<p class="text-muted">No podcasts are monitored.</p>`
-        : `<div class="checkbox-list">${allPodcasts.map((p) => `
-            <label class="checkbox-row">
+        ? `<p class="bs-form-hint">No podcasts are monitored.</p>`
+        : `<div class="bs-form-options">${allPodcasts.map((p) => `
+            <label class="opt">
                 <input type="checkbox" name="podcastIds" value="${escapeHtml(p.id)}"${current.has(p.id) ? " checked" : ""}>
-                <span class="podcast-label">
-                    <span class="podcast-name">${escapeHtml(p.name)}</span>
-                    ${p.author ? `<span class="podcast-author">by ${escapeHtml(p.author)}</span>` : ""}
+                <span class="opt-body">
+                    <span class="opt-name">${escapeHtml(p.name)}</span>
+                    ${p.author ? `<span class="opt-author">${escapeHtml(p.author)}</span>` : ""}
                 </span>
             </label>`).join("")}</div>`;
 
     const unsubAllToken = await signToken(c.env.MANAGE_LINK_HMAC_SECRET, unsubAllMessage(subscriber.id));
 
-    const content = `
-        <div class="page-header">
-            <h1>Preferences</h1>
-            <p class="page-subtitle">${escapeHtml(subscriber.email)}</p>
-        </div>
-        <div class="card">
-            <form method="POST" action="/preferences/manage" class="form">
-                <input type="hidden" name="s" value="${subscriber.id}">
-                <input type="hidden" name="token" value="${escapeHtml(token)}">
-                <div class="form-group">
-                    <label class="form-label">Podcasts</label>
-                    ${podcastList}
-                </div>
-                <div class="form-actions" style="margin-top: 1rem;">
-                    <button type="submit" class="button button-primary">Save preferences</button>
-                </div>
-            </form>
-        </div>
-        <div class="card" style="margin-top: 1rem;">
-            <h2 style="margin-top: 0;">Unsubscribe from everything</h2>
-            <p>Remove your email from every podcast at once. You can re-subscribe any time.</p>
-            <form method="POST" action="/unsubscribe">
-                <input type="hidden" name="s" value="${subscriber.id}">
-                <input type="hidden" name="token" value="${escapeHtml(unsubAllToken)}">
-                <button type="submit" class="button">Unsubscribe from all</button>
-            </form>
-        </div>
-        ${CHECKBOX_LIST_STYLES}
-    `;
+    const bodyHtml = `
+<div class="bs-form-intro">
+    <p>Signed in as <em>${escapeHtml(subscriber.email)}</em>. Tick the podcasts you want summaries for.</p>
+</div>
+<form method="POST" action="/preferences/manage" class="bs-form">
+    <input type="hidden" name="s" value="${subscriber.id}">
+    <input type="hidden" name="token" value="${escapeHtml(token)}">
+    <div class="bs-form-field">
+        <label>Podcasts</label>
+        ${podcastList}
+    </div>
+    <div class="bs-form-actions">
+        <button type="submit" class="bs-form-submit">Save preferences &rarr;</button>
+    </div>
+</form>
+<div class="bs-form-banner err" style="margin-top: 48px;">
+    <p style="font-style: normal; font-size: 14px; font-family: 'JetBrains Mono', ui-monospace, monospace; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bs-ink-faint); margin: 0 0 8px;">Or — leave entirely</p>
+    <p style="margin: 0 0 12px;">Remove your email from every podcast at once. You can re-subscribe any time.</p>
+    <form method="POST" action="/unsubscribe">
+        <input type="hidden" name="s" value="${subscriber.id}">
+        <input type="hidden" name="token" value="${escapeHtml(unsubAllToken)}">
+        <button type="submit" class="bs-form-submit">Unsubscribe from all &rarr;</button>
+    </form>
+</div>
+`;
 
-    return c.html(Layout({ title: "Preferences", children: content }));
+    return c.html(renderFormPage({
+        activeNav: "subscribe",
+        sectionHeading: "Preferences",
+        sectionCount: escapeHtml(subscriber.email),
+        bodyHtml,
+        pageTitle: "Preferences — TL;DL",
+        totalInArchive: await getTotalInArchive(c.env),
+    }));
 });
 
 // ---- POST /preferences/manage ----
@@ -458,14 +445,12 @@ subscriptionsRoutes.post("/preferences/manage", async (c) => {
     const now = Math.floor(Date.now() / 1000);
     await replaceSubscriptions(c.env.DB, subscriber.id, podcastIds, now);
 
-    return c.html(Layout({
-        title: "Saved",
-        children: `
-            <div class="page-header">
-                <h1>Saved</h1>
-                <p class="page-subtitle">Your preferences are updated.</p>
-            </div>
-        `,
+    return c.html(await renderBannerPage(c.env, {
+        heading: "Saved",
+        sectionCount: "Preferences updated",
+        pageTitle: "Saved — TL;DL",
+        bannerHtml: `<p>Your preferences are updated.</p>`,
+        kind: "ok",
     }));
 });
 
@@ -502,17 +487,12 @@ subscriptionsRoutes.get("/unsubscribe", async (c) => {
     const result = await runUnsubscribe(c.env, s, p, token);
     if (!result.ok) return c.text("Forbidden", result.status);
 
-    return c.html(Layout({
-        title: "Unsubscribed",
-        children: `
-            <div class="page-header">
-                <h1>You're unsubscribed</h1>
-            </div>
-            <div class="card">
-                <p>Changed your mind? You can manage your preferences any time.</p>
-                <a href="/preferences" class="button button-primary">Manage preferences</a>
-            </div>
-        `,
+    return c.html(await renderBannerPage(c.env, {
+        heading: "You're Unsubscribed",
+        sectionCount: "Done",
+        pageTitle: "Unsubscribed — TL;DL",
+        bannerHtml: `<p>Changed your mind? You can <a href="/preferences">manage preferences</a> any time.</p>`,
+        kind: "ok",
     }));
 });
 

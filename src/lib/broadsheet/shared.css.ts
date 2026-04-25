@@ -94,6 +94,8 @@ export const BROADSHEET_SHARED_CSS = `
   font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--bs-ink-faint);
 }
+.bs-footer a { color: var(--bs-ink-faint); text-decoration: none; border-bottom: 1px solid var(--bs-rule); transition: color 160ms ease, border-color 160ms ease; }
+.bs-footer a:hover { color: var(--bs-red); border-bottom-color: currentColor; }
 
 @media (max-width: 1023px) {
   .bs-mast, .bs-subhead, .bs-section-bar, .bs-footer { padding-left: 40px; padding-right: 40px; }
