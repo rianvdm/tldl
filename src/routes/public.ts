@@ -26,6 +26,7 @@ import { renderTagBrowsePage } from "../lib/broadsheet/tag-browse-page";
 import { renderPodcastBrowsePage } from "../lib/broadsheet/podcast-browse-page";
 import { renderDetailPage, type TemplateId } from "../lib/broadsheet/detail-page";
 import { renderStaticPage } from "../lib/broadsheet/static-page";
+import { renderFormPage } from "../lib/broadsheet/form-page";
 import { selectLeadEpisode } from "../lib/broadsheet/lead-picker";
 import { marked } from "marked";
 
@@ -337,83 +338,72 @@ publicRoutes.get("/request", async (c) => {
                 ? "Something went wrong sending your request. Please try again."
                 : null;
 
-    const content = success
-        ? `
-            <div class="page-header">
-                <h1>Request Sent</h1>
-            </div>
-            <div class="card">
-                <div class="alert alert-success" style="margin-bottom: 1rem;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                        <polyline points="22 4 12 14.01 9 11.01"/>
-                    </svg>
-                    <span>Thanks for the suggestion! I'll take a look and add it if it's a good fit.</span>
-                </div>
-                <a href="/" class="button button-primary">Back to Home</a>
-            </div>
-        `
-        : `
-            <div class="page-header">
-                <h1>Request a Podcast</h1>
-                <p class="page-subtitle">Know a podcast that should be on TL;DL? Let me know.</p>
-            </div>
+    const indexEntries = await c.env.TLDL_DATA.get<EpisodeIndexEntry[]>("episodes:index", "json") ?? [];
+    const turnstileScript = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>';
 
-            ${errorMessage ? `
-                <div class="alert alert-error" style="margin-bottom: 1.5rem;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"/>
-                        <line x1="12" y1="8" x2="12" y2="12"/>
-                        <line x1="12" y1="16" x2="12.01" y2="16"/>
-                    </svg>
-                    <span>${escapeHtml(errorMessage)}</span>
-                </div>
-            ` : ""}
+    if (success) {
+        const bodyHtml = `
+<div class="bs-form-banner ok">
+<p>Thanks for the suggestion! I'll take a look and add it if it's a good fit. <a href="/">Back home</a>.</p>
+</div>
+`;
+        return c.html(renderFormPage({
+            activeNav: "index",
+            sectionHeading: "Request Sent",
+            sectionCount: "Thanks",
+            bodyHtml,
+            pageTitle: "Request Sent — TL;DL",
+            canonicalUrl: `${BASE_URL}/request`,
+            totalInArchive: indexEntries.length,
+        }));
+    }
 
-            <div class="card">
-                <form method="POST" action="/request" class="form">
-                    <div class="form-group">
-                        <label for="podcastName" class="form-label">Podcast name</label>
-                        <input type="text" id="podcastName" name="podcastName" class="form-input"
-                            placeholder="e.g., The Ezra Klein Show" required />
-                    </div>
+    const errorBanner = errorMessage
+        ? `<div class="bs-form-banner err"><p>${escapeHtml(errorMessage)}</p></div>`
+        : "";
 
-                    <div class="form-group">
-                        <label for="appleUrl" class="form-label">Apple Podcasts URL <span class="text-muted">(optional)</span></label>
-                        <input type="url" id="appleUrl" name="appleUrl" class="form-input"
-                            placeholder="https://podcasts.apple.com/us/podcast/..." />
-                    </div>
+    const bodyHtml = `
+<div class="bs-form-intro">
+    <p>Know a podcast that should be on TL;DL? Let me know.</p>
+</div>
+${errorBanner}
+<form method="POST" action="/request" class="bs-form">
+    <div class="bs-form-field">
+        <label for="podcastName">Podcast name</label>
+        <input type="text" id="podcastName" name="podcastName"
+            placeholder="e.g., The Ezra Klein Show" required />
+    </div>
+    <div class="bs-form-field">
+        <label for="appleUrl">Apple Podcasts URL <span class="field-hint">optional</span></label>
+        <input type="url" id="appleUrl" name="appleUrl"
+            placeholder="https://podcasts.apple.com/us/podcast/..." />
+    </div>
+    <div class="bs-form-field">
+        <label for="email">Your email <span class="field-hint">optional, in case I need to follow up</span></label>
+        <input type="email" id="email" name="email"
+            placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <div class="bs-form-field">
+        <label for="message">Message <span class="field-hint">optional</span></label>
+        <textarea id="message" name="message" rows="3"
+            placeholder="Any specific episodes you'd like to see?"></textarea>
+    </div>
+    <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-theme="dark"></div>
+    <div class="bs-form-actions">
+        <button type="submit" class="bs-form-submit">Send Request &rarr;</button>
+    </div>
+</form>
+`;
 
-                    <div class="form-group">
-                        <label for="email" class="form-label">Your email <span class="text-muted">(optional, in case I need to follow up)</span></label>
-                        <input type="email" id="email" name="email" class="form-input"
-                            placeholder="you@example.com" autocomplete="email" />
-                    </div>
-
-                    <div class="form-group">
-                        <label for="message" class="form-label">Message <span class="text-muted">(optional)</span></label>
-                        <textarea id="message" name="message" class="form-input" rows="3"
-                            placeholder="Any specific episodes you'd like to see?"></textarea>
-                    </div>
-
-                    <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}" data-theme="dark"></div>
-
-                    <div class="form-actions" style="margin-top: 1rem;">
-                        <button type="submit" class="button button-primary">Send Request</button>
-                    </div>
-                </form>
-            </div>
-        `;
-
-    const turnstileScript = success
-        ? ""
-        : '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>';
-
-    return c.html(Layout({
-        title: success ? "Request Sent" : "Request a Podcast",
-        children: content,
-        headExtra: turnstileScript,
+    return c.html(renderFormPage({
+        activeNav: "index",
+        sectionHeading: "Request a Podcast",
+        sectionCount: "Suggest a show",
+        bodyHtml,
+        pageTitle: "Request a Podcast — TL;DL",
         canonicalUrl: `${BASE_URL}/request`,
+        totalInArchive: indexEntries.length,
+        headExtra: turnstileScript,
     }));
 });
 

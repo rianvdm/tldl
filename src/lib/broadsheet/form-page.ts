@@ -30,7 +30,9 @@ const BROADSHEET_FORM_CSS = `
     margin: 0 0 8px;
 }
 .bs-form input[type="email"],
-.bs-form input[type="text"] {
+.bs-form input[type="text"],
+.bs-form input[type="url"],
+.bs-form textarea {
     width: 100%;
     background: transparent; border: none;
     border-bottom: 1px solid var(--bs-rule);
@@ -40,8 +42,15 @@ const BROADSHEET_FORM_CSS = `
     color: var(--bs-ink);
     outline: none;
     transition: border-color 160ms ease;
+    resize: vertical;
 }
-.bs-form input:focus { border-bottom-color: var(--bs-red); }
+.bs-form input:focus, .bs-form textarea:focus { border-bottom-color: var(--bs-red); }
+.bs-form .field-hint {
+    text-transform: none; letter-spacing: 0;
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 12px; color: var(--bs-ink-faint);
+    margin-left: 8px;
+}
 .bs-form-field { margin-bottom: 28px; }
 .bs-form-hint {
     font-family: 'Inter Tight', sans-serif;
