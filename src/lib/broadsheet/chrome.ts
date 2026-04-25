@@ -2,13 +2,25 @@ import { escapeHtml } from "../auth";
 import { computeVolume, computeIssueNumber, LAUNCH_YEAR } from "./masthead";
 
 const ROMAN_LAUNCH = "MMXXV"; // 2025
+const TLDL_TZ = "America/Los_Angeles";
+
+/** Convert a Date to a UTC-midnight Date whose y/m/d match the Pacific-time calendar date. */
+function pacificCalendarDate(d: Date): Date {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: TLDL_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(d);
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? "0");
+    return new Date(Date.UTC(get("year"), get("month") - 1, get("day")));
+}
 
 export function renderMasthead(opts: { now: Date; episodeCount: number }): string {
     const { now, episodeCount } = opts;
-    const vol = computeVolume(now.getUTCFullYear());
-    const no = computeIssueNumber(now);
+    const ptDate = pacificCalendarDate(now);
+    const vol = computeVolume(ptDate.getUTCFullYear());
+    const no = computeIssueNumber(ptDate);
     const longDate = now.toLocaleDateString("en-US", {
         weekday: "long", year: "numeric", month: "long", day: "numeric",
+        timeZone: TLDL_TZ,
     });
     return `<div class="bs-mast">
   <div class="bs-mast-left">
