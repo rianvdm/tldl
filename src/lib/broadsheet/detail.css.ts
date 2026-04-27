@@ -89,6 +89,21 @@ export const BROADSHEET_DETAIL_CSS = `
   color: var(--bs-ink); margin: 0 0 22px;
   max-width: 62ch; text-wrap: pretty;
 }
+.bsd-body ul, .bsd-body ol:not(.takeaways) {
+  font-family: 'Fraunces', Georgia, serif;
+  font-weight: 400; font-size: 19px; line-height: 1.55;
+  color: var(--bs-ink); margin: 0 0 22px;
+  max-width: 62ch; padding-left: 1.4em;
+}
+.bsd-body ul li, .bsd-body ol:not(.takeaways) li {
+  margin: 0 0 8px; text-wrap: pretty;
+}
+.bsd-body ul li::marker { color: var(--bs-red); }
+.bsd-body ol:not(.takeaways) li::marker {
+  color: var(--bs-red);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+}
 .bsd-body p.lead::first-letter {
   font-family: 'Fraunces', serif;
   float: left;
