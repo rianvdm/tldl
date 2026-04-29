@@ -221,11 +221,12 @@ export async function listAllSubscribers(db: D1Database): Promise<SubscriberWith
 }
 
 export async function countSubscribers(db: D1Database): Promise<{ total: number; confirmed: number; pending: number; bounced: number }> {
+    // Buckets are mutually exclusive: a row counts in exactly one of confirmed/pending/bounced.
     const row = await db.prepare(
         `SELECT
             COUNT(*) AS total,
-            SUM(CASE WHEN confirmed_at IS NOT NULL AND status = 'active' THEN 1 ELSE 0 END) AS confirmed,
-            SUM(CASE WHEN confirmed_at IS NULL THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status = 'active' AND confirmed_at IS NOT NULL THEN 1 ELSE 0 END) AS confirmed,
+            SUM(CASE WHEN status = 'active' AND confirmed_at IS NULL THEN 1 ELSE 0 END) AS pending,
             SUM(CASE WHEN status IN ('bounced', 'complained') THEN 1 ELSE 0 END) AS bounced
          FROM subscribers`
     ).first<{ total: number; confirmed: number; pending: number; bounced: number }>();
