@@ -101,12 +101,16 @@ async function requireAdmin(c: import("hono").Context<HonoEnv>): Promise<Respons
 // ============================================================================
 
 // ============================================================================
-// GET / - Admin Dashboard
-// ============================================================================
-
-// ============================================================================
 // GET / - Admin Dashboard (tabbed: dashboard | episodes | subscribers | activity | maintenance)
 // ============================================================================
+
+function renderTabError(activeTab: string, err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    return `<div class="alert alert-error" style="margin-top: 1rem;">
+        <strong>Failed to load ${escapeHtml(activeTab)} tab.</strong><br>
+        ${escapeHtml(message)}
+    </div>`;
+}
 
 admin.get("/", async (c) => {
     const authError = await requireAdmin(c);
@@ -118,60 +122,69 @@ admin.get("/", async (c) => {
     type Tab = typeof validTabs[number];
     const activeTab: Tab = (validTabs as readonly string[]).includes(tabParam) ? (tabParam as Tab) : "dashboard";
 
+    const MAX_PAGE = 10000;
+    const pageRaw = parseInt(c.req.query("page") || "1", 10) || 1;
+    const page = Math.min(MAX_PAGE, Math.max(1, pageRaw));
+
     let title = "Admin";
     let body = "";
 
-    if (activeTab === "dashboard") {
-        const [podcasts, activityLog, activeJobs, episodeCount] = await Promise.all([
-            getPodcastList(c.env.TLDL_DATA),
-            getActivityLog(c.env.TLDL_DATA, 8),
-            listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
-            listEpisodes(c.env.TLDL_DATA, { page: 1, pageSize: 1 }),
-        ]);
-        const monitoredPodcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
-        const errorCount = monitoredPodcasts.filter(p => p.status === "error").length;
-        const lastChecked = monitoredPodcasts.reduce((latest, p) => {
-            if (!p.lastChecked) return latest;
-            return !latest || p.lastChecked > latest ? p.lastChecked : latest;
-        }, "" as string);
-        title = "Dashboard";
-        body = renderDashboardTab({
-            totalEpisodes: episodeCount.total,
-            totalPodcasts: podcasts.length,
-            errorCount,
-            lastChecked,
-            activeJobsCount: activeJobs.length,
-            activityLog,
-        });
-    } else if (activeTab === "episodes") {
-        const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
-        const pageSize = 10;
-        const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
-        const episodes = await Promise.all(
-            result.episodes.map(async (episode) => {
-                const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episode.id);
-                const templateBadges = summaries
-                    .map((s) => `<span class="badge">${escapeHtml(s.templateId)}</span>`)
-                    .join("");
-                return { ...episode, templateBadges };
-            })
-        );
-        title = "Episodes";
-        body = renderEpisodesTab({ episodes, page, totalPages: result.totalPages });
-    } else if (activeTab === "subscribers") {
-        const [subscribers, counts] = await Promise.all([
-            listAllSubscribers(c.env.DB),
-            countSubscribers(c.env.DB),
-        ]);
-        title = "Subscribers";
-        body = renderSubscribersTab({ subscribers, counts });
-    } else if (activeTab === "activity") {
-        const activityLog = await getActivityLog(c.env.TLDL_DATA);
-        title = "Activity";
-        body = renderActivityTab(activityLog);
-    } else {
-        title = "Maintenance";
-        body = renderMaintenanceTab();
+    try {
+        if (activeTab === "dashboard") {
+            const [podcasts, activityLog, activeJobs, episodeCount, monitoredPodcasts] = await Promise.all([
+                getPodcastList(c.env.TLDL_DATA),
+                getActivityLog(c.env.TLDL_DATA, 8),
+                listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
+                listEpisodes(c.env.TLDL_DATA, { page: 1, pageSize: 1 }),
+                listMonitoredPodcasts(c.env.TLDL_DATA),
+            ]);
+            const errorCount = monitoredPodcasts.filter(p => p.status === "error").length;
+            const lastChecked = monitoredPodcasts.reduce((latest, p) => {
+                if (!p.lastChecked) return latest;
+                return !latest || p.lastChecked > latest ? p.lastChecked : latest;
+            }, "" as string);
+            title = "Dashboard";
+            body = renderDashboardTab({
+                totalEpisodes: episodeCount.total,
+                totalPodcasts: podcasts.length,
+                errorCount,
+                lastChecked,
+                activeJobsCount: activeJobs.length,
+                activityLog,
+            });
+        } else if (activeTab === "episodes") {
+            const pageSize = 10;
+            const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
+            const episodes = await Promise.all(
+                result.episodes.map(async (episode) => {
+                    const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episode.id);
+                    const templateBadges = summaries
+                        .map((s) => `<span class="badge">${escapeHtml(s.templateId)}</span>`)
+                        .join("");
+                    return { ...episode, templateBadges };
+                })
+            );
+            title = "Episodes";
+            body = renderEpisodesTab({ episodes, page, totalPages: result.totalPages });
+        } else if (activeTab === "subscribers") {
+            const [subscribers, counts] = await Promise.all([
+                listAllSubscribers(c.env.DB),
+                countSubscribers(c.env.DB),
+            ]);
+            title = "Subscribers";
+            body = renderSubscribersTab({ subscribers, counts });
+        } else if (activeTab === "activity") {
+            const activityLog = await getActivityLog(c.env.TLDL_DATA);
+            title = "Activity";
+            body = renderActivityTab(activityLog);
+        } else {
+            title = "Maintenance";
+            body = renderMaintenanceTab();
+        }
+    } catch (err) {
+        console.error(`admin tab "${activeTab}" failed:`, err);
+        title = "Admin";
+        body = renderTabError(activeTab, err);
     }
 
     return c.html(AdminLayout({
@@ -1710,35 +1723,6 @@ admin.get("/podcasts", async (c) => {
                 btn.disabled = false;
                 btn.textContent = 'Add Podcast';
             });
-
-            async function checkAllNow() {
-                const msg = document.getElementById('settings-message');
-                msg.className = 'alert alert-info';
-                msg.textContent = 'Checking all podcasts...';
-                msg.style.display = 'block';
-                
-                try {
-                    const response = await fetch('/admin/podcasts/check-now', {
-                        method: 'POST',
-                        credentials: 'include',
-                    });
-                    
-                    const data = await response.json();
-                    msg.className = response.ok ? 'alert alert-success' : 'alert alert-error';
-                    msg.textContent = response.ok 
-                        ? 'Checked ' + data.checked + ' podcasts. ' + data.totalNewEpisodes + ' new episode(s) queued.'
-                        : (data.error || 'Failed');
-                    msg.style.display = 'block';
-                    
-                    if (response.ok && data.totalNewEpisodes > 0) {
-                        setTimeout(() => window.location.reload(), 2000);
-                    }
-                } catch (err) {
-                    msg.className = 'alert alert-error';
-                    msg.textContent = 'Failed to check podcasts';
-                    msg.style.display = 'block';
-                }
-            }
 
             async function checkPodcast(podcastId) {
                 const card = document.getElementById('podcast-' + podcastId);
