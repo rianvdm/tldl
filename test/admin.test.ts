@@ -111,32 +111,32 @@ describe("GET /admin", () => {
         const response = await SELF.fetch("http://localhost/admin");
         expect(response.status).toBe(200);
         const html = await response.text();
-        expect(html).toContain("Admin Dashboard");
         expect(html).toContain("Submit Episode");
-        expect(html).toContain("Manage Podcasts");
+        expect(html).toContain("Podcasts");
+        expect(html).toContain("Subscribers");
     });
 
-    it("shows episodes in the dashboard", async () => {
+    it("shows episodes on the episodes tab", async () => {
         const episode = createSampleEpisode();
         await saveEpisode(env.TLDL_DATA, episode);
         await saveSummary(env.TLDL_DATA, createSampleSummary());
 
-        const response = await SELF.fetch("http://localhost/admin");
+        const response = await SELF.fetch("http://localhost/admin?tab=episodes");
         expect(response.status).toBe(200);
         const html = await response.text();
         expect(html).toContain("Test Podcast");
         expect(html).toContain("Test Episode");
     });
 
-    it("shows empty state when no episodes", async () => {
-        const response = await SELF.fetch("http://localhost/admin");
+    it("shows empty state on the episodes tab when no episodes", async () => {
+        const response = await SELF.fetch("http://localhost/admin?tab=episodes");
         expect(response.status).toBe(200);
         const html = await response.text();
         expect(html).toContain("No episodes yet");
     });
 
-    it("supports pagination", async () => {
-        const response = await SELF.fetch("http://localhost/admin?page=1");
+    it("supports pagination on the episodes tab", async () => {
+        const response = await SELF.fetch("http://localhost/admin?tab=episodes&page=1");
         expect(response.status).toBe(200);
     });
 });

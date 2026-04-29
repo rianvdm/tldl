@@ -188,6 +188,56 @@ export async function replaceSubscriptions(
     await db.batch(stmts);
 }
 
+export interface SubscriberWithSubscriptions extends Subscriber {
+    subscriptionCount: number;
+}
+
+export async function listAllSubscribers(db: D1Database): Promise<SubscriberWithSubscriptions[]> {
+    const result = await db.prepare(
+        `SELECT s.id, s.email, s.confirmed_at, s.created_at, s.updated_at, s.status,
+                COUNT(sub.podcast_id) AS subscription_count
+         FROM subscribers s
+         LEFT JOIN subscriptions sub ON sub.subscriber_id = s.id
+         GROUP BY s.id
+         ORDER BY s.created_at DESC`
+    ).all<{
+        id: number;
+        email: string;
+        confirmed_at: number | null;
+        created_at: number;
+        updated_at: number;
+        status: SubscriberStatus;
+        subscription_count: number;
+    }>();
+    return (result.results ?? []).map((r) => ({
+        id: r.id,
+        email: r.email,
+        confirmedAt: r.confirmed_at,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        status: r.status,
+        subscriptionCount: r.subscription_count,
+    }));
+}
+
+export async function countSubscribers(db: D1Database): Promise<{ total: number; confirmed: number; pending: number; bounced: number }> {
+    // Buckets are mutually exclusive: a row counts in exactly one of confirmed/pending/bounced.
+    const row = await db.prepare(
+        `SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN status = 'active' AND confirmed_at IS NOT NULL THEN 1 ELSE 0 END) AS confirmed,
+            SUM(CASE WHEN status = 'active' AND confirmed_at IS NULL THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status IN ('bounced', 'complained') THEN 1 ELSE 0 END) AS bounced
+         FROM subscribers`
+    ).first<{ total: number; confirmed: number; pending: number; bounced: number }>();
+    return {
+        total: row?.total ?? 0,
+        confirmed: row?.confirmed ?? 0,
+        pending: row?.pending ?? 0,
+        bounced: row?.bounced ?? 0,
+    };
+}
+
 export async function sweepExpiredPending(db: D1Database, now: number): Promise<number> {
     const result = await db.prepare("DELETE FROM pending_confirmations WHERE expires_at < ?").bind(now).run();
     return result.meta?.changes ?? 0;
