@@ -7,6 +7,10 @@
 import { Hono } from "hono";
 import type { HonoEnv, Job, MonitorSettings, Episode, Transcript, QueueMessage } from "../types";
 import { Layout } from "./public";
+import { AdminLayout } from "./admin/layout";
+import { renderDashboardTab, renderEpisodesTab, renderSubscribersTab, renderMaintenanceTab, renderActivityTab } from "./admin/tabs";
+import { formatRelativeTime, generateUUID, isValidUrl } from "./admin/utils";
+import { listAllSubscribers, countSubscribers } from "../lib/db";
 import {
     createJob,
     getEpisode,
@@ -93,57 +97,15 @@ async function requireAdmin(c: import("hono").Context<HonoEnv>): Promise<Respons
 }
 
 // ============================================================================
-// Helper Functions
+// Helper functions live in ./admin/utils.ts (imported above).
 // ============================================================================
-
-function generateUUID(): string {
-    return crypto.randomUUID();
-}
-
-function isValidUrl(s: string): boolean {
-    try {
-        const u = new URL(s);
-        return u.protocol === "http:" || u.protocol === "https:";
-    } catch {
-        return false;
-    }
-}
-
-function formatDuration(seconds: number): string {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    if (hours > 0) {
-        return `${hours}h ${minutes}m`;
-    }
-    return `${minutes}m`;
-}
-
-function formatRelativeTime(isoDate: string): string {
-    const now = Date.now();
-    const then = new Date(isoDate).getTime();
-    const diffMs = now - then;
-    const diffMinutes = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMinutes < 1) return "just now";
-    if (diffMinutes < 60) return `${diffMinutes}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(isoDate));
-}
-
-function formatDate(dateString: string): string {
-    const date = new Date(dateString);
-    return new Intl.DateTimeFormat("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-    }).format(date);
-}
 
 // ============================================================================
 // GET / - Admin Dashboard
+// ============================================================================
+
+// ============================================================================
+// GET / - Admin Dashboard (tabbed: dashboard | episodes | subscribers | activity | maintenance)
 // ============================================================================
 
 admin.get("/", async (c) => {
@@ -151,791 +113,78 @@ admin.get("/", async (c) => {
     if (authError) return authError;
 
     const userEmail = c.get("userEmail") || "Unknown User";
+    const tabParam = c.req.query("tab") || "dashboard";
+    const validTabs = ["dashboard", "episodes", "subscribers", "activity", "maintenance"] as const;
+    type Tab = typeof validTabs[number];
+    const activeTab: Tab = (validTabs as readonly string[]).includes(tabParam) ? (tabParam as Tab) : "dashboard";
 
-    // Parse pagination
-    const pageParam = c.req.query("page");
-    const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
-    const pageSize = 10;
+    let title = "Admin";
+    let body = "";
 
-    // Fetch dashboard data in parallel
-    const [result, podcasts, activityLog, activeJobs] = await Promise.all([
-        listEpisodes(c.env.TLDL_DATA, { page, pageSize }),
-        getPodcastList(c.env.TLDL_DATA),
-        getActivityLog(c.env.TLDL_DATA, 8),
-        listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
-    ]);
-
-    const episodes = result.episodes;
-    const totalPages = result.totalPages;
-
-    // Compute stats
-    const totalEpisodes = result.total;
-    const totalPodcasts = podcasts.length;
-    const monitoredPodcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
-    const errorCount = monitoredPodcasts.filter(p => p.status === "error").length;
-    const lastChecked = monitoredPodcasts.reduce((latest, p) => {
-        if (!p.lastChecked) return latest;
-        return !latest || p.lastChecked > latest ? p.lastChecked : latest;
-    }, "" as string);
-
-    // Build episode cards with admin controls
-    const episodeCards = await Promise.all(
-        episodes.map(async (episode) => {
-            const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episode.id);
-            const templateBadges = summaries
-                .map((s) => `<span class="badge">${escapeHtml(s.templateId)}</span>`)
-                .join("");
-
-            return `
-                <div class="episode-card" data-episode-id="${escapeHtml(episode.id)}">
-                    <div class="episode-card-content">
-                        <div class="episode-podcast">${escapeHtml(episode.podcastName)}</div>
-                        <h3 class="episode-title">
-                            <a href="/episode/${escapeHtml(episode.id)}">${escapeHtml(episode.episodeTitle)}</a>
-                        </h3>
-                        <div class="episode-meta">
-                            <span>${formatDate(episode.episodeDate)}</span>
-                            <span class="meta-dot">•</span>
-                            <span>${formatDuration(episode.episodeDuration)}</span>
-                        </div>
-                        ${templateBadges ? `<div class="episode-badges">${templateBadges}</div>` : ""}
-                        <div class="tag-editor" data-episode-id="${escapeHtml(episode.id)}">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <label class="form-label" style="margin: 0;">Tags:</label>
-                                <button type="button" class="button button-sm" onclick="saveTagsFor('${escapeHtml(episode.id)}')">
-                                    Save Tags
-                                </button>
-                            </div>
-                            <div class="tag-editor-tags">
-                                ${getValidTags().map(tag => {
-                const isSelected = episode.tags?.includes(tag);
-                return `<button
-                                        type="button"
-                                        class="tag-editor-badge ${isSelected ? 'selected' : ''}"
-                                        data-tag="${escapeHtml(tag)}"
-                                        onclick="toggleTag(this, '${escapeHtml(episode.id)}')"
-                                    >
-                                        ${escapeHtml(tag)}
-                                    </button>`;
-            }).join('')}
-                            </div>
-                            <div class="tag-editor-message" id="tag-message-${escapeHtml(episode.id)}" style="display: none;"></div>
-                        </div>
-                    </div>
-                    <button type="button" class="button button-destructive button-sm" onclick="confirmDelete('${escapeHtml(episode.id)}', '${escapeHtml(episode.episodeTitle.replace(/'/g, "\\'"))}')">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                        </svg>
-                        Delete
-                    </button>
-                    <button type="button" class="button button-secondary button-sm" onclick="openSummaryEditor('${escapeHtml(episode.id)}', '${escapeHtml(episode.episodeTitle.replace(/'/g, "\\\\'"))}')">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-                            <path d="m15 5 4 4"/>
-                        </svg>
-                        Edit Summaries
-                    </button>
-                </div>
-            `;
-        })
-    );
-
-    // Pagination controls
-    const paginationHtml = totalPages > 1 ? `
-        <nav class="pagination" aria-label="Episode pagination">
-            ${page > 1 ? `
-            <a href="/admin?page=${page - 1}" class="pagination-link pagination-prev">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </a>
-            ` : `<span class="pagination-link pagination-prev pagination-disabled">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m15 18-6-6 6-6"/>
-                </svg>
-                Previous
-            </span>`}
-            <span class="pagination-info">Page ${page} of ${totalPages}</span>
-            ${page < totalPages ? `
-            <a href="/admin?page=${page + 1}" class="pagination-link pagination-next">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </a>
-            ` : `<span class="pagination-link pagination-next pagination-disabled">
-                Next
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
-            </span>`}
-        </nav>
-    ` : "";
-
-    // Build activity log HTML
-    const activityHtml = activityLog.length > 0
-        ? activityLog.map(event => {
-            const icon = event.type === "episode_completed"
-                ? `<span class="activity-icon activity-icon-success">✓</span>`
-                : event.type === "episode_failed"
-                    ? `<span class="activity-icon activity-icon-error">✗</span>`
-                    : event.type === "monitor_error"
-                        ? `<span class="activity-icon activity-icon-error">!</span>`
-                        : `<span class="activity-icon activity-icon-info">↻</span>`;
-
-            const detailsHtml = event.details
-                ? `<span class="activity-details">${escapeHtml(event.details)}</span>`
-                : "";
-
-            const clearBtn = event.type === "episode_failed" && event.episodeId
-                ? `<button type="button" class="activity-clear-btn" onclick="clearFailedJob('${escapeHtml(event.episodeId)}', this)" title="Clear failed job">✕</button>`
-                : "";
-
-            return `<div class="activity-item">
-                ${icon}
-                <div class="activity-content">
-                    <span class="activity-title">${escapeHtml(event.title)}</span>
-                    ${detailsHtml}
-                </div>
-                <span class="activity-time">${formatRelativeTime(event.timestamp)}</span>
-                ${clearBtn}
-            </div>`;
-        }).join("")
-        : `<p class="text-muted">No recent activity.</p>`;
-
-    // Active jobs section
-    const activeJobsHtml = activeJobs.length > 0
-        ? `<div class="activity-item">
-            <span class="activity-icon activity-icon-info">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="spinner">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                </svg>
-            </span>
-            <div class="activity-content">
-                <span class="activity-title">${activeJobs.length} active job${activeJobs.length !== 1 ? "s" : ""}</span>
-            </div>
-        </div>`
-        : "";
-
-    const content = `
-        <div class="page-header">
-            <h1>Admin Dashboard</h1>
-            <p class="page-subtitle">${escapeHtml(userEmail)} <span class="badge">Admin</span></p>
-        </div>
-
-        <div class="admin-stats-grid">
-            <div class="admin-stat-card">
-                <span class="admin-stat-number">${totalEpisodes}</span>
-                <span class="admin-stat-label">Episodes</span>
-            </div>
-            <div class="admin-stat-card">
-                <span class="admin-stat-number">${totalPodcasts}</span>
-                <span class="admin-stat-label">Podcasts</span>
-            </div>
-            <div class="admin-stat-card ${errorCount > 0 ? "admin-stat-error" : ""}">
-                <span class="admin-stat-number">${errorCount}</span>
-                <span class="admin-stat-label">Errors</span>
-            </div>
-            <div class="admin-stat-card">
-                <span class="admin-stat-number">${lastChecked ? formatRelativeTime(lastChecked) : "—"}</span>
-                <span class="admin-stat-label">Last check</span>
-            </div>
-        </div>
-
-        <div class="admin-quick-actions">
-            <a href="/admin/submit" class="button button-primary">Submit Episode</a>
-            <a href="/admin/submit-manual" class="button button-primary">Submit Transcript</a>
-            <a href="/admin/podcasts" class="button">Manage Podcasts</a>
-            <button type="button" class="button" onclick="checkAllNow()">Check All Now</button>
-            <a href="https://elezea.cloudflareaccess.com/cdn-cgi/access/logout?returnTo=https%3A%2F%2Ftldl-pod.com%2F" class="button" style="margin-left: auto;">Log Out</a>
-        </div>
-        <div id="check-all-status" class="alert" style="display: none; margin-bottom: 1rem;"></div>
-
-        <section class="card admin-activity-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                <h2 style="margin: 0;">Recent Activity</h2>
-                <a href="/admin/activity" class="text-muted" style="font-size: 0.875rem;">View all →</a>
-            </div>
-            ${activeJobsHtml}
-            ${activityHtml}
-        </section>
-
-        <section class="section">
-            <h2>All Episodes</h2>
-            ${episodes.length > 0 ? `
-                <div class="episode-list">
-                    ${episodeCards.join("")}
-                </div>
-                ${paginationHtml}
-            ` : `
-                <div class="empty-state">
-                    <p>No episodes yet.</p>
-                    <a href="/admin/submit" class="button button-primary">Submit Your First Episode</a>
-                </div>
-            `}
-        </section>
-
-        <div class="divider"></div>
-        <section class="section">
-            <h2>Admin Tools</h2>
-            <div class="admin-tools">
-                <div class="admin-tool-item">
-                    <p class="text-muted">Automatically monitor podcasts for new episodes</p>
-                    <a href="/admin/podcasts" class="button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                            <line x1="12" x2="12" y1="19" y2="23"/>
-                            <line x1="8" x2="16" y1="23" y2="23"/>
-                        </svg>
-                        Monitor Podcasts
-                    </a>
-                </div>
-                <div class="admin-tool-item" style="margin-top: 1.5rem;">
-                    <p class="text-muted">Rebuild the episode index (use after database changes or if home page is empty)</p>
-                    <button type="button" class="button" id="rebuild-index-btn" onclick="rebuildIndex()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                            <path d="M3 3v5h5"/>
-                            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
-                            <path d="M16 21h5v-5"/>
-                        </svg>
-                        Rebuild Episode Index
-                    </button>
-                    <div id="rebuild-result" class="alert alert-success" style="display: none; margin-top: 1rem;"></div>
-                </div>
-                <div class="admin-tool-item" style="margin-top: 1.5rem;">
-                    <p class="text-muted">Remove all failed jobs from the home page (use to clean up orphaned jobs)</p>
-                    <button type="button" class="button" id="cleanup-jobs-btn" onclick="cleanupFailedJobs()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                        </svg>
-                        Clean Up Failed Jobs
-                    </button>
-                    <div id="cleanup-result" class="alert alert-success" style="display: none; margin-top: 1rem;"></div>
-                </div>
-                <div class="admin-tool-item" style="margin-top: 1.5rem;">
-                    <p class="text-muted">Generate tags for all episodes without tags using existing transcripts and summaries</p>
-                    <button type="button" class="button" id="backfill-tags-btn" onclick="backfillTags()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M4 7V4h16v3M9 20h6M12 4v16"/>
-                        </svg>
-                        Backfill Tags for All Episodes
-                    </button>
-                    <div id="backfill-status" style="display: none; margin-top: 1rem;"></div>
-                </div>
-                <div class="admin-tool-item" style="margin-top: 1.5rem;">
-                    <p class="text-muted">Remove tags that are no longer in the predefined tag list (cleanup after removing tags from constants)</p>
-                    <button type="button" class="button" id="cleanup-tags-btn" onclick="cleanupInvalidTags()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>
-                        </svg>
-                        Cleanup Invalid Tags
-                    </button>
-                    <div id="cleanup-tags-status" style="display: none; margin-top: 1rem;"></div>
-                </div>
-                <div class="admin-tool-item" style="margin-top: 1.5rem;">
-                    <p class="text-muted">Fetch podcast author and website info from Podcast Index API for all episodes</p>
-                    <button type="button" class="button" id="backfill-podcast-info-btn" onclick="backfillPodcastInfo()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                        </svg>
-                        Backfill Podcast Info
-                    </button>
-                    <div id="backfill-podcast-info-status" style="display: none; margin-top: 1rem;"></div>
-                </div>
-            </div>
-        </section>
-
-        <div id="delete-modal" class="modal" style="display: none;">
-            <div class="modal-backdrop" onclick="hideDeleteModal()"></div>
-            <div class="modal-content">
-                <h3>Delete Episode?</h3>
-                <p id="delete-modal-message">This will permanently delete this episode, its transcript, and all summaries.</p>
-                <div class="modal-actions">
-                    <button type="button" class="button" onclick="hideDeleteModal()">Cancel</button>
-                    <button type="button" class="button button-destructive" id="confirm-delete-btn">Delete</button>
-                </div>
-            </div>
-        </div>
-
-        <div id="summary-edit-modal" class="modal" style="display: none;">
-            <div class="modal-backdrop" onclick="hideSummaryEditModal()"></div>
-            <div class="modal-content modal-content-large">
-                <h3 id="summary-modal-title">Edit Summaries</h3>
-                <div id="summary-edit-content">
-                    <p class="text-muted">Loading summaries...</p>
-                </div>
-                <div id="summary-edit-status" style="display: none; margin-top: 1rem;"></div>
-                <div class="modal-actions">
-                    <button type="button" class="button" onclick="hideSummaryEditModal()">Close</button>
-                </div>
-            </div>
-        </div>
-
-<script>
-let deleteEpisodeId = null;
-let currentSummaryEpisodeId = null;
-
-function confirmDelete(episodeId, episodeTitle) {
-    deleteEpisodeId = episodeId;
-    document.getElementById('delete-modal-message').textContent =
-        'Delete "' + episodeTitle + '"? This will permanently delete the episode, its transcript, and all summaries.';
-    document.getElementById('delete-modal').style.display = 'flex';
-    document.getElementById('confirm-delete-btn').onclick = doDelete;
-}
-
-function hideDeleteModal() {
-    document.getElementById('delete-modal').style.display = 'none';
-    deleteEpisodeId = null;
-}
-
-async function openSummaryEditor(episodeId, episodeTitle) {
-    currentSummaryEpisodeId = episodeId;
-    document.getElementById('summary-modal-title').textContent = 'Edit Summaries: ' + episodeTitle;
-    document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">Loading summaries...</p>';
-    document.getElementById('summary-edit-status').style.display = 'none';
-    document.getElementById('summary-edit-modal').style.display = 'flex';
-
-    try {
-        const response = await fetch('/admin/episodes/' + episodeId + '/summaries', {
-            credentials: 'include'
+    if (activeTab === "dashboard") {
+        const [podcasts, activityLog, activeJobs, episodeCount] = await Promise.all([
+            getPodcastList(c.env.TLDL_DATA),
+            getActivityLog(c.env.TLDL_DATA, 8),
+            listActiveJobsWithDO(c.env, c.env.TLDL_DATA),
+            listEpisodes(c.env.TLDL_DATA, { page: 1, pageSize: 1 }),
+        ]);
+        const monitoredPodcasts = await listMonitoredPodcasts(c.env.TLDL_DATA);
+        const errorCount = monitoredPodcasts.filter(p => p.status === "error").length;
+        const lastChecked = monitoredPodcasts.reduce((latest, p) => {
+            if (!p.lastChecked) return latest;
+            return !latest || p.lastChecked > latest ? p.lastChecked : latest;
+        }, "" as string);
+        title = "Dashboard";
+        body = renderDashboardTab({
+            totalEpisodes: episodeCount.total,
+            totalPodcasts: podcasts.length,
+            errorCount,
+            lastChecked,
+            activeJobsCount: activeJobs.length,
+            activityLog,
         });
-        const data = await response.json();
-
-        if (!response.ok) {
-            document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">Error: ' + (data.error || 'Failed to load summaries') + '</p>';
-            return;
-        }
-
-        if (data.summaries.length === 0) {
-            document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">No summaries found for this episode.</p>';
-            return;
-        }
-
-        let html = '';
-        for (const summary of data.summaries) {
-            html += '<div class="summary-edit-item" data-template-id="' + summary.templateId + '">';
-            html += '<label class="form-label">' + summary.templateName + '</label>';
-            html += '<textarea class="summary-textarea" id="summary-text-' + summary.templateId + '" rows="12">' + escapeHtmlForTextarea(summary.text) + '</textarea>';
-            html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.5rem;">';
-            html += '<span class="text-muted" style="font-size: 0.75rem;">Model: ' + summary.model + '</span>';
-            html += '<button type="button" class="button button-sm" onclick="saveSummary(\\'' + summary.templateId + '\\')">Save ' + summary.templateName + '</button>';
-            html += '</div>';
-            html += '<div class="summary-save-status" id="summary-status-' + summary.templateId + '" style="display: none; margin-top: 0.5rem;"></div>';
-            html += '</div>';
-        }
-        document.getElementById('summary-edit-content').innerHTML = html;
-    } catch (err) {
-        document.getElementById('summary-edit-content').innerHTML = '<p class="text-muted">Failed to load summaries</p>';
-    }
-}
-
-function escapeHtmlForTextarea(text) {
-    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function hideSummaryEditModal() {
-    document.getElementById('summary-edit-modal').style.display = 'none';
-    currentSummaryEpisodeId = null;
-}
-
-async function saveSummary(templateId) {
-    if (!currentSummaryEpisodeId) return;
-
-    const textarea = document.getElementById('summary-text-' + templateId);
-    const statusEl = document.getElementById('summary-status-' + templateId);
-    const text = textarea.value;
-
-    statusEl.className = 'alert alert-info';
-    statusEl.textContent = 'Saving...';
-    statusEl.style.display = 'block';
-
-    try {
-        const response = await fetch('/admin/episodes/' + currentSummaryEpisodeId + '/summaries/' + templateId, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ text })
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            statusEl.className = 'alert alert-success';
-            statusEl.textContent = 'Saved successfully!';
-            setTimeout(() => { statusEl.style.display = 'none'; }, 3000);
-        } else {
-            statusEl.className = 'alert alert-error';
-            statusEl.textContent = 'Error: ' + (data.error || 'Failed to save');
-        }
-    } catch (err) {
-        statusEl.className = 'alert alert-error';
-        statusEl.textContent = 'Failed to save summary';
-    }
-}
-
-async function doDelete() {
-    if (!deleteEpisodeId) return;
-    try {
-        const response = await fetch('/admin/episodes/' + deleteEpisodeId + '/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include'
-        });
-        if (response.ok) {
-            const card = document.querySelector('[data-episode-id="' + deleteEpisodeId + '"]');
-            if (card) card.remove();
-            hideDeleteModal();
-        } else {
-            const data = await response.json();
-            alert('Failed to delete: ' + (data.error || 'Unknown error'));
-        }
-    } catch (err) {
-        alert('Failed to delete episode');
-    }
-}
-
-function toggleTag(button, episodeId) {
-    button.classList.toggle('selected');
-}
-
-async function saveTagsFor(episodeId) {
-    const editor = document.querySelector('[data-episode-id="' + episodeId + '"] .tag-editor');
-    const selectedButtons = editor.querySelectorAll('.tag-editor-badge.selected');
-    const tags = Array.from(selectedButtons).map(btn => btn.getAttribute('data-tag'));
-    const messageEl = document.getElementById('tag-message-' + episodeId);
-
-    if (tags.length < 1 || tags.length > 4) {
-        messageEl.className = 'tag-editor-message alert-error';
-        messageEl.textContent = 'Please select 1-4 tags (currently ' + tags.length + ' selected)';
-        messageEl.style.display = 'block';
-        return;
+    } else if (activeTab === "episodes") {
+        const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
+        const pageSize = 10;
+        const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
+        const episodes = await Promise.all(
+            result.episodes.map(async (episode) => {
+                const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episode.id);
+                const templateBadges = summaries
+                    .map((s) => `<span class="badge">${escapeHtml(s.templateId)}</span>`)
+                    .join("");
+                return { ...episode, templateBadges };
+            })
+        );
+        title = "Episodes";
+        body = renderEpisodesTab({ episodes, page, totalPages: result.totalPages });
+    } else if (activeTab === "subscribers") {
+        const [subscribers, counts] = await Promise.all([
+            listAllSubscribers(c.env.DB),
+            countSubscribers(c.env.DB),
+        ]);
+        title = "Subscribers";
+        body = renderSubscribersTab({ subscribers, counts });
+    } else if (activeTab === "activity") {
+        const activityLog = await getActivityLog(c.env.TLDL_DATA);
+        title = "Activity";
+        body = renderActivityTab(activityLog);
+    } else {
+        title = "Maintenance";
+        body = renderMaintenanceTab();
     }
 
-    try {
-        const response = await fetch('/admin/episodes/' + episodeId + '/tags', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ tags }),
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            messageEl.className = 'tag-editor-message alert-success';
-            messageEl.textContent = 'Tags updated successfully!';
-            messageEl.style.display = 'block';
-            setTimeout(() => {
-                messageEl.style.display = 'none';
-            }, 3000);
-        } else {
-            messageEl.className = 'tag-editor-message alert-error';
-            messageEl.textContent = data.error || 'Failed to update tags';
-            messageEl.style.display = 'block';
-        }
-    } catch (err) {
-        messageEl.className = 'tag-editor-message alert-error';
-        messageEl.textContent = 'Failed to save tags';
-        messageEl.style.display = 'block';
-    }
-}
-
-async function rebuildIndex() {
-    const btn = document.getElementById('rebuild-index-btn');
-    const result = document.getElementById('rebuild-result');
-    btn.disabled = true;
-    btn.textContent = 'Rebuilding...';
-    result.style.display = 'none';
-
-    try {
-        const response = await fetch('/admin/rebuild-index', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include'
-        });
-        const data = await response.json();
-        if (response.ok) {
-            result.className = 'alert alert-success';
-            result.textContent = 'Index rebuilt successfully! ' + data.episodeCount + ' episodes indexed.';
-        } else {
-            result.className = 'alert alert-error';
-            result.textContent = 'Failed: ' + (data.error || 'Unknown error');
-        }
-    } catch (err) {
-        result.className = 'alert alert-error';
-        result.textContent = 'Failed to rebuild index';
-    }
-
-    result.style.display = 'block';
-    btn.disabled = false;
-    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg> Rebuild Episode Index';
-}
-
-async function cleanupFailedJobs() {
-    const btn = document.getElementById('cleanup-jobs-btn');
-    const result = document.getElementById('cleanup-result');
-    btn.disabled = true;
-    btn.textContent = 'Cleaning up...';
-    result.style.display = 'none';
-
-    try {
-        const response = await fetch('/admin/cleanup-jobs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include'
-        });
-        const data = await response.json();
-        if (response.ok) {
-            result.className = 'alert alert-success';
-            result.textContent = 'Cleanup successful! ' + data.deletedCount + ' failed job' + (data.deletedCount !== 1 ? 's' : '') + ' removed.';
-        } else {
-            result.className = 'alert alert-error';
-            result.textContent = 'Failed: ' + (data.error || 'Unknown error');
-        }
-    } catch (err) {
-        result.className = 'alert alert-error';
-        result.textContent = 'Failed to clean up jobs';
-    }
-
-    result.style.display = 'block';
-    btn.disabled = false;
-    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg> Clean Up Failed Jobs';
-}
-
-async function clearFailedJob(episodeId, btn) {
-    const item = btn.closest('.activity-item');
-    btn.disabled = true;
-    try {
-        const res = await fetch('/admin/activity/' + encodeURIComponent(episodeId), { method: 'DELETE' });
-        const data = await res.json();
-        if (data.success) {
-            item.style.transition = 'opacity 0.3s';
-            item.style.opacity = '0';
-            setTimeout(() => item.remove(), 300);
-        } else {
-            alert('Failed to clear job: ' + (data.error || 'Unknown error'));
-            btn.disabled = false;
-        }
-    } catch (e) {
-        alert('Failed to clear job');
-        btn.disabled = false;
-    }
-}
-
-async function backfillTags() {
-    if (!confirm('Generate tags for all episodes without tags? This may take a few minutes and will use OpenAI API credits.')) {
-        return;
-    }
-
-    const button = document.getElementById('backfill-tags-btn');
-    const statusEl = document.getElementById('backfill-status');
-
-    button.disabled = true;
-    button.textContent = 'Processing...';
-    statusEl.style.display = 'block';
-    statusEl.className = 'alert alert-info';
-    statusEl.textContent = 'Generating tags for episodes...';
-
-    try {
-        const response = await fetch('/admin/backfill-tags', {
-            method: 'POST',
-            credentials: 'include',
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            statusEl.className = 'alert alert-success';
-            statusEl.textContent = 'Success! ' + data.message;
-            setTimeout(() => { window.location.reload(); }, 2000);
-        } else {
-            statusEl.className = 'alert alert-error';
-            statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
-            button.disabled = false;
-            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
-        }
-    } catch (err) {
-        statusEl.className = 'alert alert-error';
-        statusEl.textContent = 'Failed to backfill tags';
-        button.disabled = false;
-        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg> Backfill Tags for All Episodes';
-    }
-}
-
-async function cleanupInvalidTags() {
-    if (!confirm('Remove invalid tags from all episodes? This will remove any tags that are no longer in the predefined tag list.')) {
-        return;
-    }
-
-    const button = document.getElementById('cleanup-tags-btn');
-    const statusEl = document.getElementById('cleanup-tags-status');
-
-    button.disabled = true;
-    button.textContent = 'Processing...';
-    statusEl.style.display = 'block';
-    statusEl.className = 'alert alert-info';
-    statusEl.textContent = 'Cleaning up invalid tags...';
-
-    try {
-        const response = await fetch('/admin/cleanup-tags', {
-            method: 'POST',
-            credentials: 'include',
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            statusEl.className = 'alert alert-success';
-            statusEl.textContent = 'Success! ' + data.message;
-            setTimeout(() => { window.location.reload(); }, 2000);
-        } else {
-            statusEl.className = 'alert alert-error';
-            statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
-            button.disabled = false;
-            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
-        }
-    } catch (err) {
-        statusEl.className = 'alert alert-error';
-        statusEl.textContent = 'Failed to cleanup tags';
-        button.disabled = false;
-        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg> Cleanup Invalid Tags';
-    }
-}
-
-async function backfillPodcastInfo() {
-    if (!confirm('Fetch podcast author and website info from Podcast Index API for all episodes? This may take a while for many episodes.')) {
-        return;
-    }
-
-    const button = document.getElementById('backfill-podcast-info-btn');
-    const statusEl = document.getElementById('backfill-podcast-info-status');
-
-    button.disabled = true;
-    button.textContent = 'Fetching...';
-    statusEl.style.display = 'block';
-    statusEl.className = 'alert alert-info';
-    statusEl.textContent = 'Fetching podcast info from Podcast Index API...';
-
-    try {
-        const response = await fetch('/admin/backfill-podcast-info', {
-            method: 'POST',
-            credentials: 'include',
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            statusEl.className = 'alert alert-success';
-            statusEl.textContent = 'Success! ' + data.message;
-            button.disabled = false;
-            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
-        } else {
-            statusEl.className = 'alert alert-error';
-            statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
-            button.disabled = false;
-            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
-        }
-    } catch (err) {
-        statusEl.className = 'alert alert-error';
-        statusEl.textContent = 'Failed to backfill podcast info';
-        button.disabled = false;
-        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Backfill Podcast Info';
-    }
-}
-
-async function checkAllNow() {
-    var status = document.getElementById('check-all-status');
-    status.className = 'alert alert-info';
-    status.textContent = 'Checking all podcasts...';
-    status.style.display = 'block';
-
-    try {
-        var response = await fetch('/admin/podcasts/check-now', {
-            method: 'POST',
-            credentials: 'include',
-        });
-        var data = await response.json();
-        if (response.ok) {
-            status.className = 'alert alert-success';
-            status.textContent = 'Checked ' + data.checked + ' podcasts. ' + data.totalNewEpisodes + ' new episode(s) queued.';
-            if (data.totalNewEpisodes > 0) {
-                setTimeout(function() { window.location.reload(); }, 2000);
-            }
-        } else {
-            status.className = 'alert alert-error';
-            status.textContent = data.error || 'Failed to check podcasts';
-        }
-    } catch (err) {
-        status.className = 'alert alert-error';
-        status.textContent = 'Failed to check podcasts';
-    }
-}
-</script>
-    `;
-
-    return c.html(Layout({
-        title: "Admin Dashboard",
-        children: content
+    return c.html(AdminLayout({
+        title,
+        activeTab,
+        userEmail,
+        children: body,
     }));
 });
+
 
 // ============================================================================
 // GET /activity - Full activity log
-// ============================================================================
-
-admin.get("/activity", async (c) => {
-    const authError = await requireAdmin(c);
-    if (authError) return authError;
-
-    const activityLog = await getActivityLog(c.env.TLDL_DATA);
-
-    const activityHtml = activityLog.length > 0
-        ? activityLog.map(event => {
-            const icon = event.type === "episode_completed"
-                ? `<span class="activity-icon activity-icon-success">✓</span>`
-                : event.type === "episode_failed"
-                    ? `<span class="activity-icon activity-icon-error">✗</span>`
-                    : event.type === "monitor_error"
-                        ? `<span class="activity-icon activity-icon-error">!</span>`
-                        : `<span class="activity-icon activity-icon-info">↻</span>`;
-
-            const detailsHtml = event.details
-                ? `<span class="activity-details">${escapeHtml(event.details)}</span>`
-                : "";
-
-            return `<div class="activity-item">
-                ${icon}
-                <div class="activity-content">
-                    <span class="activity-title">${escapeHtml(event.title)}</span>
-                    ${detailsHtml}
-                </div>
-                <span class="activity-time">${formatRelativeTime(event.timestamp)}</span>
-            </div>`;
-        }).join("")
-        : `<p class="text-muted">No activity recorded yet.</p>`;
-
-    const content = `
-        <div class="page-header">
-            <h1>Activity Log</h1>
-            <p class="page-subtitle"><a href="/admin">← Back to dashboard</a></p>
-        </div>
-
-        <section class="card admin-activity-section">
-            <p class="text-muted" style="margin-top: 0; margin-bottom: 1rem;">Last ${activityLog.length} event${activityLog.length !== 1 ? "s" : ""} (30-day rolling window)</p>
-            ${activityHtml}
-        </section>
-    `;
-
-    return c.html(Layout({
-        title: "Activity Log",
-        children: content
-    }));
-});
-
-// ============================================================================
 // GET /submit - Admin submit form page
 // ============================================================================
 
@@ -994,8 +243,10 @@ admin.get("/submit", async (c) => {
         </form>
     `;
 
-    return c.html(Layout({
+    return c.html(AdminLayout({
         title: "Submit Episode",
+        activeTab: "episodes",
+        userEmail: c.get("userEmail") || "Unknown User",
         children: content,
     }));
 });
@@ -1082,8 +333,10 @@ admin.get("/submit-manual", async (c) => {
         </form>
     `;
 
-    return c.html(Layout({
+    return c.html(AdminLayout({
         title: "Submit Transcript",
+        activeTab: "episodes",
+        userEmail: c.get("userEmail") || "Unknown User",
         children: content,
     }));
 });
@@ -2537,8 +1790,10 @@ admin.get("/podcasts", async (c) => {
         </script>
     `;
 
-    return c.html(Layout({
+    return c.html(AdminLayout({
         title: "Monitor Podcasts",
+        activeTab: "podcasts",
+        userEmail: c.get("userEmail") || "Unknown User",
         children: content,
     }));
 });

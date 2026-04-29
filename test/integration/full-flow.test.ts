@@ -330,8 +330,8 @@ describe("Integration: Admin CRUD Flow", () => {
         await saveTranscript(env.TLDL_DATA, transcript);
         await saveSummary(env.TLDL_DATA, summary);
 
-        // Step 2: Episode appears on admin dashboard
-        const dashboardResponse = await SELF.fetch("http://localhost/admin");
+        // Step 2: Episode appears on admin episodes tab
+        const dashboardResponse = await SELF.fetch("http://localhost/admin?tab=episodes");
         expect(dashboardResponse.status).toBe(200);
         const dashboardHtml = await dashboardResponse.text();
         expect(dashboardHtml).toContain("Integration Test Podcast");
@@ -435,7 +435,7 @@ describe("Integration: Admin CRUD Flow", () => {
             title: "Monitoring check: 3 podcasts, 0 new episodes",
         });
 
-        // Dashboard should show both stats and activity
+        // Dashboard tab shows stats + activity preview
         const response = await SELF.fetch("http://localhost/admin");
         expect(response.status).toBe(200);
         const html = await response.text();
@@ -449,9 +449,11 @@ describe("Integration: Admin CRUD Flow", () => {
         expect(html).toContain("Podcast A: Great Episode");
         expect(html).toContain("Monitoring check: 3 podcasts, 0 new episodes");
 
-        // Episode list
-        expect(html).toContain("Podcast A");
-        expect(html).toContain("Podcast B");
+        // Episode list now lives on the episodes tab, not the dashboard.
+        const episodesResponse = await SELF.fetch("http://localhost/admin?tab=episodes");
+        const episodesHtml = await episodesResponse.text();
+        expect(episodesHtml).toContain("Podcast A");
+        expect(episodesHtml).toContain("Podcast B");
     });
 });
 
