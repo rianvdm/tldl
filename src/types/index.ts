@@ -80,6 +80,7 @@ export interface EpisodeIndexEntry {
     tags?: string[];               // AI-generated episode tags (included for filtering)
     podcastAuthor?: string;        // Podcast author/host name
     audioUrl?: string;             // Source audio URL — used for dedup when publishers retitle/regenerate GUIDs
+    templateIds?: string[];        // Summary template IDs that exist for this episode — denormalized for /admin Episodes tab
 }
 
 /**

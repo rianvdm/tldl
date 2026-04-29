@@ -16,6 +16,9 @@ import {
     getSummary,
     listSummariesForEpisode,
     rebuildEpisodeIndex,
+    addToEpisodeIndex,
+    addTemplateToEpisodeIndex,
+    getEpisodeIndex,
 } from "../src/lib/kv";
 import type { Job, Episode, Transcript, Summary } from "../src/types";
 
@@ -393,5 +396,94 @@ describe("Summary Operations", () => {
             "no-summaries-here"
         );
         expect(listed).toEqual([]);
+    });
+});
+
+describe("Episode index templateIds denormalization", () => {
+    beforeEach(async () => {
+        for (const prefix of ["episode:", "summary:", "episodes:index"]) {
+            const keys = await env.TLDL_DATA.list({ prefix });
+            await Promise.all(keys.keys.map((k) => env.TLDL_DATA.delete(k.name)));
+        }
+    });
+
+    it("addToEpisodeIndex picks up templateIds from existing summaries", async () => {
+        const episode = createSampleEpisode({ id: "ep-a" });
+        await saveSummary(env.TLDL_DATA, createSampleSummary({ episodeId: "ep-a", templateId: "key-takeaways" }));
+        await saveSummary(env.TLDL_DATA, createSampleSummary({ episodeId: "ep-a", templateId: "narrative-summary" }));
+
+        await addToEpisodeIndex(env.TLDL_DATA, {
+            id: episode.id,
+            podcastName: episode.podcastName,
+            episodeTitle: episode.episodeTitle,
+            episodeDate: episode.episodeDate,
+            episodeDuration: episode.episodeDuration,
+            createdAt: episode.createdAt,
+            expiresAt: episode.expiresAt,
+        });
+
+        const index = await getEpisodeIndex(env.TLDL_DATA);
+        const entry = index.find((e) => e.id === "ep-a");
+        expect(entry?.templateIds).toEqual(["key-takeaways", "narrative-summary"]);
+    });
+
+    it("saveSummary appends templateId to an existing index entry", async () => {
+        const episode = createSampleEpisode({ id: "ep-b" });
+        await addToEpisodeIndex(env.TLDL_DATA, {
+            id: episode.id,
+            podcastName: episode.podcastName,
+            episodeTitle: episode.episodeTitle,
+            episodeDate: episode.episodeDate,
+            episodeDuration: episode.episodeDuration,
+            createdAt: episode.createdAt,
+            expiresAt: episode.expiresAt,
+        });
+
+        await saveSummary(env.TLDL_DATA, createSampleSummary({ episodeId: "ep-b", templateId: "eli5" }));
+
+        const index = await getEpisodeIndex(env.TLDL_DATA);
+        const entry = index.find((e) => e.id === "ep-b");
+        expect(entry?.templateIds).toEqual(["eli5"]);
+    });
+
+    it("addTemplateToEpisodeIndex is idempotent (set semantics)", async () => {
+        const episode = createSampleEpisode({ id: "ep-c" });
+        await addToEpisodeIndex(env.TLDL_DATA, {
+            id: episode.id,
+            podcastName: episode.podcastName,
+            episodeTitle: episode.episodeTitle,
+            episodeDate: episode.episodeDate,
+            episodeDuration: episode.episodeDuration,
+            createdAt: episode.createdAt,
+            expiresAt: episode.expiresAt,
+        });
+
+        await addTemplateToEpisodeIndex(env.TLDL_DATA, "ep-c", "key-takeaways");
+        await addTemplateToEpisodeIndex(env.TLDL_DATA, "ep-c", "key-takeaways");
+
+        const index = await getEpisodeIndex(env.TLDL_DATA);
+        expect(index.find((e) => e.id === "ep-c")?.templateIds).toEqual(["key-takeaways"]);
+    });
+
+    it("addTemplateToEpisodeIndex no-ops when entry doesn't exist", async () => {
+        // Should not throw and should not create a phantom entry.
+        await addTemplateToEpisodeIndex(env.TLDL_DATA, "ghost", "key-takeaways");
+        const index = await getEpisodeIndex(env.TLDL_DATA);
+        expect(index.find((e) => e.id === "ghost")).toBeUndefined();
+    });
+
+    it("rebuildEpisodeIndex populates templateIds from existing summary keys", async () => {
+        const episode = createSampleEpisode({ id: "ep-d" });
+        await saveEpisode(env.TLDL_DATA, episode);
+        // Use direct put to avoid the saveSummary side effect, simulating pre-feature data.
+        await env.TLDL_DATA.put(
+            KV_KEYS.summary("ep-d", "key-takeaways"),
+            JSON.stringify(createSampleSummary({ episodeId: "ep-d", templateId: "key-takeaways" }))
+        );
+
+        await rebuildEpisodeIndex(env.TLDL_DATA);
+
+        const index = await getEpisodeIndex(env.TLDL_DATA);
+        expect(index.find((e) => e.id === "ep-d")?.templateIds).toEqual(["key-takeaways"]);
     });
 });

@@ -155,15 +155,14 @@ admin.get("/", async (c) => {
         } else if (activeTab === "episodes") {
             const pageSize = 10;
             const result = await listEpisodes(c.env.TLDL_DATA, { page, pageSize });
-            const episodes = await Promise.all(
-                result.episodes.map(async (episode) => {
-                    const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episode.id);
-                    const templateBadges = summaries
-                        .map((s) => `<span class="badge">${escapeHtml(s.templateId)}</span>`)
-                        .join("");
-                    return { ...episode, templateBadges };
-                })
-            );
+            // Template badges come straight from the index entry (templateIds is
+            // denormalized at write-time), so no per-episode fan-out here.
+            const episodes = result.episodes.map((episode) => {
+                const templateBadges = (episode.templateIds ?? [])
+                    .map((id) => `<span class="badge">${escapeHtml(id)}</span>`)
+                    .join("");
+                return { ...episode, templateBadges };
+            });
             title = "Episodes";
             body = renderEpisodesTab({ episodes, page, totalPages: result.totalPages });
         } else if (activeTab === "subscribers") {
