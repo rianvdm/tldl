@@ -43,8 +43,11 @@ Given the transcript below, produce two pieces of copy:
    about, not what it promises.
 
 2. "pullQuote": a single aphoristic sentence taken or lightly condensed from
-   the transcript. The kind of line a reader would screenshot. One sentence.
-   No ellipses. Prefer the speaker's voice over paraphrase.
+   the transcript. The kind of line a reader would screenshot. One sentence,
+   ideally between 20 and 30 words — never fewer than 20. If no single
+   sentence in the transcript hits that range, lightly stitch a clause from
+   the same speaker turn rather than dropping below the floor. No ellipses.
+   Prefer the speaker's voice over paraphrase.
 
 Respond with strict JSON matching the shape:
 { "deck": string, "pullQuote": string }
