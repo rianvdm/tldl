@@ -317,13 +317,16 @@ wrangler kv key get "monitored:processed:$PODCAST_ID" --namespace-id=$NS --remot
 wrangler kv key put "monitored:processed:$PODCAST_ID" --namespace-id=$NS --remote --path /tmp/processed.json
 
 # 3. Strip the etag (and lastModified, if present) from the monitored podcast record
-wrangler kv key get "monitored:$PODCAST_ID" --namespace-id=$NS --remote --text 2>/dev/null \
+wrangler kv key get "monitored:$PODCAST_ID" --namespace-id=$NS --remote 2>/dev/null \
   | python3 -c "import sys, json; r=json.loads(sys.stdin.read()); r.pop('etag', None); r.pop('lastModified', None); sys.stdout.write(json.dumps(r))" \
   > /tmp/podcast.json
 wrangler kv key put "monitored:$PODCAST_ID" --namespace-id=$NS --remote --path /tmp/podcast.json
 ```
 
-**Important:** `wrangler kv` defaults to the local `.wrangler/state` simulator. **Always pass `--remote`** for production reads/writes — without it you'll silently hit empty local KV.
+**Gotchas — both have bitten in past sessions:**
+
+* **`wrangler kv` defaults to the local `.wrangler/state` simulator.** Always pass `--remote` for production reads/writes — without it you'll silently hit empty local KV.
+* **Never use `2>&1` when piping to a temp file you'll write back to KV.** Any python `print(..., file=sys.stderr)` debug lines will get redirected into the file, prepended to the JSON, and corrupt the KV value. The dashboard will then fail with `Unexpected token 'b', "before key"... is not valid JSON`. Either drop the stderr debug entirely, OR use `2>/dev/null` to suppress stderr in the pipeline.
 
 After both writes, the next cron tick will:
 1. Fetch the RSS feed (no etag → 200 OK with full body).
