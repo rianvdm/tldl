@@ -463,6 +463,15 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             { apiKey: env.OPENAI_API_KEY, skipValidation },
         );
 
+        if (transcriptionResult.partial) {
+            console.warn(JSON.stringify({
+                event: "transcription_partial",
+                episodeId,
+                reason: transcriptionResult.partialReason,
+                textLength: transcriptionResult.text.length,
+            }));
+        }
+
         transcriptSource = transcriptionResult.source;
         transcript = {
             episodeId,

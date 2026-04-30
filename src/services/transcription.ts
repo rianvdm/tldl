@@ -189,6 +189,10 @@ export interface TranscriptionResult {
     text: string;
     source: "openai";
     model: string;
+    /** True when the final chunk failed transcription but earlier chunks succeeded. */
+    partial?: boolean;
+    /** Human-readable reason when partial=true. */
+    partialReason?: string;
 }
 
 export interface AudioValidation {
@@ -556,6 +560,7 @@ async function callWhisperApi(
         const isCorruptedError = errorText.includes("corrupted or unsupported");
         const isInputTooLarge = errorText.includes("input_too_large") || errorText.includes("too large for this model");
         const isGpt4oModel = provider.model === "gpt-4o-mini-transcribe";
+        let fallbackErrorMessage: string | null = null;
         if (status === 400 && (isCorruptedError || isInputTooLarge) && isGpt4oModel) {
             const reason = isInputTooLarge
                 ? "gpt-4o-mini-transcribe chunk too large, falling back to whisper-1"
@@ -638,19 +643,23 @@ async function callWhisperApi(
                 );
                 return { text: fallbackText, model: "whisper-1" };
             } catch (fallbackErr) {
+                fallbackErrorMessage = fallbackErr instanceof Error ? fallbackErr.message : "Unknown";
                 console.error(
                     JSON.stringify({
                         event: "whisper_fallback_error",
                         fallbackModel: "whisper-1",
-                        error: fallbackErr instanceof Error ? fallbackErr.message : "Unknown",
+                        error: fallbackErrorMessage,
                     })
                 );
             }
         }
 
+        const errorDetail = fallbackErrorMessage
+            ? `${provider.name} Whisper API error: ${errorText} | whisper-1 fallback also failed: ${fallbackErrorMessage}`
+            : `${provider.name} Whisper API error: ${errorText}`;
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
-            `${provider.name} Whisper API error: ${errorText}`,
+            errorDetail,
         );
     }
 
@@ -886,6 +895,7 @@ async function transcribeWithChunking(
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
     let usedFallbackModel: string | null = null;
+    let tailChunkSkipped: { chunkIndex: number; error: string } | null = null;
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -970,15 +980,38 @@ async function transcribeWithChunking(
                 })
             );
         } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
             // Log the error with context
             console.error(
                 JSON.stringify({
                     event: "chunk_failed",
                     chunkIndex: i + 1,
                     totalChunks,
-                    error: error instanceof Error ? error.message : "Unknown error",
+                    error: errorMessage,
                 })
             );
+
+            // Tolerate failure of the trailing chunk: if every prior chunk succeeded,
+            // accept a partial transcript rather than failing the whole episode.
+            // The tail chunk is typically only a few minutes of audio (often outro/credits)
+            // and certain podcast files have non-decodable trailers (ID3v1 footers,
+            // ad markers, etc.) that both gpt-4o-mini-transcribe and whisper-1 reject.
+            const isLastChunk = i === chunks.length - 1;
+            if (isLastChunk && transcriptions.length > 0 && totalChunks > 1) {
+                tailChunkSkipped = { chunkIndex: i + 1, error: errorMessage };
+                console.warn(
+                    JSON.stringify({
+                        event: "tail_chunk_skipped",
+                        chunkIndex: i + 1,
+                        totalChunks,
+                        successfulChunks: transcriptions.length,
+                        chunkSizeBytes: chunk.endByte - chunk.startByte + 1,
+                        error: errorMessage,
+                    })
+                );
+                break;
+            }
 
             // Re-throw with context
             if (error instanceof AppError) {
@@ -986,7 +1019,7 @@ async function transcribeWithChunking(
             }
             throw new AppError(
                 ERROR_CODES.TRANSCRIPTION_FAILED,
-                `Failed to transcribe chunk ${i + 1}/${totalChunks}: ${error instanceof Error ? error.message : "Unknown error"}`,
+                `Failed to transcribe chunk ${i + 1}/${totalChunks}: ${errorMessage}`,
                 error instanceof Error ? error : undefined
             );
         }
@@ -1007,6 +1040,10 @@ async function transcribeWithChunking(
         text: combinedText,
         source: provider.name,
         model: usedFallbackModel || provider.model,
+        ...(tailChunkSkipped && {
+            partial: true,
+            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both gpt-4o-mini-transcribe and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the audio from the last chunk.`,
+        }),
     };
 }
 
