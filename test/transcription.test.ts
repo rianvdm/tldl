@@ -210,6 +210,51 @@ describe("transcribeAudio", () => {
         expect(result.text).toContain("second part");
     });
 
+    it("should return partial transcript when only the trailing chunk fails", async () => {
+        // 30MB → 3 chunks. Chunks 1+2 succeed; chunk 3 fails on gpt-4o-mini AND whisper-1 fallback.
+        // Expect: no throw, result.partial === true, result.text contains the first two chunks.
+        const largeSize = 30 * 1024 * 1024;
+        const mockChunkBuffer = new ArrayBuffer(15 * 1024 * 1024);
+        const corruptedError = JSON.stringify({
+            error: { message: "Audio file might be corrupted or unsupported", type: "invalid_request_error", param: "file", code: "invalid_value" },
+        });
+        const whisper1Error = JSON.stringify({
+            error: { message: "The audio file could not be decoded or its format is not supported.", type: "invalid_request_error", param: null, code: null },
+        });
+
+        vi.spyOn(globalThis, "fetch")
+            // HEAD validation
+            .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-length": String(largeSize), "content-type": "audio/mpeg" } }))
+            // redirect resolution
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            // header fetch (512B)
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(512), { status: 206 }))
+            // chunk 1 fetch + transcribe (success)
+            .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
+            .mockResolvedValueOnce(new Response("First chunk transcript.", { status: 200 }))
+            // chunk 2 fetch + transcribe (success)
+            .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
+            .mockResolvedValueOnce(new Response("Second chunk transcript.", { status: 200 }))
+            // chunk 3 (tail) fetch — succeeds at the byte level
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(1024 * 1024), { status: 206 }))
+            // chunk 3 gpt-4o-mini-transcribe → 400 corrupted (triggers fallback)
+            .mockResolvedValueOnce(new Response(corruptedError, { status: 400 }))
+            // chunk 3 whisper-1 fallback → 400 also (no retry on non-transient)
+            .mockResolvedValueOnce(new Response(whisper1Error, { status: 400 }));
+
+        const result = await transcribeAudio(
+            "https://example.com/large.mp3",
+            "test-api-key"
+        );
+
+        expect(result.source).toBe("openai");
+        expect(result.partial).toBe(true);
+        expect(result.partialReason).toContain("Final chunk 3/3");
+        expect(result.partialReason).toContain("whisper-1");
+        expect(result.text).toContain("First chunk");
+        expect(result.text).toContain("Second chunk");
+    });
+
     it("should throw TRANSCRIPTION_FAILED on Whisper API error", async () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
