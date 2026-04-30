@@ -351,14 +351,32 @@ export async function getEpisodeIndex(
 }
 
 /**
+ * List the template IDs that have a saved summary for this episode.
+ * Used to denormalize summary presence onto the episode index entry, so the
+ * /admin Episodes tab doesn't have to fan out a list+get per visible episode.
+ */
+async function listSummaryTemplateIds(kv: KVNamespace, episodeId: string): Promise<string[]> {
+    const prefix = `summary:${episodeId}:`;
+    const keys = await kv.list({ prefix });
+    return keys.keys
+        .map((k) => k.name.slice(prefix.length))
+        .filter((id) => id.length > 0)
+        .sort();
+}
+
+/**
  * Add an episode to the index (called when episode is saved)
- * Maintains sorted order by createdAt descending
+ * Maintains sorted order by createdAt descending.
+ * Populates `templateIds` from any summaries already saved for this episode.
  */
 export async function addToEpisodeIndex(
     kv: KVNamespace,
     entry: EpisodeIndexEntry
 ): Promise<void> {
-    const index = await getEpisodeIndex(kv);
+    const [index, templateIds] = await Promise.all([
+        getEpisodeIndex(kv),
+        listSummaryTemplateIds(kv, entry.id),
+    ]);
 
     // Check if episode already exists (update case)
     const existingIdx = index.findIndex((e) => e.id === entry.id);
@@ -367,11 +385,38 @@ export async function addToEpisodeIndex(
     }
 
     // Add new entry and sort by createdAt descending
-    index.push(entry);
+    index.push({ ...entry, templateIds: templateIds.length > 0 ? templateIds : entry.templateIds });
     index.sort(
         (a, b) =>
             new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
+
+    await kv.put(KV_KEYS.episodeIndex, JSON.stringify(index), {
+        expirationTtl: TTL.CONTENT,
+    });
+}
+
+/**
+ * Add a summary template ID to an existing episode index entry (idempotent).
+ * No-op if the entry doesn't exist yet — `addToEpisodeIndex` will pick up the
+ * template the first time it's called for this episode.
+ */
+export async function addTemplateToEpisodeIndex(
+    kv: KVNamespace,
+    episodeId: string,
+    templateId: string
+): Promise<void> {
+    const index = await getEpisodeIndex(kv);
+    const entryIdx = index.findIndex((e) => e.id === episodeId);
+    if (entryIdx === -1) return;
+
+    const existing = index[entryIdx].templateIds ?? [];
+    if (existing.includes(templateId)) return;
+
+    index[entryIdx] = {
+        ...index[entryIdx],
+        templateIds: [...existing, templateId].sort(),
+    };
 
     await kv.put(KV_KEYS.episodeIndex, JSON.stringify(index), {
         expirationTtl: TTL.CONTENT,
@@ -418,10 +463,17 @@ export async function rebuildEpisodeIndex(kv: KVNamespace): Promise<number> {
         })
     );
 
+    const validEpisodes = allEpisodes.filter((ep): ep is Episode => ep !== null);
+
+    // Look up the saved summary template IDs for each episode so the rebuilt
+    // index can render the /admin Episodes tab without per-card fan-out.
+    const templateIdsByEpisode = await Promise.all(
+        validEpisodes.map((ep) => listSummaryTemplateIds(kv, ep.id))
+    );
+
     // Build index entries and sort
-    const index: EpisodeIndexEntry[] = allEpisodes
-        .filter((ep): ep is Episode => ep !== null)
-        .map((ep) => ({
+    const index: EpisodeIndexEntry[] = validEpisodes
+        .map((ep, i) => ({
             id: ep.id,
             podcastName: ep.podcastName,
             episodeTitle: ep.episodeTitle,
@@ -432,6 +484,7 @@ export async function rebuildEpisodeIndex(kv: KVNamespace): Promise<number> {
             tags: ep.tags,
             podcastAuthor: ep.podcastAuthor,
             audioUrl: ep.audioUrl,
+            templateIds: templateIdsByEpisode[i].length > 0 ? templateIdsByEpisode[i] : undefined,
         }))
         .sort(
             (a, b) =>
@@ -482,7 +535,13 @@ export async function getTranscript(
 // ============================================================================
 
 /**
- * Save a summary record to KV
+ * Save a summary record to KV.
+ *
+ * Also denormalizes the summary template ID onto the episode index entry so
+ * the /admin Episodes tab can render template badges without reading every
+ * summary key. The index update is a no-op if the index entry doesn't exist
+ * yet — in that case `addToEpisodeIndex` will populate `templateIds` from
+ * KV when it's eventually called.
  */
 export async function saveSummary(
     kv: KVNamespace,
@@ -495,6 +554,7 @@ export async function saveSummary(
             expirationTtl: TTL.CONTENT,
         }
     );
+    await addTemplateToEpisodeIndex(kv, summary.episodeId, summary.templateId);
 }
 
 /**
