@@ -289,6 +289,51 @@ src/
 - **Admin endpoints 401/403**: Admin endpoints must be under `/admin` or `/admin/*` to work with Cloudflare Access. Both paths must be configured in the Access application.
 - **Debug routes in production**: All `/debug/*` routes return 403 in production. Use admin tools instead.
 
+## How to Re-queue a Failed Episode for the Next Cron
+
+Use this when an episode failed processing and you want the next cron tick (`0 */2 * * *` UTC) to pick it up automatically — instead of resubmitting it manually from `/admin/submit`.
+
+The cron's RSS path has **two independent dedup signals** that both need to be cleared:
+
+1. **Processed-GUID list** (`monitored:processed:{podcastId}` in KV) — persists the GUID of every episode that has been queued. If the failed episode's GUID is in this list, the cron skips it.
+2. **Conditional GET etag** (`etag` field on `monitored:{podcastId}`) — if the RSS feed returns 304 Not Modified, the cron exits early without iterating any episodes. Even removing the GUID won't help if the feed never gets re-read.
+
+The episode KV record (`episode:{episodeId}`) is **not** an issue when transcription failed — `saveEpisode` only fires on success, so there's nothing to clean up there.
+
+### Steps
+
+```bash
+# 1. Find the failed episode's RSS GUID — fetch the feed and grep by title
+curl -s "<rssUrl>" | python3 -c "import sys, re; xml = sys.stdin.read(); items = re.findall(r'<item>(.*?)</item>', xml, re.DOTALL); [print(re.search(r'<title>(.*?)</title>', i).group(1)[:80], '|', re.search(r'<guid[^>]*>(.*?)</guid>', i).group(1)) for i in items[:5]]"
+
+# 2. Remove the GUID from the processed list
+NS=ee123158d5d54359b4257f8a1b678adf  # TLDL_DATA
+PODCAST_ID=<podcastId>
+GUID=<guid-from-step-1>
+
+wrangler kv key get "monitored:processed:$PODCAST_ID" --namespace-id=$NS --remote 2>/dev/null \
+  | python3 -c "import sys, json; arr=json.loads(sys.stdin.read()); arr=[g for g in arr if g != '$GUID']; sys.stdout.write(json.dumps(arr))" \
+  > /tmp/processed.json
+wrangler kv key put "monitored:processed:$PODCAST_ID" --namespace-id=$NS --remote --path /tmp/processed.json
+
+# 3. Strip the etag (and lastModified, if present) from the monitored podcast record
+wrangler kv key get "monitored:$PODCAST_ID" --namespace-id=$NS --remote --text 2>/dev/null \
+  | python3 -c "import sys, json; r=json.loads(sys.stdin.read()); r.pop('etag', None); r.pop('lastModified', None); sys.stdout.write(json.dumps(r))" \
+  > /tmp/podcast.json
+wrangler kv key put "monitored:$PODCAST_ID" --namespace-id=$NS --remote --path /tmp/podcast.json
+```
+
+**Important:** `wrangler kv` defaults to the local `.wrangler/state` simulator. **Always pass `--remote`** for production reads/writes — without it you'll silently hit empty local KV.
+
+After both writes, the next cron tick will:
+1. Fetch the RSS feed (no etag → 200 OK with full body).
+2. See the GUID is no longer in the processed set → queue the episode.
+3. Worker processes it normally.
+
+### Faster than this manual flow?
+
+Worth building if it happens more than 2-3 times: a `POST /admin/episodes/{podcastId}/{guid}/requeue` endpoint that performs both deletions in one call. Would also enforce that we never forget the etag step (the painful one — easy to skip and then wait 2h confused about why nothing happened).
+
 ## Important Notes
 
 - **GPT-5.4 exists**: The project uses OpenAI GPT-5.4 for both summarization and tag generation. This is a real model — do not change references to GPT-4o or other models unless explicitly instructed.
