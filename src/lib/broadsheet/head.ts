@@ -17,7 +17,7 @@ export interface HeadOptions {
  */
 export function renderBroadsheetHead(opts: HeadOptions): string {
     const title = escapeHtml(opts.title);
-    const description = escapeHtml(opts.description ?? "AI-powered podcast summaries — read long-form podcast episodes as scannable takeaways, narratives, or ELI5 explanations.");
+    const description = escapeHtml(opts.description ?? "Podcast summaries that respect your time. Read long-form podcast episodes as scannable takeaways, narratives, or ELI5 explanations.");
     const ogImage = escapeHtml(opts.ogImage ?? OG_IMAGE);
     const canonical = opts.canonicalUrl ? escapeHtml(opts.canonicalUrl) : "";
 

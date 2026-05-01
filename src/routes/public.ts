@@ -203,7 +203,7 @@ publicRoutes.get("/", async (c) => {
         sectionHeading,
         sectionCount,
         activeNav: "index",
-        pageTitle: isSearch ? `Search "${q}" — TL;DL` : "TL;DL — Too Long, Didn't Listen",
+        pageTitle: isSearch ? `Search "${q}" — TL;DL` : "TL;DL — Podcast summaries that respect your time",
         searchQuery: q,
         rowStartNumber,
         pagination: {
