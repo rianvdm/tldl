@@ -1,0 +1,9 @@
+TL;DL — Manage your preferences
+
+Use this link to change your podcasts or unsubscribe:
+
+{{manageUrl}}
+
+This link is private to you. Don't share it.
+
+— TL;DL · tldl-pod.com

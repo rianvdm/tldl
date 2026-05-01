@@ -1,0 +1,11 @@
+TL;DL — Confirm your subscription
+
+You asked to get email summaries for:
+
+  {{podcastList}}
+
+Confirm: {{confirmUrl}}
+
+The link expires in {{expiresIn}}. If this wasn't you, just ignore this email — no account was created.
+
+— TL;DL · tldl-pod.com

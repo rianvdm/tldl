@@ -1,0 +1,25 @@
+TL;DL — {{podcastName}} · {{episodeDate}}
+
+{{episodeTitle}}
+{{#episodeDeck}}
+{{episodeDeck}}
+{{/episodeDeck}}
+{{#pullQuote}}
+"{{pullQuote}}"
+{{/pullQuote}}
+{{summaryText}}
+
+—
+
+Read on TL;DL: {{episodeUrl}}{{#podcastWebsiteUrl}}
+Visit {{podcastName}}: {{podcastWebsiteUrl}}{{/podcastWebsiteUrl}}
+
+—
+
+You're getting this because you subscribed to {{podcastName}} summaries on TL;DL.
+
+Unsubscribe from {{podcastName}}: {{unsubscribePodcastUrl}}
+Manage all preferences: {{manageUrl}}
+Unsubscribe from all TL;DL emails: {{{ pm:unsubscribe }}}
+
+TL;DL — tldl-pod.com
