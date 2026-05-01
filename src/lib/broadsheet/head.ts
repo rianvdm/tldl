@@ -1,6 +1,6 @@
 import { escapeHtml } from "../auth";
 
-const OG_IMAGE = "https://file.elezea.com/tldl-hero.png";
+const OG_IMAGE = "https://file.elezea.com/tldl-og-1200x630.png";
 
 export interface HeadOptions {
     title: string;                  // full <title> content, already formed

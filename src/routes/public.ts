@@ -87,7 +87,7 @@ export function Layout(props: { title: string; children: string; headExtra?: str
     const metaDescription = props.description || defaultDescription;
     const ogDescription = props.description || "Get AI summaries of podcast episodes";
 
-    const ogImage = "https://file.elezea.com/tldl-hero.png";
+    const ogImage = "https://file.elezea.com/tldl-og-1200x630.png";
     const canonicalUrl = props.canonicalUrl || null;
 
     return html`<!DOCTYPE html>
