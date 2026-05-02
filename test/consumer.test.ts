@@ -64,7 +64,7 @@ function getTestEnv(): Env {
         ...env,
         OPENAI_API_KEY: "test-api-key",
         ANTHROPIC_API_KEY: "test-anthropic-key",
-    } as Env;
+    } as unknown as Env;
 }
 
 // ============================================================================
@@ -125,7 +125,8 @@ function createQueueMessage(overrides: Partial<QueueMessage> = {}): QueueMessage
 }
 
 async function clearTestData() {
-    const prefixes = ["episode:", "transcript:", "summary:", "job:"];
+    // "episodes:" catches the episode index key alongside per-episode keys.
+    const prefixes = ["episode:", "episodes:", "transcript:", "summary:", "job:"];
     for (const prefix of prefixes) {
         const keys = await env.TLDL_DATA.list({ prefix });
         await Promise.all(keys.keys.map((k) => env.TLDL_DATA.delete(k.name)));
@@ -133,14 +134,22 @@ async function clearTestData() {
 }
 
 /**
- * Create a mock MessageBatch for testing
+ * Create a mock MessageBatch for testing.
+ *
+ * The consumer's retry policy is `if (attempts >= maxAttempts) markFailed()`.
+ * Default `attempts: 1` exercises the retry path. Tests that assert a job
+ * gets marked "failed" must pass `attempts: 3` (or 5 for rate-limited
+ * AppErrors) so the consumer skips retry and writes the failure.
  */
-function createMockBatch(messages: QueueMessage[]): MessageBatch<QueueMessage> {
+function createMockBatch(
+    messages: QueueMessage[],
+    options?: { attempts?: number }
+): MessageBatch<QueueMessage> {
     const mockMessages = messages.map((body) => ({
         body,
         id: crypto.randomUUID(),
         timestamp: new Date(),
-        attempts: 1,
+        attempts: options?.attempts ?? 1,
         ack: vi.fn(),
         retry: vi.fn(),
     }));
@@ -150,7 +159,7 @@ function createMockBatch(messages: QueueMessage[]): MessageBatch<QueueMessage> {
         queue: "test-queue",
         ackAll: vi.fn(),
         retryAll: vi.fn(),
-    };
+    } as unknown as MessageBatch<QueueMessage>;
 }
 
 // ============================================================================
@@ -363,14 +372,13 @@ describe("Queue Consumer - process_episode", () => {
         await createJob(env.TLDL_DATA, job);
 
         const message = createQueueMessage();
-        const batch = createMockBatch([message]);
+        const batch = createMockBatch([message], { attempts: 3 });
 
         await queueConsumer.queue(batch, getTestEnv());
 
-        // Verify message was retried
-        expect(batch.messages[0].retry).toHaveBeenCalled();
+        // Final attempt: consumer should ack and mark failed (no retry).
+        expect(batch.messages[0].ack).toHaveBeenCalled();
 
-        // Verify job marked as failed
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
         expect(updatedJob?.error).toBeDefined();
@@ -394,11 +402,11 @@ describe("Queue Consumer - process_episode", () => {
         await createJob(env.TLDL_DATA, job);
 
         const message = createQueueMessage();
-        const batch = createMockBatch([message]);
+        const batch = createMockBatch([message], { attempts: 3 });
 
         await queueConsumer.queue(batch, getTestEnv());
 
-        expect(batch.messages[0].retry).toHaveBeenCalled();
+        expect(batch.messages[0].ack).toHaveBeenCalled();
 
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
@@ -428,11 +436,11 @@ describe("Queue Consumer - process_episode", () => {
         await createJob(env.TLDL_DATA, job);
 
         const message = createQueueMessage();
-        const batch = createMockBatch([message]);
+        const batch = createMockBatch([message], { attempts: 3 });
 
         await queueConsumer.queue(batch, getTestEnv());
 
-        expect(batch.messages[0].retry).toHaveBeenCalled();
+        expect(batch.messages[0].ack).toHaveBeenCalled();
 
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
@@ -497,11 +505,11 @@ describe("Queue Consumer - regenerate_summary", () => {
         const message = createQueueMessage({
             type: "regenerate_summary",
         });
-        const batch = createMockBatch([message]);
+        const batch = createMockBatch([message], { attempts: 3 });
 
         await queueConsumer.queue(batch, getTestEnv());
 
-        expect(batch.messages[0].retry).toHaveBeenCalled();
+        expect(batch.messages[0].ack).toHaveBeenCalled();
 
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
@@ -518,11 +526,11 @@ describe("Queue Consumer - regenerate_summary", () => {
         const message = createQueueMessage({
             type: "regenerate_summary",
         });
-        const batch = createMockBatch([message]);
+        const batch = createMockBatch([message], { attempts: 3 });
 
         await queueConsumer.queue(batch, getTestEnv());
 
-        expect(batch.messages[0].retry).toHaveBeenCalled();
+        expect(batch.messages[0].ack).toHaveBeenCalled();
 
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
@@ -626,7 +634,7 @@ describe("Queue Consumer - Error Handling", () => {
         await createJob(env.TLDL_DATA, job);
 
         const message = createQueueMessage();
-        const batch = createMockBatch([message]);
+        const batch = createMockBatch([message], { attempts: 3 });
 
         await queueConsumer.queue(batch, getTestEnv());
 
@@ -643,7 +651,7 @@ describe("Queue Consumer - Error Handling", () => {
         await createJob(env.TLDL_DATA, job);
 
         const message = createQueueMessage();
-        const batch = createMockBatch([message]);
+        const batch = createMockBatch([message], { attempts: 3 });
 
         await queueConsumer.queue(batch, getTestEnv());
 

@@ -176,7 +176,11 @@ export interface Env {
     // Queue
     TLDL_QUEUE: Queue<QueueMessage>;
 
-    // Durable Object for job status (strong consistency)
+    // Durable Object for job status (strong consistency).
+    // The auto-generated worker-configuration.d.ts has the precise generic
+    // (`<JobStatusDO>`); we keep this loose because JobStatusDO uses the old
+    // `implements DurableObject` interface and doesn't satisfy the newer
+    // `Rpc.DurableObjectBranded` constraint.
     JOB_STATUS: DurableObjectNamespace;
 
     // Secrets (set via wrangler secret put)
