@@ -4,7 +4,7 @@ import type { Env } from "../src/types";
 import { notifySubscribers } from "../src/notifications";
 
 function testEnv(overrides: Record<string, unknown> = {}): Env {
-    return { ...env, ...overrides } as Env;
+    return { ...env, ...overrides } as unknown as Env;
 }
 
 beforeAll(async () => {

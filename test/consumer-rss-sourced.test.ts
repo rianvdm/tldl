@@ -63,7 +63,7 @@ function createMockBatch(messages: QueueMessage[]): MessageBatch<QueueMessage> {
         queue: "test-queue",
         ackAll: vi.fn(),
         retryAll: vi.fn(),
-    };
+    } as unknown as MessageBatch<QueueMessage>;
 }
 
 function getTestEnv(): import("../src/types").Env {
@@ -72,7 +72,7 @@ function getTestEnv(): import("../src/types").Env {
         OPENAI_API_KEY: "test-api-key",
         ANTHROPIC_API_KEY: "test-anthropic-key",
         MAX_EPISODE_MINUTES: "121",
-    } as import("../src/types").Env;
+    } as unknown as import("../src/types").Env;
 }
 
 // ============================================================================

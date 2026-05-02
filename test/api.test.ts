@@ -81,7 +81,10 @@ function createSampleSummary(overrides: Partial<Summary> = {}): Summary {
 
 // Helper to clear all test data
 async function clearTestData() {
-    const prefixes = ["episode:", "transcript:", "summary:"];
+    // "episodes:" catches the episode index key ("episodes:index"); "episode:"
+    // catches individual episode records. Without "episodes:" the index
+    // persists across tests and listEpisodes returns stale data.
+    const prefixes = ["episode:", "episodes:", "transcript:", "summary:"];
     for (const prefix of prefixes) {
         const keys = await env.TLDL_DATA.list({ prefix });
         await Promise.all(keys.keys.map((k) => env.TLDL_DATA.delete(k.name)));

@@ -61,7 +61,7 @@ function getTestEnv(): Env {
         OPENAI_API_KEY: "test-api-key",
         PODCAST_INDEX_KEY: "test-pi-key",
         PODCAST_INDEX_SECRET: "test-pi-secret",
-    } as Env;
+    } as unknown as Env;
 }
 
 function createTestPodcast(overrides: Partial<MonitoredPodcast> = {}): MonitoredPodcast {

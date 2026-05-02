@@ -34,7 +34,7 @@ vi.mock("../src/lib/queue", () => ({
 import { enqueueJob } from "../src/lib/queue";
 
 function getTestEnv(): Env {
-    return { ...env } as Env;
+    return { ...env } as unknown as Env;
 }
 
 const PODCAST: MonitoredPodcast = {

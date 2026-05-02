@@ -48,7 +48,7 @@ function getTestEnv(): Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
-    } as Env;
+    } as unknown as Env;
 }
 
 function createMockBatch(messages: QueueMessage[]): MessageBatch<QueueMessage> {
