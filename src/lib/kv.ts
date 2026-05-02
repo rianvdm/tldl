@@ -13,6 +13,7 @@ export const KV_KEYS = {
     summary: (episodeId: string, templateId: string) =>
         `summary:${episodeId}:${templateId}`,
     episodeIndex: "episodes:index",
+    episodeRedirect: (fromEpisodeId: string) => `episode-redirect:${fromEpisodeId}`,
     // Podcast monitoring keys
     monitorSettings: "monitor:settings",
     monitoredList: "monitored:list",
@@ -89,6 +90,53 @@ export async function updateJobStatus(
             hasError: error !== undefined,
         })
     );
+}
+
+/**
+ * Save a redirect alias from a (now-orphaned) submitted episode ID to the
+ * canonical episode that owns the same audio. Used when cross-shape dedup
+ * fires in the consumer — any cached link, social share, or pre-rendered
+ * admin page that points at the submitted ID can 301 to the canonical via
+ * `getEpisodeRedirect`.
+ */
+export async function saveEpisodeRedirect(
+    kv: KVNamespace,
+    fromEpisodeId: string,
+    toEpisodeId: string
+): Promise<void> {
+    await kv.put(KV_KEYS.episodeRedirect(fromEpisodeId), toEpisodeId, {
+        expirationTtl: TTL.CONTENT,
+    });
+}
+
+export async function getEpisodeRedirect(
+    kv: KVNamespace,
+    fromEpisodeId: string
+): Promise<string | null> {
+    return await kv.get(KV_KEYS.episodeRedirect(fromEpisodeId));
+}
+
+/**
+ * Update a job's `episodeId` to point at a different (canonical) record.
+ * Used by the consumer when cross-shape dedup discovers the just-submitted
+ * episode is the same audio as one we already have under a different ID
+ * (typically a cron `_rss_<hash>` ↔ direct-submit `_<piEpisodeId>` collision).
+ */
+export async function updateJobEpisodeId(
+    kv: KVNamespace,
+    jobId: string,
+    episodeId: string
+): Promise<void> {
+    const job = await getJob(kv, jobId);
+    if (!job) return;
+    const updatedJob: Job = {
+        ...job,
+        episodeId,
+        updatedAt: new Date().toISOString(),
+    };
+    await kv.put(KV_KEYS.job(jobId), JSON.stringify(updatedJob), {
+        expirationTtl: TTL.JOB,
+    });
 }
 
 /**

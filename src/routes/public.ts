@@ -9,6 +9,7 @@ import type { HonoEnv, Episode, EpisodeIndexEntry } from "../types";
 import {
     listEpisodes,
     getEpisode,
+    getEpisodeRedirect,
     getTranscript,
     listSummariesForEpisode,
     getPodcastList,
@@ -226,7 +227,11 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
     const validTemplates: TemplateId[] = ["key-takeaways", "narrative-summary", "eli5"];
 
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
-    if (!episode) return c.notFound();
+    if (!episode) {
+        const canonical = await getEpisodeRedirect(c.env.TLDL_DATA, episodeId);
+        if (canonical) return c.redirect(`/episode/${canonical}`, 301);
+        return c.notFound();
+    }
 
     // Discover which templates have summaries generated for this episode
     const summaries = await listSummariesForEpisode(c.env.TLDL_DATA, episodeId);

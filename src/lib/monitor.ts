@@ -850,14 +850,48 @@ async function episodeExistsByAudioUrl(
     podcastId: string,
     audioUrl: string
 ): Promise<boolean> {
-    if (!audioUrl) return false;
+    return (await findCanonicalEpisodeIdByAudioUrl(env, podcastId, audioUrl)) !== null;
+}
+
+/**
+ * Return the canonical episode ID for a podcast+audioUrl match, or null.
+ * Same matching rules as episodeExistsByAudioUrl — exposed so callers outside
+ * the cron (the queue consumer) can resolve cross-shape ID collisions and
+ * redirect the user at the canonical record.
+ */
+export async function findCanonicalEpisodeIdByAudioUrl(
+    env: Env,
+    podcastId: string,
+    audioUrl: string
+): Promise<string | null> {
+    if (!audioUrl) return null;
     const index = await getEpisodeIndex(env.TLDL_DATA);
     const normalized = normalizeAudioUrl(audioUrl);
 
-    return index.some(ep =>
+    const match = index.find(ep =>
         ep.id.startsWith(`${podcastId}_`) &&
         ep.audioUrl !== undefined &&
         normalizeAudioUrl(ep.audioUrl) === normalized
     );
+    return match ? match.id : null;
+}
+
+/**
+ * Return the canonical episode ID for a podcast+title match, or null.
+ * Use as a fallback after audio-URL match fails (e.g. publisher migrated CDN).
+ */
+export async function findCanonicalEpisodeIdByTitle(
+    env: Env,
+    podcastId: string,
+    episodeTitle: string
+): Promise<string | null> {
+    const index = await getEpisodeIndex(env.TLDL_DATA);
+    const normalizedTitle = episodeTitle.toLowerCase().trim();
+
+    const match = index.find(ep =>
+        ep.id.startsWith(`${podcastId}_`) &&
+        ep.episodeTitle.toLowerCase().trim() === normalizedTitle
+    );
+    return match ? match.id : null;
 }
 

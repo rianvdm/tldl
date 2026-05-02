@@ -8,6 +8,7 @@ import type { HonoEnv, Episode } from "../types";
 import {
     listEpisodes,
     getEpisode,
+    getEpisodeRedirect,
     getTranscript,
     listSummariesForEpisode,
 } from "../lib/kv";
@@ -109,6 +110,8 @@ api.get("/episode/:episodeId", async (c) => {
     // Fetch episode
     const episode = await getEpisode(c.env.TLDL_DATA, episodeId);
     if (!episode) {
+        const canonical = await getEpisodeRedirect(c.env.TLDL_DATA, episodeId);
+        if (canonical) return c.redirect(`/api/episode/${canonical}`, 301);
         return c.json({ error: "Episode not found" }, 404);
     }
 
