@@ -88,11 +88,13 @@ describe("Integration: Manual transcript submission — full flow", () => {
     it("POST /admin/submit-manual → consumer → summary + index + detail page", async () => {
         vi.mocked(generateSummary).mockResolvedValue({
             text: "# Key Takeaways\n\nEnd-to-end manual flow summary.",
-            model: "gpt-5.2",
+            model: "claude-opus-4-7",
+            usage: { inputTokens: 0, outputTokens: 0 },
         });
         vi.mocked(generateEpisodeTags).mockResolvedValue({
             tags: ["business"],
-            model: "gpt-5.4",
+            model: "claude-opus-4-7",
+            usage: { inputTokens: 0, outputTokens: 0 },
         });
 
         const transcriptText = "A".repeat(500) + " full end to end test body";

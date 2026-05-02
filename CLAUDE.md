@@ -50,8 +50,8 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI gpt-4o-mini-transcribe for transcription (with chunking for >25MB files)
-   - Generates summary via OpenAI GPT-5.4
-   - Generates 2-3 AI tags using GPT-5.4 (non-critical: continues if fails)
+   - Generates summary via Anthropic Claude Opus 4.7 (with prompt caching on the system template)
+   - Generates 2-3 AI tags using Claude Opus 4.7 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
    - Logs completion/failure to activity log
    - Sends Discord notification on failure
@@ -73,7 +73,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 - **Discord notifications**: `src/lib/discord.ts` sends webhook notifications on job failures and monitoring errors. No-op when `DISCORD_WEBHOOK_URL` is not set.
 - **Postmark email**: `src/services/postmark.ts` sends email for the "Request a Podcast" form. No-op when `POSTMARK_API_KEY` is not set.
 - **Styling**: All CSS is in `src/lib/styles.ts` (not a `.css` file) — Cloudflare Workers can't read from the filesystem, so styles are embedded in TypeScript
-- **Episode Tags**: AI-generated using GPT-5.4 Responses API during queue processing (2-3 tags per episode)
+- **Episode Tags**: AI-generated using Anthropic Claude Opus 4.7 during queue processing (2-3 tags per episode)
   - Tags stored inline in both Episode and EpisodeIndexEntry for efficient filtering
   - Predefined tag list in `src/lib/constants.ts` (EPISODE_TAGS)
   - Tag generation is non-critical: empty tags don't fail jobs
@@ -214,7 +214,8 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 - `JOB_STATUS` — Durable Object for job status consistency
 
 **Secrets** (set via `wrangler secret put`):
-- `OPENAI_API_KEY` — OpenAI API key
+- `OPENAI_API_KEY` — OpenAI API key (transcription only)
+- `ANTHROPIC_API_KEY` — Anthropic API key (summary, tags, editorial meta)
 - `PODCAST_INDEX_KEY` — Podcast Index API key
 - `PODCAST_INDEX_SECRET` — Podcast Index API secret
 - `TURNSTILE_SECRET` — Cloudflare Turnstile secret key (spam protection)
@@ -265,8 +266,10 @@ src/
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI gpt-4o-mini-transcribe
-│   ├── summarization.ts  # OpenAI GPT-5.4
-│   ├── tag-generation.ts # OpenAI GPT-5.4 for episode tags
+│   ├── summarization.ts  # Anthropic Claude Opus 4.7
+│   ├── tag-generation.ts # Anthropic Claude Opus 4.7 for episode tags
+│   ├── editorial-meta.ts # Anthropic Claude Opus 4.7 for deck + pull quote
+│   ├── anthropic-client.ts # Shared Anthropic Messages API helper (with prompt caching)
 │   └── postmark.ts       # Postmark email for request form
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages + request form
@@ -339,7 +342,7 @@ Worth building if it happens more than 2-3 times: a `POST /admin/episodes/{podca
 
 ## Important Notes
 
-- **GPT-5.4 exists**: The project uses OpenAI GPT-5.4 for both summarization and tag generation. This is a real model — do not change references to GPT-4o or other models unless explicitly instructed.
+- **Claude Opus 4.7 for non-transcription LLM work**: Summary, tags, and editorial meta all go through Anthropic Claude Opus 4.7 via `src/services/anthropic-client.ts`, which marks the system prompt `cache_control: ephemeral` so repeated calls hit the prompt cache. Transcription stays on OpenAI `gpt-4o-mini-transcribe`. The shared helper returns `{text, model, usage}` — `usage` is logged in the `summary_generated`, `tags_generated`, and `editorial_meta_generated` activity events for cost tracking.
 - **Admin-only model**: There are no "regular users." Only admins can submit episodes. Visitors can request podcasts via `/request`.
 - **No auth on public pages**: Public pages have zero auth detection, no login buttons, no client-side auth scripts.
 - **Discord and Postmark are optional**: Both degrade gracefully when their secrets are not configured. The app works without them.

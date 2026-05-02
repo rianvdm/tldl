@@ -181,6 +181,7 @@ export interface Env {
 
     // Secrets (set via wrangler secret put)
     OPENAI_API_KEY: string;
+    ANTHROPIC_API_KEY: string;
     PODCAST_INDEX_KEY: string;
     PODCAST_INDEX_SECRET: string;
     TURNSTILE_SECRET: string;

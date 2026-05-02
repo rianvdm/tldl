@@ -1,5 +1,5 @@
 /**
- * Tests for Summarization Service (GPT-5.2 Responses API)
+ * Tests for Summarization Service (Anthropic Claude Opus 4.7)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -7,24 +7,13 @@ import { generateSummary } from "../src/services/summarization";
 import { AppError } from "../src/lib/errors";
 import { ERROR_CODES } from "../src/lib/constants";
 
-/**
- * Helper to create a mock Responses API response
- */
-function createMockResponse(text: string, model = "gpt-5.2"): object {
+function createMockResponse(text: string, model = "claude-opus-4-7"): object {
     return {
-        id: "resp_123",
+        id: "msg_123",
         model,
-        output: [
-            {
-                type: "message",
-                content: [
-                    {
-                        type: "output_text",
-                        text,
-                    },
-                ],
-            },
-        ],
+        content: [{ type: "text", text }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 100, output_tokens: 50 },
     };
 }
 
@@ -41,9 +30,7 @@ describe("generateSummary", () => {
         it("should generate summary with key-takeaways template", async () => {
             const mockSummary = "## Key Takeaways\n\n1. First insight\n2. Second insight";
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                    status: 200,
-                })
+                new Response(JSON.stringify(createMockResponse(mockSummary)), { status: 200 })
             );
 
             const result = await generateSummary(
@@ -53,15 +40,15 @@ describe("generateSummary", () => {
             );
 
             expect(result.text).toBe(mockSummary);
-            expect(result.model).toBe("gpt-5.2");
+            expect(result.model).toBe("claude-opus-4-7");
+            expect(result.usage.inputTokens).toBe(100);
+            expect(result.usage.outputTokens).toBe(50);
         });
 
         it("should generate summary with narrative-summary template", async () => {
             const mockSummary = "The episode tells the story of...";
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                    status: 200,
-                })
+                new Response(JSON.stringify(createMockResponse(mockSummary)), { status: 200 })
             );
 
             const result = await generateSummary(
@@ -76,9 +63,7 @@ describe("generateSummary", () => {
         it("should generate summary with eli5 template", async () => {
             const mockSummary = "Imagine you have a big box of toys...";
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                    status: 200,
-                })
+                new Response(JSON.stringify(createMockResponse(mockSummary)), { status: 200 })
             );
 
             const result = await generateSummary(
@@ -90,39 +75,41 @@ describe("generateSummary", () => {
             expect(result.text).toBe(mockSummary);
         });
 
-        it("should send correct request format to Responses API", async () => {
+        it("should send correct request format to Anthropic Messages API with prompt caching", async () => {
             const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse("Summary")), {
-                    status: 200,
-                })
+                new Response(JSON.stringify(createMockResponse("Summary")), { status: 200 })
             );
 
             await generateSummary("Test transcript", "key-takeaways", "test-key");
 
             expect(fetchSpy).toHaveBeenCalledTimes(1);
             const [url, options] = fetchSpy.mock.calls[0];
-            expect(url).toBe("https://api.openai.com/v1/responses");
+            expect(url).toBe("https://api.anthropic.com/v1/messages");
             expect(options?.method).toBe("POST");
             expect(options?.headers).toEqual({
-                Authorization: "Bearer test-key",
-                "Content-Type": "application/json",
+                "x-api-key": "test-key",
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
             });
 
             const body = JSON.parse(options?.body as string);
-            expect(body.model).toBe("gpt-5.4");
-            expect(body.input).toBe("Test transcript");
-            expect(body.instructions).toContain("Analyze this podcast transcript");
+            expect(body.model).toBe("claude-opus-4-7");
+            expect(body.max_tokens).toBe(10_000);
+            expect(body.messages).toEqual([{ role: "user", content: "Test transcript" }]);
+            expect(body.system).toEqual([
+                {
+                    type: "text",
+                    text: expect.stringContaining("Analyze this podcast transcript"),
+                    cache_control: { type: "ephemeral" },
+                },
+            ]);
         });
     });
 
     describe("invalid template handling", () => {
         it("should throw INVALID_TEMPLATE for unknown template ID", async () => {
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "invalid-template",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "invalid-template", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -149,11 +136,7 @@ describe("generateSummary", () => {
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -166,15 +149,9 @@ describe("generateSummary", () => {
         it("should retry on 500 error and succeed", async () => {
             const mockSummary = "Summary after retry";
             vi.spyOn(globalThis, "fetch")
-                // First call: server error
+                .mockResolvedValueOnce(new Response("Internal server error", { status: 500 }))
                 .mockResolvedValueOnce(
-                    new Response("Internal server error", { status: 500 })
-                )
-                // Retry: success
-                .mockResolvedValueOnce(
-                    new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                        status: 200,
-                    })
+                    new Response(JSON.stringify(createMockResponse(mockSummary)), { status: 200 })
                 );
 
             const result = await generateSummary(
@@ -186,16 +163,12 @@ describe("generateSummary", () => {
             expect(result.text).toBe(mockSummary);
         });
 
-        it("should retry on 503 error and succeed", async () => {
-            const mockSummary = "Summary after 503";
+        it("should retry on 529 overloaded and succeed", async () => {
+            const mockSummary = "Summary after 529";
             vi.spyOn(globalThis, "fetch")
+                .mockResolvedValueOnce(new Response("Overloaded", { status: 529 }))
                 .mockResolvedValueOnce(
-                    new Response("Service unavailable", { status: 503 })
-                )
-                .mockResolvedValueOnce(
-                    new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                        status: 200,
-                    })
+                    new Response(JSON.stringify(createMockResponse(mockSummary)), { status: 200 })
                 );
 
             const result = await generateSummary(
@@ -215,11 +188,7 @@ describe("generateSummary", () => {
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -234,11 +203,7 @@ describe("generateSummary", () => {
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -254,11 +219,7 @@ describe("generateSummary", () => {
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -267,24 +228,22 @@ describe("generateSummary", () => {
             }
         });
 
-        it("should handle empty output array", async () => {
+        it("should handle empty content array", async () => {
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
                 new Response(
                     JSON.stringify({
-                        id: "resp_123",
-                        model: "gpt-5.2",
-                        output: [],
+                        id: "msg_123",
+                        model: "claude-opus-4-7",
+                        content: [],
+                        stop_reason: "end_turn",
+                        usage: { input_tokens: 10, output_tokens: 0 },
                     }),
                     { status: 200 }
                 )
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -293,39 +252,14 @@ describe("generateSummary", () => {
             }
         });
 
-        it("should handle missing content in output", async () => {
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(
-                    JSON.stringify({
-                        id: "resp_123",
-                        model: "gpt-5.2",
-                        output: [{ type: "message", content: [] }],
-                    }),
-                    { status: 200 }
-                )
-            );
-
-            try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
-                expect.fail("Expected error");
-            } catch (error) {
-                expect(error).toBeInstanceOf(AppError);
-                expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
-            }
-        });
-
         it("should handle API-level error in response body", async () => {
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
                 new Response(
                     JSON.stringify({
+                        type: "error",
                         error: {
-                            message: "Context length exceeded",
                             type: "invalid_request_error",
-                            code: "context_length_exceeded",
+                            message: "prompt is too long",
                         },
                     }),
                     { status: 200 }
@@ -333,32 +267,22 @@ describe("generateSummary", () => {
             );
 
             try {
-                await generateSummary(
-                    "Very long transcript...",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Very long transcript...", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
                 expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
-                expect((error as AppError).message).toContain("Context length exceeded");
+                expect((error as AppError).message).toContain("prompt is too long");
             }
         });
     });
 
     describe("network errors", () => {
         it("should handle network failure", async () => {
-            vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
-                new Error("Network error")
-            );
+            vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("Network error"));
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);

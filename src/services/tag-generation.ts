@@ -1,53 +1,23 @@
 /**
- * Tag Generation Service
+ * Tag Generation Service — Anthropic Claude Opus 4.7
  *
- * Generates AI-powered episode tags using GPT-5.4 based on
- * the episode transcript and summary.
+ * Generates 2-3 episode tags from a fixed taxonomy based on the
+ * episode summary and transcript excerpt.
  */
 
 import { AppError } from "../lib/errors";
 import { ERROR_CODES, getValidTags } from "../lib/constants";
-import { withRetry, isServerError } from "../lib/retry";
-
-// ============================================================================
-// Types
-// ============================================================================
+import { createAnthropicMessage, type AnthropicUsage } from "./anthropic-client";
 
 export interface TagGenerationResult {
     tags: string[];
     model: string;
+    usage: AnthropicUsage;
 }
 
-interface ResponsesApiResponse {
-    id: string;
-    model: string;
-    output: Array<{
-        type: string;
-        content: Array<{
-            type: string;
-            text: string;
-        }>;
-    }>;
-    error?: {
-        message: string;
-        type: string;
-        code: string;
-    };
-}
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const MODEL = "gpt-5.4";
-
-/**
- * Build the tag generation prompt
- */
 function buildTagPrompt(): string {
     const validTags = getValidTags();
-    const tagList = validTags.map(tag => `- ${tag}`).join('\n');
+    const tagList = validTags.map((tag) => `- ${tag}`).join("\n");
 
     return `Analyze the following podcast episode content and select 2-3 most relevant tags from the list below. Choose tags that best describe the primary themes and subject matter of the episode.
 
@@ -64,180 +34,59 @@ INSTRUCTIONS:
 Return the tags as a simple comma-separated list.`;
 }
 
-// ============================================================================
-// Main Functions
-// ============================================================================
-
 /**
  * Generate tags for an episode based on its content.
- *
- * @param summary - The episode summary text
- * @param transcript - Optional full transcript (will use first 8000 chars if provided)
- * @param openaiApiKey - OpenAI API key
- * @returns Array of 2-3 tags
  */
 export async function generateEpisodeTags(
     summary: string,
     transcript: string | undefined,
-    openaiApiKey: string
+    anthropicApiKey: string
 ): Promise<TagGenerationResult> {
-    // Build content to analyze (summary + truncated transcript)
     let content = `SUMMARY:\n${summary}`;
-
     if (transcript) {
-        // Include first 8000 chars of transcript for context
         const transcriptSample = transcript.substring(0, 8000);
         content += `\n\nTRANSCRIPT (excerpt):\n${transcriptSample}`;
     }
 
-    // Call GPT-5.4 with retry logic
-    const result = await withRetry(
-        () => callTagGenerationApi(content, openaiApiKey),
-        {
-            maxRetries: 3,
-            baseDelayMs: 1000,
-            shouldRetry: isServerError,
-        }
-    );
-
-    return result;
-}
-
-/**
- * Call the OpenAI Responses API for tag generation
- */
-async function callTagGenerationApi(
-    content: string,
-    apiKey: string
-): Promise<TagGenerationResult> {
-    const instructions = buildTagPrompt();
-
-    let response: Response;
-
+    let result;
     try {
-        response = await fetch(OPENAI_RESPONSES_URL, {
-            method: "POST",
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                model: MODEL,
-                instructions: instructions,
-                input: content,
-            }),
+        result = await createAnthropicMessage({
+            apiKey: anthropicApiKey,
+            system: buildTagPrompt(),
+            user: content,
         });
-    } catch (error) {
-        throw new AppError(
-            ERROR_CODES.SUMMARIZATION_FAILED,
-            "Failed to generate tags: Could not connect to OpenAI API",
-            error instanceof Error ? error : undefined
-        );
+    } catch (err) {
+        // Re-wrap rate-limit messages so the caller gets a tag-specific log line.
+        if (err instanceof AppError && err.code === ERROR_CODES.RATE_LIMITED) {
+            throw new AppError(
+                ERROR_CODES.RATE_LIMITED,
+                "Anthropic rate limit exceeded while generating tags."
+            );
+        }
+        throw err;
     }
 
-    // Handle rate limiting
-    if (response.status === 429) {
-        throw new AppError(
-            ERROR_CODES.RATE_LIMITED,
-            "OpenAI rate limit exceeded while generating tags."
-        );
+    const tags = parseTags(result.text);
+    if (tags.length === 0) {
+        console.warn(`Tag generation returned no valid tags: ${result.text.slice(0, 200)}`);
     }
 
-    // Handle server errors
-    if (response.status >= 500) {
-        throw new Error(`OpenAI server error: HTTP ${response.status}`);
-    }
-
-    if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        throw new AppError(
-            ERROR_CODES.SUMMARIZATION_FAILED,
-            `Failed to generate tags: OpenAI API error (${response.status}): ${errorText}`
-        );
-    }
-
-    // Parse response
-    let data: ResponsesApiResponse;
-    try {
-        data = await response.json() as ResponsesApiResponse;
-    } catch {
-        throw new AppError(
-            ERROR_CODES.SUMMARIZATION_FAILED,
-            "Failed to parse tag generation response"
-        );
-    }
-
-    if (data.error) {
-        throw new AppError(
-            ERROR_CODES.SUMMARIZATION_FAILED,
-            `Tag generation error: ${data.error.message}`
-        );
-    }
-
-    // Extract and parse tags
-    const text = extractTextFromResponse(data);
-    if (!text) {
-        // Non-critical - return empty array rather than failing
-        console.warn("Tag generation returned empty response, using default tags");
-        return {
-            tags: [],
-            model: data.model || MODEL,
-        };
-    }
-
-    const tags = parseTags(text);
-
-    return {
-        tags,
-        model: data.model || MODEL,
-    };
+    return { tags, model: result.model, usage: result.usage };
 }
 
 /**
- * Extract text from Responses API response
- */
-function extractTextFromResponse(data: ResponsesApiResponse): string | null {
-    try {
-        const output = data.output?.[0];
-        if (!output || output.type !== "message") {
-            return null;
-        }
-
-        const content = output.content?.[0];
-        if (!content || content.type !== "output_text") {
-            return null;
-        }
-
-        return content.text || null;
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Parse comma-separated tags from API response
- * Validates against allowed tags and returns 2-3 tags
+ * Parse comma-separated tags from API response.
+ * Validates against allowed tags and returns up to 3 tags.
  */
 function parseTags(text: string): string[] {
     const validTags = getValidTags();
 
-    // Split by comma, clean up whitespace, convert to lowercase
     const rawTags = text
-        .split(',')
-        .map(tag => tag.trim().toLowerCase())
-        .filter(tag => tag.length > 0);
+        .split(",")
+        .map((tag) => tag.trim().toLowerCase())
+        .filter((tag) => tag.length > 0);
 
-    // Validate against allowed tags
-    const validatedTags = rawTags.filter(tag =>
-        validTags.includes(tag as any)
-    );
+    const validatedTags = rawTags.filter((tag) => validTags.includes(tag as any));
 
-    // Ensure at least 1 tag (but don't fail if 0)
-    if (validatedTags.length === 0) {
-        console.warn(`Tag generation returned no valid tags: ${rawTags.join(', ')}`);
-        return validatedTags; // Return empty array
-    }
-
-    // Take only first 3 if more were returned
     return validatedTags.slice(0, 3);
 }
