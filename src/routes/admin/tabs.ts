@@ -478,6 +478,7 @@ export function renderMaintenanceTab(): string {
         { id: "backfill-podcast-info", label: "Backfill Podcast Info", description: "Fetch podcast author and website info from Podcast Index API for all episodes.", confirm: "Fetch podcast author and website info for all episodes? This may take a while.", endpoint: "/admin/backfill-podcast-info" },
         { id: "backfill-podcast-authors", label: "Backfill Monitored Podcast Authors", description: "Fetch missing author info for monitored podcasts.", endpoint: "/admin/backfill-monitored-podcast-authors" },
         { id: "backfill-episode-metadata", label: "Backfill Episode Podcast Metadata", description: "Backfill podcast metadata (author, website) on existing episodes.", endpoint: "/admin/backfill-episode-podcast-metadata" },
+        { id: "backfill-episode-apple-urls", label: "Backfill Episode Apple URLs", description: "Fill in per-episode canonical Apple Podcasts URLs (?i={id}) and cleaned website URLs for RSS-cron episodes. Calls Podcast Index (cached per podcast).", confirm: "Backfill per-episode Apple URLs from Podcast Index? Cached per podcast, but still hits the PI API.", endpoint: "/admin/backfill-episode-apple-urls" },
     ];
 
     const toolItems = tools.map((t) => `

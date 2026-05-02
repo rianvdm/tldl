@@ -1269,6 +1269,181 @@ admin.post("/backfill-podcast-info", async (c) => {
     }
 });
 
+// POST /backfill-episode-apple-urls
+// Fills in per-episode canonical Apple URLs (`?i={piEpisodeId}`) and cleaned
+// podcast website URLs for episodes ingested via the RSS-only cron path,
+// which previously stored only a podcast-level Apple URL or none at all.
+admin.post("/backfill-episode-apple-urls", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const { lookupPodcastByItunesId, getEpisodesByItunesId, findEpisodeByAppleId } = await import("../services/podcast-index");
+        const { extractPodcastId } = await import("../lib/url-parser");
+
+        const allEpisodes = await listEpisodes(c.env.TLDL_DATA, { pageSize: 1000 });
+
+        let processed = 0;
+        let updated = 0;
+        let skippedAlreadySet = 0;
+        let skippedNoMatch = 0;
+        let skippedNonNumericPodcast = 0;
+        let failed = 0;
+
+        const podcastInfoCache: Map<string, { author?: string; link?: string } | null> = new Map();
+        const piEpisodesCache: Map<string, Awaited<ReturnType<typeof getEpisodesByItunesId>>> = new Map();
+
+        // Podcast-level fallback URL shape produced by consumer.ts when no
+        // per-episode anchor is known: https://podcasts.apple.com/us/podcast/id{digits}
+        const podcastLevelOnlyRe = /^https:\/\/podcasts\.apple\.com\/[^/]+\/podcast\/id\d+\/?$/i;
+
+        const isFeedShapedUrl = (url: string): boolean => {
+            try {
+                const lowerPath = new URL(url).pathname.toLowerCase();
+                return (
+                    lowerPath.endsWith('.xml') ||
+                    lowerPath.endsWith('.rss') ||
+                    lowerPath.endsWith('/feed') ||
+                    lowerPath.endsWith('/feed/') ||
+                    lowerPath.includes('/rss') ||
+                    lowerPath.includes('/feed')
+                );
+            } catch {
+                return false;
+            }
+        };
+
+        const cleanWebsiteUrl = (url: string): string => {
+            try {
+                const u = new URL(url);
+                return isFeedShapedUrl(url) ? u.origin : url;
+            } catch {
+                return url;
+            }
+        };
+
+        for (const ep of allEpisodes.episodes) {
+            processed++;
+
+            try {
+                const episode = await getEpisode(c.env.TLDL_DATA, ep.id);
+                if (!episode) {
+                    failed++;
+                    continue;
+                }
+
+                const needsAppleUrl =
+                    !episode.appleUrl ||
+                    podcastLevelOnlyRe.test(episode.appleUrl);
+                const needsWebsite =
+                    !episode.podcastWebsiteUrl ||
+                    isFeedShapedUrl(episode.podcastWebsiteUrl);
+
+                if (!needsAppleUrl && !needsWebsite) {
+                    skippedAlreadySet++;
+                    continue;
+                }
+
+                const podcastId = extractPodcastId(episode.id);
+                if (!podcastId || !/^\d+$/.test(podcastId)) {
+                    skippedNonNumericPodcast++;
+                    continue;
+                }
+
+                let nextAppleUrl = episode.appleUrl;
+                let nextWebsite = episode.podcastWebsiteUrl;
+
+                if (needsAppleUrl) {
+                    let piEpisodes = piEpisodesCache.get(podcastId);
+                    if (piEpisodes === undefined) {
+                        piEpisodes = await getEpisodesByItunesId(
+                            podcastId,
+                            c.env.PODCAST_INDEX_KEY,
+                            c.env.PODCAST_INDEX_SECRET
+                        );
+                        piEpisodesCache.set(podcastId, piEpisodes);
+                    }
+
+                    const appleEpIdSuffix = episode.id.slice(podcastId.length + 1);
+                    const match = findEpisodeByAppleId(
+                        piEpisodes,
+                        appleEpIdSuffix,
+                        episode.episodeTitle,
+                        episode.episodeDate
+                    );
+
+                    if (match) {
+                        nextAppleUrl = `https://podcasts.apple.com/us/podcast/podcast/id${podcastId}?i=${match.id}`;
+                    }
+                }
+
+                if (needsWebsite) {
+                    let podcastInfo = podcastInfoCache.get(podcastId);
+                    if (podcastInfo === undefined) {
+                        const podcast = await lookupPodcastByItunesId(
+                            podcastId,
+                            c.env.PODCAST_INDEX_KEY,
+                            c.env.PODCAST_INDEX_SECRET
+                        );
+                        podcastInfo = podcast ? { author: podcast.author, link: podcast.link } : null;
+                        podcastInfoCache.set(podcastId, podcastInfo);
+                    }
+
+                    if (podcastInfo?.link) {
+                        nextWebsite = cleanWebsiteUrl(podcastInfo.link);
+                    }
+                }
+
+                const changedApple = needsAppleUrl && nextAppleUrl !== episode.appleUrl;
+                const changedWebsite = needsWebsite && nextWebsite !== episode.podcastWebsiteUrl;
+
+                if (!changedApple && !changedWebsite) {
+                    skippedNoMatch++;
+                    continue;
+                }
+
+                const patched: Episode = {
+                    ...episode,
+                    appleUrl: changedApple ? (nextAppleUrl ?? episode.appleUrl) : episode.appleUrl,
+                    podcastWebsiteUrl: changedWebsite ? nextWebsite : episode.podcastWebsiteUrl,
+                };
+                await saveEpisode(c.env.TLDL_DATA, patched);
+                updated++;
+
+                console.log(JSON.stringify({
+                    event: "episode_apple_url_backfilled",
+                    episodeId: ep.id,
+                    appleUrl: changedApple ? nextAppleUrl : undefined,
+                    podcastWebsiteUrl: changedWebsite ? nextWebsite : undefined,
+                }));
+            } catch (error) {
+                console.error(JSON.stringify({
+                    event: "backfill_episode_apple_url_failed",
+                    episodeId: ep.id,
+                    error: error instanceof Error ? error.message : "Unknown error",
+                }));
+                failed++;
+            }
+        }
+
+        return c.json({
+            success: true,
+            message: `Processed ${processed}: ${updated} updated, ${skippedAlreadySet} already set, ${skippedNoMatch} no PI match, ${skippedNonNumericPodcast} non-numeric podcastId, ${failed} failed`,
+            processed,
+            updated,
+            skippedAlreadySet,
+            skippedNoMatch,
+            skippedNonNumericPodcast,
+            failed,
+            totalEpisodes: allEpisodes.episodes.length,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to backfill episode Apple URLs",
+        }, 500);
+    }
+});
+
 // POST /backfill-monitored-podcast-authors
 admin.post("/backfill-monitored-podcast-authors", async (c) => {
     const authError = await requireAdmin(c);
