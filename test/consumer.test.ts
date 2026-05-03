@@ -63,7 +63,6 @@ function getTestEnv(): Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
-        ANTHROPIC_API_KEY: "test-anthropic-key",
     } as unknown as Env;
 }
 
@@ -192,8 +191,7 @@ describe("Queue Consumer - process_episode", () => {
 
         vi.mocked(generateSummary).mockResolvedValue({
             text: "# Summary\n\nKey takeaways from the episode.",
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.2",
         });
 
         // Create job in KV
@@ -251,8 +249,7 @@ describe("Queue Consumer - process_episode", () => {
 
         vi.mocked(generateSummary).mockResolvedValue({
             text: "# Summary\n\nKey takeaways.",
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.2",
         });
 
         const job = createSampleJob();
@@ -294,8 +291,7 @@ describe("Queue Consumer - process_episode", () => {
 
         vi.mocked(generateSummary).mockResolvedValue({
             text: "# Summary\n\nKey takeaways.",
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.2",
         });
 
         const job = createSampleJob();
@@ -343,7 +339,7 @@ describe("Queue Consumer - process_episode", () => {
         vi.mocked(generateSummary).mockImplementation(async () => {
             const job = await getJob(env.TLDL_DATA, "test-job-123");
             statusUpdates.push(job?.status || "unknown");
-            return { text: "Summary", model: "claude-opus-4-7", usage: { inputTokens: 0, outputTokens: 0 } };
+            return { text: "Summary", model: "gpt-5.2" };
         });
 
         const job = createSampleJob();
@@ -466,8 +462,7 @@ describe("Queue Consumer - regenerate_summary", () => {
 
         vi.mocked(generateSummary).mockResolvedValue({
             text: "# ELI5 Summary\n\nSimple explanation.",
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.2",
         });
 
         const job = createSampleJob({
@@ -564,14 +559,12 @@ describe("Queue Consumer - process_manual", () => {
 
         vi.mocked(generateSummary).mockResolvedValue({
             text: "# Manual Summary\n\nKey takeaways from manual transcript.",
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.2",
         });
 
         vi.mocked(generateEpisodeTags).mockResolvedValue({
             tags: ["business", "ai"],
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.4",
         });
 
         const job = createSampleJob();

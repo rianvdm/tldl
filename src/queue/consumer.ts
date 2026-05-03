@@ -20,22 +20,15 @@ import {
     getJob,
     updateJobStatus,
     updateJobMetadata,
-    updateJobEpisodeId,
-    saveEpisodeRedirect,
     getEpisode,
     saveEpisode,
     getTranscript,
     saveTranscript,
     saveSummary,
-    getSummary,
     addToEpisodeIndex,
     appendActivityEvent,
     getMonitoredPodcast,
 } from "../lib/kv";
-import {
-    findCanonicalEpisodeIdByAudioUrl,
-    findCanonicalEpisodeIdByTitle,
-} from "../lib/monitor";
 import {
     updateJobStatusDO,
     updateJobEstimateDO,
@@ -45,23 +38,12 @@ import { getEpisodeMetadata } from "../services/apple-podcasts";
 import type { EpisodeMetadata } from "../services/apple-podcasts";
 import { fetchTranscript as fetchRssTranscript } from "../services/rss";
 import { transcribeAudio } from "../services/transcription";
-import { generateSummary, type SummarizationResult } from "../services/summarization";
+import { generateSummary } from "../services/summarization";
 import { notifySubscribers } from "../notifications";
 
 // ============================================================================
 // Helper: Update status in both DO (immediate) and KV (backup)
 // ============================================================================
-
-function logSummaryGenerated(episodeId: string, result: SummarizationResult): void {
-    console.log(
-        JSON.stringify({
-            event: "summary_generated",
-            episodeId,
-            model: result.model,
-            usage: result.usage,
-        })
-    );
-}
 
 async function updateJobStatusBoth(
     env: Env,
@@ -346,7 +328,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const summaryResult = await generateSummary(
             transcript.text,
             templateId,
-            env.ANTHROPIC_API_KEY
+            env.OPENAI_API_KEY
         );
 
         const summary: Summary = {
@@ -357,7 +339,6 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             createdAt: new Date().toISOString(),
         };
         await saveSummary(kv, summary);
-        logSummaryGenerated(episodeId, summaryResult);
 
         // Mark job as completed
         await updateJobStatusBoth(env, kv, jobId, "completed");
@@ -426,72 +407,6 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     // Update job with metadata so it shows on the status page
     await updateJobMetadataDO(env, jobId, metadata.podcastName, metadata.episodeTitle);
     await updateJobMetadata(kv, jobId, metadata.podcastName, metadata.episodeTitle);
-
-    // Cross-shape dedup: cron writes `<podcastId>_rss_<hash>` IDs while direct
-    // Apple submissions write `<podcastId>_<piEpisodeId>`. The submit-time
-    // `getEpisode(episodeId)` lookup misses across shapes, so the same audio
-    // can land in KV twice. Now that metadata has resolved the audio URL and
-    // title, look for a canonical record with a different ID and redirect the
-    // job there before paying for transcription / summary.
-    if (!ctx.rssSourced) {
-        const podcastId = extractPodcastId(episodeId);
-        const canonicalId = podcastId
-            ? (await findCanonicalEpisodeIdByAudioUrl(env, podcastId, metadata.audioUrl)) ??
-              (await findCanonicalEpisodeIdByTitle(env, podcastId, metadata.episodeTitle))
-            : null;
-
-        if (canonicalId && canonicalId !== episodeId) {
-            // If the user submitted asking for a template the canonical doesn't
-            // already have a summary for, generate it now against the canonical
-            // record. Otherwise just redirect.
-            const existingSummary = await getSummary(kv, canonicalId, templateId);
-            const needsNewSummary = !existingSummary;
-
-            console.log(JSON.stringify({
-                event: "dedup_redirect",
-                jobId,
-                submittedEpisodeId: episodeId,
-                canonicalEpisodeId: canonicalId,
-                templateId,
-                needsNewSummary,
-                source: "processEpisode",
-            }));
-
-            await saveEpisodeRedirect(kv, episodeId, canonicalId);
-            await updateJobEpisodeId(kv, jobId, canonicalId);
-
-            if (needsNewSummary) {
-                const canonicalTranscript = await getTranscript(kv, canonicalId);
-                if (!canonicalTranscript) {
-                    // Canonical exists in the index but its transcript is gone
-                    // (TTL'd or manually deleted). Surface as a job failure rather
-                    // than silently completing — caller can re-run a regenerate.
-                    throw new AppError(
-                        ERROR_CODES.TRANSCRIPTION_FAILED,
-                        `Cannot generate ${templateId} summary: canonical episode ${canonicalId} has no stored transcript.`
-                    );
-                }
-                await updateJobStatusBoth(env, kv, jobId, "summarizing");
-                const summaryResult = await generateSummary(
-                    canonicalTranscript.text,
-                    templateId,
-                    env.ANTHROPIC_API_KEY
-                );
-                const summary: Summary = {
-                    episodeId: canonicalId,
-                    templateId,
-                    text: summaryResult.text,
-                    model: summaryResult.model,
-                    createdAt: new Date().toISOString(),
-                };
-                await saveSummary(kv, summary);
-                logSummaryGenerated(canonicalId, summaryResult);
-            }
-
-            await updateJobStatusBoth(env, kv, jobId, "completed");
-            return;
-        }
-    }
 
     // Step 2: Check RSS for transcript if we don't have one
     if (!transcript) {
@@ -575,7 +490,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     const summaryResult = await generateSummary(
         transcript.text,
         templateId,
-        env.ANTHROPIC_API_KEY
+        env.OPENAI_API_KEY
     );
 
     const summary: Summary = {
@@ -586,7 +501,6 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         createdAt: new Date().toISOString(),
     };
     await saveSummary(kv, summary);
-    logSummaryGenerated(episodeId, summaryResult);
 
     // Step 4.5: Generate tags (non-critical - don't fail job if this fails)
     let tags: string[] = [];
@@ -594,7 +508,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const tagResult = await generateEpisodeTags(
             summary.text,
             transcript.text,
-            env.ANTHROPIC_API_KEY
+            env.OPENAI_API_KEY
         );
         tags = tagResult.tags;
 
@@ -604,7 +518,6 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
                 episodeId,
                 tags: tags,
                 model: tagResult.model,
-                usage: tagResult.usage,
             })
         );
     } catch (error) {
@@ -623,16 +536,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     // New episode — no existing value to preserve; store raw.
     let editorial: { deck?: string; pullQuote?: string } = {};
     try {
-        const meta = await generateEditorialMeta(transcript.text, env.ANTHROPIC_API_KEY);
+        const meta = await generateEditorialMeta(transcript.text, env.OPENAI_API_KEY);
         editorial = { deck: meta.deck, pullQuote: meta.pullQuote };
-        console.log(
-            JSON.stringify({
-                event: "editorial_meta_generated",
-                episodeId,
-                model: meta.model,
-                usage: meta.usage,
-            })
-        );
     } catch (err) {
         // Don't fail ingest if editorial-meta generation fails — log and continue.
         console.error(
@@ -740,7 +645,7 @@ async function regenerateSummary(ctx: ProcessingContext): Promise<void> {
     const summaryResult = await generateSummary(
         transcript.text,
         templateId,
-        env.ANTHROPIC_API_KEY
+        env.OPENAI_API_KEY
     );
 
     const summary: Summary = {
@@ -751,7 +656,6 @@ async function regenerateSummary(ctx: ProcessingContext): Promise<void> {
         createdAt: new Date().toISOString(),
     };
     await saveSummary(kv, summary);
-    logSummaryGenerated(episodeId, summaryResult);
 
     // Mark completed
     await updateJobStatusBoth(env, kv, jobId, "completed");
@@ -802,7 +706,7 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
     const summaryResult = await generateSummary(
         transcript.text,
         templateId,
-        env.ANTHROPIC_API_KEY
+        env.OPENAI_API_KEY
     );
 
     const summary: Summary = {
@@ -813,7 +717,6 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
         createdAt: new Date().toISOString(),
     };
     await saveSummary(kv, summary);
-    logSummaryGenerated(episodeId, summaryResult);
 
     // Generate tags (non-critical)
     let tags: string[] = [];
@@ -821,7 +724,7 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
         const tagResult = await generateEpisodeTags(
             summary.text,
             transcript.text,
-            env.ANTHROPIC_API_KEY
+            env.OPENAI_API_KEY
         );
         tags = tagResult.tags;
 
@@ -831,7 +734,6 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
                 episodeId,
                 tags,
                 model: tagResult.model,
-                usage: tagResult.usage,
             })
         );
     } catch (error) {
@@ -847,16 +749,8 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
     // Generate editorial meta (deck + pull quote) — non-critical
     let editorial: { deck?: string; pullQuote?: string } = {};
     try {
-        const meta = await generateEditorialMeta(transcript.text, env.ANTHROPIC_API_KEY);
+        const meta = await generateEditorialMeta(transcript.text, env.OPENAI_API_KEY);
         editorial = { deck: meta.deck, pullQuote: meta.pullQuote };
-        console.log(
-            JSON.stringify({
-                event: "editorial_meta_generated",
-                episodeId,
-                model: meta.model,
-                usage: meta.usage,
-            })
-        );
     } catch (err) {
         console.error(
             JSON.stringify({

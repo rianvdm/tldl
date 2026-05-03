@@ -70,7 +70,6 @@ function getTestEnv(): import("../src/types").Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
-        ANTHROPIC_API_KEY: "test-anthropic-key",
         MAX_EPISODE_MINUTES: "121",
     } as unknown as import("../src/types").Env;
 }
@@ -119,14 +118,12 @@ describe("consumer: rssSourced branch", () => {
 
         vi.mocked(summarization.generateSummary).mockResolvedValue({
             text: "summary",
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.4",
         });
 
         vi.mocked(tagGen.generateEpisodeTags).mockResolvedValue({
             tags: ["ai"],
-            model: "claude-opus-4-7",
-            usage: { inputTokens: 0, outputTokens: 0 },
+            model: "gpt-5.4",
         });
 
         const message: QueueMessage = {
