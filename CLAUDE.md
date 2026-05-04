@@ -333,6 +333,18 @@ After both writes, the next cron tick will:
 2. See the GUID is no longer in the processed set → queue the episode.
 3. Worker processes it normally.
 
+### Variant: re-process a SUCCESSFUL episode (not failed)
+
+When the episode finished cleanly but you want to re-run it (e.g., you switched models and want fresh summaries on existing episodes), the runbook above isn't enough — `episode:{id}`, `transcript:{id}`, `summary:{id}:*` already exist and the episode is in `episodes:index`. Steps 2 + 3 above plus delete those records:
+
+1. `wrangler kv key delete "episode:$ID" --namespace-id=$NS --remote`
+2. `wrangler kv key delete "transcript:$ID" --namespace-id=$NS --remote`
+3. List + delete each `summary:$ID:*` key (`wrangler kv key list --prefix "summary:$ID:" ...`)
+4. Pull `$ID` out of `episodes:index` (read, filter, write back)
+5. Then steps 2 + 3 of the failed-episode runbook (processed list + etag).
+
+Or: `deleteEpisode` in `src/lib/kv.ts:250` already does the first four — `POST /admin/episodes/{id}/delete` is the one-call form. Then still do the processed-list + etag clear manually.
+
 ### Faster than this manual flow?
 
 Worth building if it happens more than 2-3 times: a `POST /admin/episodes/{podcastId}/{guid}/requeue` endpoint that performs both deletions in one call. Would also enforce that we never forget the etag step (the painful one — easy to skip and then wait 2h confused about why nothing happened).
