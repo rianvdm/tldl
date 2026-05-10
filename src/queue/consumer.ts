@@ -205,6 +205,34 @@ const queueHandler = {
                         ? 120 * message.attempts  // 2min, 4min, 6min, 8min, 10min
                         : 5;
 
+                    // Surface retry state to the user. Keep `status` at its current
+                    // step (so the UI's progress phrasing still works) but populate
+                    // the error field with a human-readable retry note. This also
+                    // bumps `updatedAt`, preventing the 119-min stale-job sweep from
+                    // firing while legitimate queue retries are still pending.
+                    const retryNote = isRateLimited
+                        ? `Audio CDN rate-limited. Retrying in ${Math.round(delaySeconds / 60)} min (attempt ${message.attempts} of ${maxAttempts}).`
+                        : `Transient error; retrying in ${delaySeconds}s (attempt ${message.attempts} of ${maxAttempts}).`;
+                    try {
+                        const job = await getJob(env.TLDL_DATA, message.body.jobId);
+                        const retryStatus = job?.status ?? "transcribing";
+                        await updateJobStatusBoth(
+                            env,
+                            env.TLDL_DATA,
+                            message.body.jobId,
+                            retryStatus,
+                            retryNote
+                        );
+                    } catch (statusErr) {
+                        console.error(
+                            JSON.stringify({
+                                event: "retry_status_update_failed",
+                                jobId: message.body.jobId,
+                                error: statusErr instanceof Error ? statusErr.message : String(statusErr),
+                            })
+                        );
+                    }
+
                     console.log(
                         JSON.stringify({
                             event: "job_retry",
@@ -215,7 +243,31 @@ const queueHandler = {
                             isRateLimited,
                         })
                     );
-                    message.retry({ delaySeconds });
+
+                    // Diagnostic: queue retries 2-5 have been observed to silently not
+                    // fire after this call. Wrap to log any thrown error and confirm
+                    // the call returned without throwing.
+                    try {
+                        message.retry({ delaySeconds });
+                        console.log(
+                            JSON.stringify({
+                                event: "queue_retry_called",
+                                jobId: message.body.jobId,
+                                attempt: message.attempts,
+                                delaySeconds,
+                            })
+                        );
+                    } catch (retryErr) {
+                        console.error(
+                            JSON.stringify({
+                                event: "queue_retry_threw",
+                                jobId: message.body.jobId,
+                                attempt: message.attempts,
+                                delaySeconds,
+                                error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+                            })
+                        );
+                    }
                 }
             }
         }

@@ -1071,12 +1071,15 @@ async function fetchAudioChunk(
     startByte: number,
     endByte: number,
 ): Promise<ArrayBuffer> {
-    // Wrap with retry logic for rate limit handling
+    // Wrap with retry logic for rate limit handling.
+    // Substack/CloudFront rate-limit windows commonly outlast short backoffs,
+    // so we wait longer here (15s/30s/60s/120s/240s ≈ 7.7 min total) before
+    // bubbling up to the queue-level retry. Honors Retry-After when present.
     return withRetry(
         () => fetchAudioChunkOnce(audioUrl, startByte, endByte),
         {
-            maxRetries: 4,
-            baseDelayMs: 5000, // Aggressive backoff for CDN rate limits (5s/10s/20s/40s)
+            maxRetries: 5,
+            baseDelayMs: 15000,
             shouldRetry: isRateLimitError,
         }
     );
