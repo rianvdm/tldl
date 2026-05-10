@@ -17,6 +17,11 @@ POSTMARK_MESSAGE_STREAM = "tldl"
 enabled = true
 head_sampling_rate = 1 # optional. default = 1.
 
+# Queue consumer processes 7+ chunk transcriptions per job; default 30s CPU
+# budget kills the worker mid-job. Bumped to 5 min (paid plan max).
+[limits]
+cpu_ms = 300000
+
 # KV Namespace
 [[kv_namespaces]]
 binding = "TLDL_DATA"
