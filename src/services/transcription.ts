@@ -751,24 +751,32 @@ export async function transcribeAudio(
                     // Try validation again on the resolved URL
                     try {
                         validation = await validateAudioUrl(audioUrl);
-                    } catch {
-                        // Resolved URL also failed — fall back to direct fetch
+                    } catch (innerErr) {
+                        // Resolved URL also rate-limited. Don't fall back to a
+                        // whole-file fetch — for large files that turns one 429
+                        // into a guaranteed 429 on a 90+ MB download. Bubble
+                        // the error up so queue retry handles it after a delay.
                         console.log(
                             JSON.stringify({
-                                event: "validation_rate_limited_fallback",
-                                message: "Both origin and resolved URL rate-limited, falling back to direct fetch",
+                                event: "validation_rate_limited_throw",
+                                message: "Both origin and resolved URL rate-limited; bubbling to queue retry",
                             })
                         );
-                        validation = { contentLength: 0, contentType: "audio/mpeg" };
+                        throw innerErr instanceof AppError
+                            ? innerErr
+                            : new AppError(
+                                  ERROR_CODES.RATE_LIMITED,
+                                  "Audio validation rate-limited after redirect resolution",
+                              );
                     }
                 } else {
                     console.log(
                         JSON.stringify({
-                            event: "validation_rate_limited_fallback",
-                            message: "HEAD request rate-limited, falling back to direct fetch",
+                            event: "validation_rate_limited_throw",
+                            message: "HEAD request rate-limited; bubbling to queue retry",
                         })
                     );
-                    validation = { contentLength: 0, contentType: "audio/mpeg" };
+                    throw error;
                 }
             } else {
                 throw error;

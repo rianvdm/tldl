@@ -154,6 +154,24 @@ const queueHandler = {
                     })
                 );
 
+                // Zombie messages: the job's DO/KV record has been deleted (likely
+                // by the stale-job sweep or admin cleanup) but the queue still has
+                // the message and keeps redelivering it. Every retry slams the
+                // audio CDN before failing on the missing job. Ack and drop.
+                const isZombie = error instanceof Error && error.message.startsWith("Job not found:");
+                if (isZombie) {
+                    console.log(
+                        JSON.stringify({
+                            event: "zombie_message_dropped",
+                            jobId: message.body.jobId,
+                            episodeId: message.body.episodeId,
+                            attempts: message.attempts,
+                        })
+                    );
+                    message.ack();
+                    continue;
+                }
+
                 // Rate-limited jobs get more attempts with longer backoff to let CDN cool down
                 const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
                 const maxAttempts = isRateLimited ? 5 : 3;
