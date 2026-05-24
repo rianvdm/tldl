@@ -252,7 +252,6 @@ export interface MonitoredPodcast {
  * Stored in KV with key: monitor:settings
  */
 export interface MonitorSettings {
-    checkIntervalHours: number;    // Default: 8
     maxEpisodesPerCheck: number;   // Default: 5
     enabled: boolean;              // Global enable/disable
 }

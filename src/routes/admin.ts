@@ -1970,14 +1970,10 @@ admin.put("/podcasts/settings", async (c) => {
 
     const current = await getMonitorSettings(c.env.TLDL_DATA);
     const updated: MonitorSettings = {
-        checkIntervalHours: body.checkIntervalHours ?? current.checkIntervalHours,
         maxEpisodesPerCheck: body.maxEpisodesPerCheck ?? current.maxEpisodesPerCheck,
         enabled: body.enabled ?? current.enabled,
     };
 
-    if (updated.checkIntervalHours < 1 || updated.checkIntervalHours > 24) {
-        return c.json({ error: "Check interval must be 1-24 hours" }, 400);
-    }
     if (updated.maxEpisodesPerCheck < 1 || updated.maxEpisodesPerCheck > 10) {
         return c.json({ error: "Max episodes must be 1-10" }, 400);
     }

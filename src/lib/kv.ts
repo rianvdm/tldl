@@ -745,7 +745,6 @@ export async function getEpisodesForPodcast(
 // ============================================================================
 
 const DEFAULT_MONITOR_SETTINGS: MonitorSettings = {
-    checkIntervalHours: 8,
     maxEpisodesPerCheck: 5,
     enabled: true,
 };
