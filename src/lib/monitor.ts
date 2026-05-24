@@ -94,6 +94,13 @@ export async function addPodcastToMonitoring(
         return { success: false, error: "Could not find podcast in Podcast Index" };
     }
 
+    if (!podcastInfo.title || !podcastInfo.url) {
+        return {
+            success: false,
+            error: `Podcast Index returned an incomplete record (missing ${!podcastInfo.title ? "title" : "feed URL"}). Try again in a few minutes.`,
+        };
+    }
+
     // Get all episodes from Podcast Index to mark as processed
     // Primary: PI (avoids RSS 429s). Fallback: RSS.
     let episodeGuids: string[] = [];

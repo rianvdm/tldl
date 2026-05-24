@@ -855,7 +855,7 @@ export async function listMonitoredPodcasts(
 
     return podcasts
         .filter((p): p is MonitoredPodcast => p !== null)
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
 }
 
 /**
