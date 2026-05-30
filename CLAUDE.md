@@ -345,6 +345,39 @@ When the episode finished cleanly but you want to re-run it (e.g., you switched 
 
 Or: `deleteEpisode` in `src/lib/kv.ts:250` already does the first four — `POST /admin/episodes/{id}/delete` is the one-call form. Then still do the processed-list + etag clear manually.
 
+### Variant: rewriting a monitored podcast record (data repair)
+
+If you ever manually overwrite `monitored:{podcastId}` (e.g., to repair a record where Podcast Index returned a broken response and saved a podcast with missing `name`/`rssUrl`), you MUST also reconcile `monitored:processed:{podcastId}` against the current RSS feed BEFORE the next cron tick. Otherwise the cron sees every feed GUID not in the processed list as a "new episode" and grinds through up to `maxEpisodesPerCheck` per 2h cron — a podcast with 150 historical episodes and 6 processed will quietly transcribe 24/day for a week.
+
+Backfill recipe (mark every current-feed GUID as processed so only genuinely new episodes get queued):
+
+```bash
+NS=ee123158d5d54359b4257f8a1b678adf
+PODCAST_ID=<podcastId>
+RSS_URL=<rssUrl>
+
+# Fetch current feed GUIDs
+curl -sL "$RSS_URL" | grep -oE '<guid[^>]*>[^<]+</guid>' | sed -E 's/<[^>]+>//g' > /tmp/feed-guids.txt
+
+# Get current processed list
+wrangler kv key get "monitored:processed:$PODCAST_ID" --namespace-id=$NS --remote 2>/dev/null > /tmp/processed-current.json
+
+# Merge (preserve existing order, append missing feed GUIDs), write back
+python3 -c "
+import json
+with open('/tmp/feed-guids.txt') as f: feed = [l.strip() for l in f if l.strip()]
+with open('/tmp/processed-current.json') as f: cur = json.load(f)
+seen = set(cur); merged = list(cur)
+for g in feed:
+    if g not in seen: merged.append(g); seen.add(g)
+with open('/tmp/processed-merged.json', 'w') as f: json.dump(merged, f, separators=(',', ':'))
+print(f'Added {len(merged) - len(cur)} GUIDs')
+"
+wrangler kv key put "monitored:processed:$PODCAST_ID" --namespace-id=$NS --remote --path /tmp/processed-merged.json
+```
+
+Root cause for why the gap exists: `addPodcastToMonitoring` at `src/lib/monitor.ts:117` trusts the Podcast Index API to return the full episode list. If PI returns 0 or a sparse subset, only those GUIDs get marked processed — every later cron treats the RSS-feed remainder as new. Until that's hardened (sparse-PI fallback to RSS GUID union), every PI-incomplete add is a latent backlog cascade waiting for the record to start being checked.
+
 ### Faster than this manual flow?
 
 Worth building if it happens more than 2-3 times: a `POST /admin/episodes/{podcastId}/{guid}/requeue` endpoint that performs both deletions in one call. Would also enforce that we never forget the etag step (the painful one — easy to skip and then wait 2h confused about why nothing happened).
