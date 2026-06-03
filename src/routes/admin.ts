@@ -34,7 +34,11 @@ import {
     getActivityLog,
     removeActivityEvent,
     getPodcastList,
+    getEpisodeIndex,
+    KV_KEYS,
+    TTL,
 } from "../lib/kv";
+import { decodeHtmlEntities } from "../lib/html-entities";
 import {
     createJobDO,
     deleteJobDO,
@@ -1265,6 +1269,84 @@ admin.post("/backfill-podcast-info", async (c) => {
     } catch (error) {
         return c.json({
             error: error instanceof Error ? error.message : "Failed to backfill podcast info",
+        }, 500);
+    }
+});
+
+// POST /backfill-decode-entities
+// Repairs episodes whose titles were stored with raw HTML entities (e.g.
+// "&#8220;") before the RSS ingest path decoded them. fast-xml-parser leaves
+// numeric character references intact, so they were stored raw and rendered as
+// literal "&#8220;" once HTML-escaped by the view. Walks the episode index +
+// each episode record, decoding episodeTitle and podcastName. Idempotent —
+// decoding already-clean text is a no-op.
+admin.post("/backfill-decode-entities", async (c) => {
+    const authError = await requireAdmin(c);
+    if (authError) return authError;
+
+    try {
+        const index = await getEpisodeIndex(c.env.TLDL_DATA);
+
+        let scanned = 0;
+        let updated = 0;
+        let failed = 0;
+        let indexChanged = false;
+
+        for (const entry of index) {
+            scanned++;
+
+            const decodedTitle = decodeHtmlEntities(entry.episodeTitle);
+            const decodedPodcast = decodeHtmlEntities(entry.podcastName);
+            if (decodedTitle === entry.episodeTitle && decodedPodcast === entry.podcastName) {
+                continue;
+            }
+
+            try {
+                // Fix the full episode record (source of truth for detail pages).
+                const episode = await getEpisode(c.env.TLDL_DATA, entry.id);
+                if (episode) {
+                    episode.episodeTitle = decodeHtmlEntities(episode.episodeTitle);
+                    episode.podcastName = decodeHtmlEntities(episode.podcastName);
+                    await saveEpisode(c.env.TLDL_DATA, episode);
+                }
+
+                // Fix the denormalized index entry (source for listing pages).
+                entry.episodeTitle = decodedTitle;
+                entry.podcastName = decodedPodcast;
+                indexChanged = true;
+                updated++;
+
+                console.log(JSON.stringify({
+                    event: "episode_entities_decoded",
+                    episodeId: entry.id,
+                    episodeTitle: decodedTitle,
+                }));
+            } catch (error) {
+                console.error(JSON.stringify({
+                    event: "backfill_decode_entities_failed",
+                    episodeId: entry.id,
+                    error: error instanceof Error ? error.message : "Unknown error",
+                }));
+                failed++;
+            }
+        }
+
+        if (indexChanged) {
+            await c.env.TLDL_DATA.put(KV_KEYS.episodeIndex, JSON.stringify(index), {
+                expirationTtl: TTL.CONTENT,
+            });
+        }
+
+        return c.json({
+            success: true,
+            message: `Scanned ${scanned} episodes: ${updated} decoded, ${failed} failed`,
+            scanned,
+            updated,
+            failed,
+        });
+    } catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Failed to decode entities",
         }, 500);
     }
 });

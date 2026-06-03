@@ -9,6 +9,7 @@ import { getCorrectedFeedUrl } from "../lib/feed-corrections";
 import type { ParsedAppleUrl } from "../lib/url-parser";
 import type { Env } from "../types";
 import { fetchAndParseFeed, findEpisodeInFeed } from "./rss";
+import { decodeHtmlEntities } from "../lib/html-entities";
 import {
     lookupPodcastByItunesId,
     getEpisodesByItunesId,
@@ -34,21 +35,6 @@ export interface ItunesEpisodeInfo {
     episodeGuid?: string; // The podcast's internal GUID for this episode
 }
 
-/**
- * Decode common HTML entities in a string.
- * Apple Podcasts page titles often contain entities like &amp; &quot; etc.
- */
-function decodeHtmlEntities(text: string): string {
-    return text
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&apos;/g, "'")
-        .replace(/&#x27;/g, "'")
-        .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)));
-}
 
 /**
  * Extract episode title by fetching the Apple Podcasts page HTML

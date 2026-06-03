@@ -7,6 +7,7 @@ import { XMLParser } from "fast-xml-parser";
 import { AppError } from "../lib/errors";
 import { ERROR_CODES, USER_AGENT } from "../lib/constants";
 import { stripTruncationSuffix, isTruncatedTitle } from "../lib/title-utils";
+import { decodeHtmlEntities } from "../lib/html-entities";
 
 /**
  * Episode data extracted from RSS feed
@@ -180,7 +181,10 @@ export function parseFeedXml(xml: string): ParsedFeed {
         );
     }
 
-    const title = String(channel.title || "Unknown Podcast");
+    // Decode entities at ingest: fast-xml-parser only resolves the 5 predefined
+    // XML entities, so numeric refs like &#8220; survive and would otherwise be
+    // stored raw and rendered as literal "&#8220;" once HTML-escaped by the view.
+    const title = decodeHtmlEntities(String(channel.title || "Unknown Podcast"));
     const items = (channel.item || []) as Array<Record<string, unknown>>;
 
     const episodes: RssEpisode[] = items.slice(0, MAX_EPISODES).map((item) => {
@@ -221,7 +225,7 @@ export function parseFeedXml(xml: string): ParsedFeed {
 
         return {
             guid,
-            title: String(item.title || "Untitled Episode"),
+            title: decodeHtmlEntities(String(item.title || "Untitled Episode")),
             pubDate: parseRfc2822Date(String(item.pubDate || "")),
             duration,
             audioUrl,

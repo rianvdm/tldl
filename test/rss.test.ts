@@ -163,6 +163,24 @@ describe("parseFeedXml", () => {
         const invalidFeed = '<?xml version="1.0"?><rss></rss>';
         expect(() => parseFeedXml(invalidFeed)).toThrow(AppError);
     });
+
+    it("should decode HTML entities in episode and channel titles", () => {
+        // fast-xml-parser leaves numeric refs like &#8220; intact; without an
+        // explicit decode they get stored raw and render as literal "&#8220;".
+        const entityFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Caf&#233; &amp; Co</title>
+  <item>
+    <guid>ep-1</guid>
+    <title>How to Cultivate Your &#8220;Personal Power&#8221; as a Leader</title>
+    <pubDate>Mon, 15 Dec 2024 10:00:00 GMT</pubDate>
+    <enclosure url="https://example.com/a.mp3" type="audio/mpeg" length="1"/>
+  </item>
+</channel></rss>`;
+        const feed = parseFeedXml(entityFeed);
+        expect(feed.title).toBe("Café & Co");
+        expect(feed.episodes[0].title).toBe("How to Cultivate Your “Personal Power” as a Leader");
+    });
 });
 
 describe("findEpisodeInFeed", () => {
