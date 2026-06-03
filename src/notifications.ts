@@ -19,6 +19,8 @@ interface NotifyInput {
         summaryText?: string;
         submittedBy?: string;
         podcastWebsiteUrl?: string;
+        deck?: string;
+        pullQuote?: string;
     };
 }
 
@@ -49,6 +51,10 @@ export async function notifySubscribers(env: Env, input: NotifyInput): Promise<v
                 podcastName: podcast.name,
                 episodeTitle: input.episode.episodeTitle,
                 episodeDate,
+                // Conditional template sections — Mustachio treats "" as falsy,
+                // so a missing deck/pullQuote suppresses its row (#34).
+                episodeDeck: input.episode.deck ?? "",
+                pullQuote: input.episode.pullQuote ?? "",
                 summaryHtml,
                 summaryText: input.episode.summaryText ?? "",
                 episodeUrl: `${BASE_URL}/episode/${input.episode.id}`,

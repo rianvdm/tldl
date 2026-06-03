@@ -122,6 +122,43 @@ describe("notifySubscribers", () => {
         expect(body.TemplateModel.summaryHtml).toContain("<h1>");
     });
 
+    it("threads deck and pullQuote into the template model when present (#34)", async () => {
+        await seedMonitoredPodcast("p1");
+        const now = Math.floor(Date.now() / 1000);
+        await env.DB.prepare(
+            "INSERT INTO subscribers (id, email, confirmed_at, created_at, updated_at, status) VALUES (?, ?, ?, ?, ?, 'active')"
+        ).bind(40, "deck@example.com", now, now, now).run();
+        await env.DB.prepare("INSERT INTO subscriptions VALUES (?, ?, ?)").bind(40, "p1", now).run();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+            new Response(JSON.stringify({ MessageID: "x" }), { status: 200 })
+        );
+        await notifySubscribers(testEnv(), {
+            podcastId: "p1",
+            episode: fakeEpisode({ deck: "A sharp editorial deck.", pullQuote: "The one quote." }),
+        });
+        const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+        expect(body.TemplateModel.episodeDeck).toBe("A sharp editorial deck.");
+        expect(body.TemplateModel.pullQuote).toBe("The one quote.");
+    });
+
+    it("passes empty strings for missing deck/pullQuote so the sections collapse (#34)", async () => {
+        await seedMonitoredPodcast("p1");
+        const now = Math.floor(Date.now() / 1000);
+        await env.DB.prepare(
+            "INSERT INTO subscribers (id, email, confirmed_at, created_at, updated_at, status) VALUES (?, ?, ?, ?, ?, 'active')"
+        ).bind(41, "nodeck@example.com", now, now, now).run();
+        await env.DB.prepare("INSERT INTO subscriptions VALUES (?, ?, ?)").bind(41, "p1", now).run();
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+            new Response(JSON.stringify({ MessageID: "x" }), { status: 200 })
+        );
+        await notifySubscribers(testEnv(), { podcastId: "p1", episode: fakeEpisode() });
+        const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+        expect(body.TemplateModel.episodeDeck).toBe("");
+        expect(body.TemplateModel.pullQuote).toBe("");
+    });
+
     it("continues even if one recipient send fails", async () => {
         await seedMonitoredPodcast("p1");
         const now = Math.floor(Date.now() / 1000);
