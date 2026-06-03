@@ -19,12 +19,12 @@
 <tr><td style="padding:30px 28px 8px 28px;">
 <div style="color:#737373;font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:11px;line-height:1.4;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.12em;">{{podcastName}} &middot; {{episodeDate}}</div>
 <h1 style="margin:0 0 14px 0;font-family:Fraunces,Georgia,'Times New Roman',serif;font-size:28px;line-height:1.2;color:#0a0a0a;font-weight:600;letter-spacing:-0.01em;">{{episodeTitle}}</h1>
-{{#episodeDeck}}<p style="margin:0;font-family:Fraunces,Georgia,'Times New Roman',serif;font-style:italic;font-size:17px;line-height:1.45;color:#404040;font-weight:400;">{{episodeDeck}}</p>{{/episodeDeck}}
+{{#episodeDeck}}<p style="margin:0;font-family:Fraunces,Georgia,'Times New Roman',serif;font-style:italic;font-size:17px;line-height:1.45;color:#404040;font-weight:400;">{{.}}</p>{{/episodeDeck}}
 </td></tr>
 
 {{#pullQuote}}
 <tr><td style="padding:18px 28px 4px 28px;">
-<blockquote style="margin:0;padding:0 0 0 16px;border-left:3px solid #e63946;font-family:Fraunces,Georgia,'Times New Roman',serif;font-style:italic;font-size:18px;line-height:1.4;color:#1a1a1a;">{{pullQuote}}</blockquote>
+<blockquote style="margin:0;padding:0 0 0 16px;border-left:3px solid #e63946;font-family:Fraunces,Georgia,'Times New Roman',serif;font-style:italic;font-size:18px;line-height:1.4;color:#1a1a1a;">{{.}}</blockquote>
 </td></tr>
 {{/pullQuote}}
 

@@ -2,10 +2,10 @@ TL;DL — {{podcastName}} · {{episodeDate}}
 
 {{episodeTitle}}
 {{#episodeDeck}}
-{{episodeDeck}}
+{{.}}
 {{/episodeDeck}}
 {{#pullQuote}}
-"{{pullQuote}}"
+"{{.}}"
 {{/pullQuote}}
 {{summaryText}}
 
