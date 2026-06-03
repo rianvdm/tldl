@@ -48,8 +48,8 @@ vi.mock("../src/lib/job-status-do", () => ({
 
 // Import after mocking
 import { fetchAndParseFeed } from "../src/services/rss";
-import { getEpisodesByItunesId } from "../src/services/podcast-index";
-import { checkPodcastForNewEpisodes } from "../src/lib/monitor";
+import { getEpisodesByItunesId, lookupPodcastByItunesId } from "../src/services/podcast-index";
+import { checkPodcastForNewEpisodes, addPodcastToMonitoring } from "../src/lib/monitor";
 
 // ============================================================================
 // Test Environment Setup
@@ -239,5 +239,70 @@ describe("checkPodcastForNewEpisodes", () => {
         expect(result.queued).toContain("Brand New Episode");
         // RSS should have been called as fallback
         expect(fetchAndParseFeed).toHaveBeenCalled();
+    });
+});
+
+// ============================================================================
+// Tests — addPodcastToMonitoring seeding (#41)
+// ============================================================================
+
+describe("addPodcastToMonitoring seeding", () => {
+    beforeEach(async () => {
+        await clearMonitorData();
+        vi.clearAllMocks();
+    });
+
+    it("seeds the union of PI and RSS GUIDs when PI returns a sparse list (#41)", async () => {
+        vi.mocked(lookupPodcastByItunesId).mockResolvedValue({
+            title: "Sparse Podcast",
+            url: "https://example.com/feed.xml",
+            author: "Author",
+        } as never);
+
+        // PI returns only 1 of the 4 episodes actually in the feed.
+        vi.mocked(getEpisodesByItunesId).mockResolvedValue([
+            { id: 1, guid: "guid-pi-only", title: "PI ep", datePublished: 1, duration: 1, enclosureUrl: "x" },
+        ] as never);
+
+        // RSS feed carries the full set.
+        vi.mocked(fetchAndParseFeed).mockResolvedValue({
+            title: "Sparse Podcast",
+            episodes: [
+                { guid: "guid-pi-only", title: "a", pubDate: "2026-03-16T11:00:00.000Z", duration: 1, audioUrl: "x" },
+                { guid: "guid-rss-2", title: "b", pubDate: "2026-03-15T11:00:00.000Z", duration: 1, audioUrl: "x" },
+                { guid: "guid-rss-3", title: "c", pubDate: "2026-03-14T11:00:00.000Z", duration: 1, audioUrl: "x" },
+                { guid: "guid-rss-4", title: "d", pubDate: "2026-03-13T11:00:00.000Z", duration: 1, audioUrl: "x" },
+            ],
+        } as never);
+
+        // queueLatest=false → every GUID is marked processed (none held back).
+        const result = await addPodcastToMonitoring(getTestEnv(), "1809663079", "key-takeaways", false);
+        expect(result.success).toBe(true);
+        expect(fetchAndParseFeed).toHaveBeenCalled();
+
+        const processed = await getProcessedEpisodes(env.TLDL_DATA, "1809663079");
+        // Without the union, only guid-pi-only would be seeded and the next cron
+        // would transcribe guid-rss-2..4 as "new".
+        expect(processed).toContain("guid-pi-only");
+        expect(processed).toContain("guid-rss-2");
+        expect(processed).toContain("guid-rss-3");
+        expect(processed).toContain("guid-rss-4");
+    });
+
+    it("still seeds PI GUIDs when the RSS union fetch fails (#41)", async () => {
+        vi.mocked(lookupPodcastByItunesId).mockResolvedValue({
+            title: "P",
+            url: "https://example.com/feed.xml",
+        } as never);
+        vi.mocked(getEpisodesByItunesId).mockResolvedValue([
+            { id: 1, guid: "guid-pi-1", title: "x", datePublished: 1, duration: 1, enclosureUrl: "x" },
+        ] as never);
+        vi.mocked(fetchAndParseFeed).mockRejectedValue(new Error("rss http_429"));
+
+        const result = await addPodcastToMonitoring(getTestEnv(), "1809663079", "key-takeaways", false);
+        expect(result.success).toBe(true);
+
+        const processed = await getProcessedEpisodes(env.TLDL_DATA, "1809663079");
+        expect(processed).toContain("guid-pi-1");
     });
 });

@@ -124,6 +124,31 @@ export async function addPodcastToMonitoring(
             strategy: "podcast_index",
             episodeCount: piEpisodes.length,
         }));
+
+        // Union with the live RSS feed's GUIDs. PI sometimes returns a sparse
+        // episode list; without this, the RSS remainder is left unseeded and the
+        // next cron treats it as new, transcribing the whole back catalogue (#41).
+        try {
+            const feed = await fetchAndParseFeed(podcastInfo.url);
+            const rssGuids = feed.episodes.map(ep => ep.guid).filter(Boolean);
+            const piGuidCount = episodeGuids.length;
+            episodeGuids = [...new Set([...episodeGuids, ...rssGuids])];
+            console.log(JSON.stringify({
+                event: "monitor_add_seed_union",
+                podcastId,
+                piGuids: piGuidCount,
+                rssGuids: rssGuids.length,
+                unionGuids: episodeGuids.length,
+            }));
+        } catch (rssError) {
+            // RSS unavailable (429, timeout) — fall back to PI-only seed. Rare,
+            // and the next add/check can still reconcile.
+            console.log(JSON.stringify({
+                event: "monitor_add_seed_union_skipped",
+                podcastId,
+                reason: rssError instanceof Error ? rssError.message : String(rssError),
+            }));
+        }
     } catch (piError) {
         // Fallback to RSS
         console.log(JSON.stringify({
