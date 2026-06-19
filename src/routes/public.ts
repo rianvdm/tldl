@@ -505,6 +505,7 @@ function toRfc822Date(isoDate: string): string {
  */
 interface EpisodeWithSummary extends EpisodeIndexEntry {
     summaryText?: string;
+    deck?: string;
 }
 
 /**
@@ -518,11 +519,18 @@ async function enrichWithSummaries(
 ): Promise<EpisodeWithSummary[]> {
     return Promise.all(
         episodes.map(async (ep) => {
-            const summaries = await listSummariesForEpisode(kv, ep.id);
+            // The deck lives only on the full Episode record, not the index
+            // entry, so fetch it alongside the summary. Mirrors how the home
+            // page hydrates decks per row (see GET / in this file).
+            const [summaries, fullEpisode] = await Promise.all([
+                listSummariesForEpisode(kv, ep.id),
+                getEpisode(kv, ep.id),
+            ]);
             const summary = summaries.find(s => s.templateId === defaultTemplate) || summaries[0];
             return {
                 ...ep,
                 summaryText: summary?.text,
+                deck: fullEpisode?.deck,
             };
         })
     );
@@ -575,18 +583,26 @@ function buildRssFeed(
             ? ep.tags.map((tag) => `        <category>${escapeXml(tag)}</category>`).join("\n")
             : "";
         
-        // Build content with podcast info header and summary (converted to HTML)
+        // Build content with the deck (when present), podcast info header, and
+        // summary (converted to HTML). The deck sits above the summary as a
+        // standfirst, mirroring the web ordering.
         const podcastInfo = `${ep.podcastName} • ${formatDuration(ep.episodeDuration)}`;
+        const deckHtml = ep.deck ? `<p>${escapeHtml(ep.deck)}</p>` : "";
         const summaryHtml = ep.summaryText
-            ? `<p><strong>${escapeHtml(podcastInfo)}</strong></p>${renderMarkdown(ep.summaryText)}`
-            : `<p>${escapeHtml(podcastInfo)}</p>`;
+            ? `${deckHtml}<p><strong>${escapeHtml(podcastInfo)}</strong></p>${renderMarkdown(ep.summaryText)}`
+            : `${deckHtml}<p>${escapeHtml(podcastInfo)}</p>`;
 
         // Use content:encoded for full content (prevents RSS readers from
         // fetching the page and showing the transcript instead of the summary).
-        // description gets a plain-text excerpt for readers that don't support content:encoded.
-        const plainExcerpt = ep.summaryText
-            ? ep.summaryText.replace(/[#*_`\[\]]/g, "").substring(0, 500)
-            : podcastInfo;
+        // description gets a plain-text blurb for readers that don't support
+        // content:encoded — prefer the deck (already a clean 1-2 sentence
+        // summary), falling back to a stripped summary excerpt for pre-deck
+        // episodes.
+        const plainExcerpt = ep.deck
+            ? ep.deck
+            : ep.summaryText
+                ? ep.summaryText.replace(/[#*_`\[\]]/g, "").substring(0, 500)
+                : podcastInfo;
 
         return `    <item>
       <title>${escapeXml(`${ep.podcastName} - ${ep.episodeTitle}`)}</title>
