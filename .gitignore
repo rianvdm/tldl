@@ -42,3 +42,6 @@ coverage/
 
 # Worktrees
 .worktrees/
+
+# Model A/B harness output (scripts/ab-summary.ts)
+scripts/ab-results/
