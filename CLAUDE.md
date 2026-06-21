@@ -37,6 +37,13 @@ Clear all local state (KV + Durable Objects) and start fresh:
 rm -rf .wrangler/state && npx tsx scripts/seed-local-data.ts
 ```
 
+Compare summary models before adopting a new one (see [Model A/B harness](#model-ab-harness)):
+```bash
+npm run ab:summary                  # curated 6-episode sample, gpt-5.4 vs gpt-5.5
+npm run ab:summary -- --random 8    # 8 random prod transcripts
+npm run ab:summary -- --help
+```
+
 ## Architecture Overview
 
 TLDL is a Cloudflare Workers application that generates AI summaries of podcast episodes. It's an **admin-curated archive** — only admins can submit episodes and manage podcasts. Visitors browse, read, subscribe via RSS, or request a podcast to be added.
@@ -191,6 +198,22 @@ Defined in `src/lib/constants.ts`:
 - `key-takeaways` — Professional/craft podcasts (default)
 - `narrative-summary` — Story-driven content
 - `eli5` — Technical topics explained simply
+
+The summary model is a single constant: `MODEL` in `src/services/summarization.ts` (also `editorial-meta.ts` for deck/pull quote, `tag-generation.ts` for tags). Currently `gpt-5.4` via the OpenAI Responses API. Swapping it is a one-line change per service.
+
+### Model A/B harness
+
+`scripts/ab-summary.ts` (run via `npm run ab:summary`) compares summary models head-to-head before you change that constant. It runs the **exact production prompt** over **real prod transcripts** (pulled from KV) through two or more models with fresh, cache-bypassed calls, and writes a side-by-side markdown report with per-run **token usage, word count, latency, and cost**. Output lands in `scripts/ab-results/` (gitignored). It's not wired into the Worker — it's a standalone decision tool.
+
+```bash
+npm run ab:summary                              # curated 6-episode sample, gpt-5.4 vs gpt-5.5
+npm run ab:summary -- --random 8                # 8 random prod transcripts
+npm run ab:summary -- <episodeId> <episodeId>   # specific episodes
+npm run ab:summary -- --models gpt-5.4,gpt-5.6  # compare against a newly released model
+npm run ab:summary -- --template narrative-summary
+```
+
+When a new model ships, add its per-1M input/output price to the `PRICING` map at the top of the script (unknown models still run, cost just shows `n/a`), then run it against the curated sample. Watch the **Words** column — the `key-takeaways` template asks for 400–600 words, and length drift is a real differentiator (e.g. the 2026-06-21 run found gpt-5.5 cost ~2.3× more, ran ~2× slower, and overshot the word budget for marginal quality gains, so we stayed on gpt-5.4).
 
 ### Episode Tags
 
