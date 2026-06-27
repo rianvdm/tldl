@@ -199,6 +199,15 @@ Defined in `src/lib/constants.ts`:
 - `narrative-summary` — Story-driven content
 - `eli5` — Technical topics explained simply
 
+**Changing a podcast's template for upcoming episodes:** each monitored podcast has its own `templateId` frozen into its `monitored:{podcastId}` KV record at add-time. The 2h cron summarizes new episodes with `podcast.templateId` (`src/lib/monitor.ts`), **not** the global `DEFAULT_TEMPLATE` env var — flipping that env var only affects *newly added* podcasts / manual submits, never existing monitored ones. There is **no `/admin` UI to edit a template after adding** (the dropdown only exists on "Add Podcast"). To retarget upcoming episodes, edit the KV record directly:
+```bash
+NS=ee123158d5d54359b4257f8a1b678adf
+wrangler kv key get "monitored:<podcastId>" --namespace-id=$NS --remote   # read
+# change "templateId" to key-takeaways | narrative-summary | eli5, preserve all other fields, then:
+wrangler kv key put "monitored:<podcastId>" '<edited-json>' --namespace-id=$NS --remote
+```
+This is forward-only — already-processed episodes keep their existing `summary:{episodeId}:{templateId}` blobs; regenerate per-episode via `POST /admin/episodes/:id/summaries/:templateId` if you want them converted.
+
 The summary model is a single constant: `MODEL` in `src/services/summarization.ts` (also `editorial-meta.ts` for deck/pull quote, `tag-generation.ts` for tags). Currently `gpt-5.4` via the OpenAI Responses API. Swapping it is a one-line change per service.
 
 ### Model A/B harness
