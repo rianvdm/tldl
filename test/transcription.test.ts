@@ -1,5 +1,5 @@
 /**
- * Tests for Transcription Service (OpenAI gpt-4o-mini-transcribe)
+ * Tests for Transcription Service (OpenAI gpt-transcribe)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -135,9 +135,9 @@ describe("transcribeAudio", () => {
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
-            // Mock Whisper API
+            // Mock transcription API (gpt-transcribe returns JSON)
             .mockResolvedValueOnce(
-                new Response("This is the transcribed text.", { status: 200 })
+                new Response(JSON.stringify({ text: "This is the transcribed text.", languages: [{ code: "en" }] }), { status: 200 })
             );
 
         const result = await transcribeAudio(
@@ -178,25 +178,25 @@ describe("transcribeAudio", () => {
             .mockResolvedValueOnce(
                 new Response(mockChunkBuffer, { status: 206 })
             )
-            // Chunk 1 Whisper transcription
+            // Chunk 1 transcription
             .mockResolvedValueOnce(
-                new Response("This is the first part of the transcript.", { status: 200 })
+                new Response(JSON.stringify({ text: "This is the first part of the transcript." }), { status: 200 })
             )
             // Chunk 2 fetch
             .mockResolvedValueOnce(
                 new Response(mockChunkBuffer, { status: 206 })
             )
-            // Chunk 2 Whisper transcription
+            // Chunk 2 transcription
             .mockResolvedValueOnce(
-                new Response("And this is the second part.", { status: 200 })
+                new Response(JSON.stringify({ text: "And this is the second part." }), { status: 200 })
             )
             // Chunk 3 fetch
             .mockResolvedValueOnce(
                 new Response(new ArrayBuffer(1024 * 1024), { status: 206 })
             )
-            // Chunk 3 Whisper transcription
+            // Chunk 3 transcription
             .mockResolvedValueOnce(
-                new Response("And the third part.", { status: 200 })
+                new Response(JSON.stringify({ text: "And the third part." }), { status: 200 })
             );
 
         const result = await transcribeAudio(
@@ -211,7 +211,7 @@ describe("transcribeAudio", () => {
     });
 
     it("should return partial transcript when only the trailing chunk fails", async () => {
-        // 30MB → 3 chunks. Chunks 1+2 succeed; chunk 3 fails on gpt-4o-mini AND whisper-1 fallback.
+        // 30MB → 3 chunks. Chunks 1+2 succeed; chunk 3 fails on gpt-transcribe AND whisper-1 fallback.
         // Expect: no throw, result.partial === true, result.text contains the first two chunks.
         const largeSize = 30 * 1024 * 1024;
         const mockChunkBuffer = new ArrayBuffer(15 * 1024 * 1024);
@@ -231,13 +231,13 @@ describe("transcribeAudio", () => {
             .mockResolvedValueOnce(new Response(new ArrayBuffer(512), { status: 206 }))
             // chunk 1 fetch + transcribe (success)
             .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
-            .mockResolvedValueOnce(new Response("First chunk transcript.", { status: 200 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "First chunk transcript." }), { status: 200 }))
             // chunk 2 fetch + transcribe (success)
             .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
-            .mockResolvedValueOnce(new Response("Second chunk transcript.", { status: 200 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "Second chunk transcript." }), { status: 200 }))
             // chunk 3 (tail) fetch — succeeds at the byte level
             .mockResolvedValueOnce(new Response(new ArrayBuffer(1024 * 1024), { status: 206 }))
-            // chunk 3 gpt-4o-mini-transcribe → 400 corrupted (triggers fallback)
+            // chunk 3 gpt-transcribe → 400 corrupted (triggers fallback)
             .mockResolvedValueOnce(new Response(corruptedError, { status: 400 }))
             // chunk 3 whisper-1 fallback → 400 also (no retry on non-transient)
             .mockResolvedValueOnce(new Response(whisper1Error, { status: 400 }));
@@ -250,6 +250,7 @@ describe("transcribeAudio", () => {
         expect(result.source).toBe("openai");
         expect(result.partial).toBe(true);
         expect(result.partialReason).toContain("Final chunk 3/3");
+        expect(result.partialReason).toContain("gpt-transcribe");
         expect(result.partialReason).toContain("whisper-1");
         expect(result.text).toContain("First chunk");
         expect(result.text).toContain("Second chunk");
@@ -304,13 +305,13 @@ describe("transcribeAudio", () => {
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
-            // First Whisper call: rate limited
+            // First transcription call: rate limited
             .mockResolvedValueOnce(
                 new Response("Rate limited", { status: 429 })
             )
             // Retry: success
             .mockResolvedValueOnce(
-                new Response("Transcribed text after retry.", { status: 200 })
+                new Response(JSON.stringify({ text: "Transcribed text after retry." }), { status: 200 })
             );
 
         const result = await transcribeAudio(
@@ -339,13 +340,13 @@ describe("transcribeAudio", () => {
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
-            // First Whisper call: server error
+            // First transcription call: server error
             .mockResolvedValueOnce(
                 new Response("Server error", { status: 500 })
             )
             // Retry: success
             .mockResolvedValueOnce(
-                new Response("Transcribed after server error.", { status: 200 })
+                new Response(JSON.stringify({ text: "Transcribed after server error." }), { status: 200 })
             );
 
         const result = await transcribeAudio(
@@ -354,6 +355,120 @@ describe("transcribeAudio", () => {
         );
 
         expect(result.text).toBe("Transcribed after server error.");
+    });
+
+    it("should throw TRANSCRIPTION_FAILED when a 200 response has no text field", async () => {
+        const mockAudioBuffer = new ArrayBuffer(1024);
+
+        vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": "1024",
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 200 })
+            )
+            // 200 OK but the JSON body has no "text" string
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ languages: [{ code: "en" }] }), { status: 200 })
+            );
+
+        try {
+            await transcribeAudio("https://example.com/audio.mp3", "test-api-key");
+            expect.fail("Expected error");
+        } catch (error) {
+            expect(error).toBeInstanceOf(AppError);
+            expect((error as AppError).code).toBe(ERROR_CODES.TRANSCRIPTION_FAILED);
+            expect((error as AppError).message).toContain("response shape");
+        }
+    });
+
+    it("should throw TRANSCRIPTION_FAILED when a 200 response body is not JSON", async () => {
+        const mockAudioBuffer = new ArrayBuffer(1024);
+
+        vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": "1024",
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 200 })
+            )
+            // 200 OK but a plain-text body (not the JSON the model contract promises)
+            .mockResolvedValueOnce(
+                new Response("This is not JSON.", { status: 200 })
+            );
+
+        try {
+            await transcribeAudio("https://example.com/audio.mp3", "test-api-key");
+            expect.fail("Expected error");
+        } catch (error) {
+            expect(error).toBeInstanceOf(AppError);
+            expect((error as AppError).code).toBe(ERROR_CODES.TRANSCRIPTION_FAILED);
+        }
+    });
+
+    it("should fall back to whisper-1 (plain text) when gpt-transcribe rejects the file", async () => {
+        const mockAudioBuffer = new ArrayBuffer(1024);
+        const corruptedError = JSON.stringify({
+            error: { message: "Audio file might be corrupted or unsupported", type: "invalid_request_error", param: "file", code: "invalid_value" },
+        });
+
+        const fetchSpy = vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": "1024",
+                        "content-type": "audio/mpeg",
+                    },
+                })
+            )
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            .mockResolvedValueOnce(
+                new Response(mockAudioBuffer, { status: 200 })
+            )
+            // gpt-transcribe rejects the file → triggers whisper-1 fallback
+            .mockResolvedValueOnce(
+                new Response(corruptedError, { status: 400 })
+            )
+            // whisper-1 fallback succeeds with a plain-text body
+            .mockResolvedValueOnce(
+                new Response("Fallback transcript.", { status: 200 })
+            );
+
+        const result = await transcribeAudio(
+            "https://example.com/audio.mp3",
+            "test-api-key"
+        );
+
+        expect(result.text).toBe("Fallback transcript.");
+        expect(result.model).toBe("whisper-1");
+
+        // Primary call: new model, JSON response format
+        const primaryBody = (fetchSpy.mock.calls[3][1] as RequestInit).body as FormData;
+        expect(primaryBody.get("model")).toBe("gpt-transcribe");
+        expect(primaryBody.get("response_format")).toBe("json");
+
+        // Fallback call: whisper-1 keeps the plain-text response format
+        const fallbackBody = (fetchSpy.mock.calls[4][1] as RequestInit).body as FormData;
+        expect(fallbackBody.get("model")).toBe("whisper-1");
+        expect(fallbackBody.get("response_format")).toBe("text");
     });
 });
 
@@ -416,7 +531,7 @@ describe("getProviderConfig", () => {
         const config = getProviderConfig();
         expect(config.name).toBe("openai");
         expect(config.baseUrl).toBe("https://api.openai.com/v1/audio/transcriptions");
-        expect(config.model).toBe("gpt-4o-mini-transcribe");
+        expect(config.model).toBe("gpt-transcribe");
     });
 
     it("should return OpenAI config for undefined provider", () => {
@@ -427,7 +542,7 @@ describe("getProviderConfig", () => {
     it("should return OpenAI config for 'openai' provider", () => {
         const config = getProviderConfig("openai");
         expect(config.name).toBe("openai");
-        expect(config.model).toBe("gpt-4o-mini-transcribe");
+        expect(config.model).toBe("gpt-transcribe");
     });
 
     it("should return OpenAI config for any string (Groq removed)", () => {
@@ -464,7 +579,7 @@ describe("transcribeAudio with options object", () => {
                 new Response(mockAudioBuffer, { status: 200 })
             )
             .mockResolvedValueOnce(
-                new Response("OpenAI transcription.", { status: 200 })
+                new Response(JSON.stringify({ text: "OpenAI transcription." }), { status: 200 })
             );
 
         const result = await transcribeAudio(
@@ -475,9 +590,12 @@ describe("transcribeAudio with options object", () => {
         expect(result.text).toBe("OpenAI transcription.");
         expect(result.source).toBe("openai");
 
-        // Verify the Whisper API was called with OpenAI URL
+        // Verify the transcription API was called with OpenAI URL, the new model, and JSON response format
         const whisperCall = fetchSpy.mock.calls[3];
         expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
+        const requestBody = (whisperCall[1] as RequestInit).body as FormData;
+        expect(requestBody.get("model")).toBe("gpt-transcribe");
+        expect(requestBody.get("response_format")).toBe("json");
     });
 
     it("should default to OpenAI when provider is not specified in options", async () => {
@@ -499,7 +617,7 @@ describe("transcribeAudio with options object", () => {
                 new Response(mockAudioBuffer, { status: 200 })
             )
             .mockResolvedValueOnce(
-                new Response("Default provider transcription.", { status: 200 })
+                new Response(JSON.stringify({ text: "Default provider transcription." }), { status: 200 })
             );
 
         const result = await transcribeAudio(
@@ -534,7 +652,7 @@ describe("transcribeAudio with options object", () => {
                 new Response(mockAudioBuffer, { status: 200 })
             )
             .mockResolvedValueOnce(
-                new Response("Legacy call transcription.", { status: 200 })
+                new Response(JSON.stringify({ text: "Legacy call transcription." }), { status: 200 })
             );
 
         // Legacy call signature: transcribeAudio(url, apiKeyString)

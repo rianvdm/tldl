@@ -13,7 +13,7 @@ A curated archive of AI-powered podcast summaries. New podcasts and episodes are
 | Background Jobs | Cloudflare Queues |
 | Storage | Cloudflare KV + Durable Objects |
 | Podcast Data | [Podcast Index API](https://podcastindex.org) |
-| Transcription | OpenAI gpt-4o-mini-transcribe |
+| Transcription | OpenAI gpt-transcribe (whisper-1 fallback) |
 | Summarization | OpenAI GPT-5.4 |
 | Authentication | Cloudflare Access (admin-only) |
 | Spam Protection | Cloudflare Turnstile |
@@ -93,7 +93,7 @@ src/
 │   ├── apple-podcasts.ts    # Episode metadata lookup
 │   ├── podcast-index.ts     # Podcast Index API client
 │   ├── rss.ts               # RSS parsing + episode matching
-│   ├── transcription.ts     # OpenAI gpt-4o-mini-transcribe
+│   ├── transcription.ts     # OpenAI gpt-transcribe (whisper-1 fallback)
 │   ├── summarization.ts     # GPT-5.4 summary generation
 │   ├── tag-generation.ts    # GPT-5.4 tag generation
 │   └── postmark.ts          # Postmark email for request form
@@ -115,7 +115,7 @@ src/
 2. **Queue Consumer** (`src/queue/consumer.ts`): Background processing
    - Fetch episode metadata via Podcast Index + RSS
    - Check for existing transcript in RSS feed
-   - Transcribe with OpenAI gpt-4o-mini-transcribe (chunking for >25MB)
+   - Transcribe with OpenAI gpt-transcribe (chunking for >25MB)
    - Generate summary with GPT-5.4
    - Generate 2-3 tags with GPT-5.4 (non-critical)
    - Store in KV with 365-day TTL

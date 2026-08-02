@@ -1,8 +1,8 @@
 /**
- * Transcription service using OpenAI gpt-4o-mini-transcribe.
+ * Transcription service using OpenAI gpt-transcribe.
  * Handles audio validation and transcription for podcast episodes.
  * Supports chunked transcription for files over 25MB.
- * Automatically falls back to whisper-1 for files gpt-4o-mini-transcribe rejects.
+ * Automatically falls back to whisper-1 for files gpt-transcribe rejects.
  */
 
 import { AppError } from "../lib/errors";
@@ -172,7 +172,7 @@ interface ProviderConfig {
 const PROVIDER_CONFIGS = {
     openai: {
         baseUrl: "https://api.openai.com/v1/audio/transcriptions",
-        model: "gpt-4o-mini-transcribe",
+        model: "gpt-transcribe",
         name: "openai" as const,
     },
 };
@@ -438,8 +438,8 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
 
 /**
  * Call OpenAI transcription API.
- * Uses gpt-4o-mini-transcribe as primary model with automatic whisper-1 fallback.
- * 
+ * Uses gpt-transcribe as primary model with automatic whisper-1 fallback.
+ *
  * @param audioBuffer - Audio data as ArrayBuffer
  * @param apiKey - OpenAI API key
  * @param provider - Provider config
@@ -475,7 +475,7 @@ async function callWhisperApi(
     const audioBlob = new Blob([audioBuffer], { type: blobMime });
     formData.append("file", audioBlob, `audio.${ext}`);
     formData.append("model", provider.model);
-    formData.append("response_format", "text");
+    formData.append("response_format", "json");
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.WHISPER_API_MS);
@@ -556,15 +556,17 @@ async function callWhisperApi(
             })
         );
 
-        // Fallback: if gpt-4o-mini-transcribe rejects the file (corrupted/unsupported or input too large), retry with whisper-1
+        // Fallback: if gpt-transcribe rejects the file (corrupted/unsupported or input too large), retry with whisper-1.
+        // "corrupted or unsupported" verified live against gpt-transcribe (2026-08-02 pre-flight): the 400 wording is
+        // identical to the old model's. A missed fallback logs the full error in whisper_api_error with the string to add.
         const isCorruptedError = errorText.includes("corrupted or unsupported");
         const isInputTooLarge = errorText.includes("input_too_large") || errorText.includes("too large for this model");
-        const isGpt4oModel = provider.model === "gpt-4o-mini-transcribe";
+        const isPrimaryTranscribeModel = provider.model === "gpt-transcribe";
         let fallbackErrorMessage: string | null = null;
-        if (status === 400 && (isCorruptedError || isInputTooLarge) && isGpt4oModel) {
+        if (status === 400 && (isCorruptedError || isInputTooLarge) && isPrimaryTranscribeModel) {
             const reason = isInputTooLarge
-                ? "gpt-4o-mini-transcribe chunk too large, falling back to whisper-1"
-                : "gpt-4o-mini-transcribe rejected file, falling back to whisper-1";
+                ? `${provider.model} chunk too large, falling back to whisper-1`
+                : `${provider.model} rejected file, falling back to whisper-1`;
             console.log(
                 JSON.stringify({
                     event: "whisper_fallback_start",
@@ -672,8 +674,23 @@ async function callWhisperApi(
         })
     );
 
-    // Response format is plain text when response_format=text
-    return { text: await response.text(), model: provider.model };
+    // gpt-transcribe returns JSON: { "text": "...", "languages": [...] } (languages ignored)
+    let body: { text?: unknown };
+    try {
+        body = (await response.json()) as { text?: unknown };
+    } catch {
+        throw new AppError(
+            ERROR_CODES.TRANSCRIPTION_FAILED,
+            `Unexpected non-JSON transcription response from ${provider.model}`,
+        );
+    }
+    if (typeof body.text !== "string") {
+        throw new AppError(
+            ERROR_CODES.TRANSCRIPTION_FAILED,
+            `Unexpected transcription response shape from ${provider.model}`,
+        );
+    }
+    return { text: body.text, model: provider.model };
 }
 
 /**
@@ -691,7 +708,7 @@ export interface TranscribeOptions {
 }
 
 /**
- * Transcribe audio from URL using OpenAI gpt-4o-mini-transcribe.
+ * Transcribe audio from URL using OpenAI gpt-transcribe.
  * Automatically falls back to whisper-1 for files the primary model rejects.
  * Automatically handles large files by chunking them into smaller segments.
  * 
@@ -1004,7 +1021,7 @@ async function transcribeWithChunking(
             // accept a partial transcript rather than failing the whole episode.
             // The tail chunk is typically only a few minutes of audio (often outro/credits)
             // and certain podcast files have non-decodable trailers (ID3v1 footers,
-            // ad markers, etc.) that both gpt-4o-mini-transcribe and whisper-1 reject.
+            // ad markers, etc.) that both the primary model and whisper-1 reject.
             const isLastChunk = i === chunks.length - 1;
             if (isLastChunk && transcriptions.length > 0 && totalChunks > 1) {
                 tailChunkSkipped = { chunkIndex: i + 1, error: errorMessage };
@@ -1050,7 +1067,7 @@ async function transcribeWithChunking(
         model: usedFallbackModel || provider.model,
         ...(tailChunkSkipped && {
             partial: true,
-            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both gpt-4o-mini-transcribe and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the audio from the last chunk.`,
+            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both ${provider.model} and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the audio from the last chunk.`,
         }),
     };
 }

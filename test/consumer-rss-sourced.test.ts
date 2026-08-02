@@ -24,7 +24,7 @@ vi.mock("../src/services/transcription", () => ({
     transcribeAudio: vi.fn(),
     getProviderConfig: vi.fn().mockReturnValue({
         baseUrl: "https://api.openai.com/v1/audio/transcriptions",
-        model: "gpt-4o-mini-transcribe",
+        model: "gpt-transcribe",
         name: "openai",
     }),
 }));
@@ -113,7 +113,7 @@ describe("consumer: rssSourced branch", () => {
         vi.mocked(transcription.transcribeAudio).mockResolvedValue({
             text: "transcript body here. ".repeat(20),
             source: "openai",
-            model: "gpt-4o-mini-transcribe",
+            model: "gpt-transcribe",
         });
 
         vi.mocked(summarization.generateSummary).mockResolvedValue({

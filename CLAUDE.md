@@ -56,7 +56,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 2. **Queue Consumer** (`src/queue/consumer.ts`): Processes jobs in background:
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
-   - Falls back to OpenAI gpt-4o-mini-transcribe for transcription (with chunking for >25MB files)
+   - Falls back to OpenAI gpt-transcribe for transcription (with chunking for >25MB files; whisper-1 fallback for rejected files)
    - Generates summary via OpenAI GPT-5.4
    - Generates 2-3 AI tags using GPT-5.4 (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
@@ -296,7 +296,7 @@ src/
 │   ├── apple-podcasts.ts # iTunes API + page scraping
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
-│   ├── transcription.ts  # OpenAI gpt-4o-mini-transcribe
+│   ├── transcription.ts  # OpenAI gpt-transcribe (whisper-1 fallback)
 │   ├── summarization.ts  # OpenAI GPT-5.4
 │   ├── tag-generation.ts # OpenAI GPT-5.4 for episode tags
 │   └── postmark.ts       # Postmark email for request form
