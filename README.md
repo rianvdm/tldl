@@ -14,7 +14,7 @@ A curated archive of AI-powered podcast summaries. New podcasts and episodes are
 | Storage | Cloudflare KV + Durable Objects |
 | Podcast Data | [Podcast Index API](https://podcastindex.org) |
 | Transcription | OpenAI gpt-transcribe (whisper-1 fallback) |
-| Summarization | OpenAI GPT-5.4 |
+| Summarization | OpenAI gpt-5.6-terra (tags: gpt-5.6-luna) |
 | Authentication | Cloudflare Access (admin-only) |
 | Spam Protection | Cloudflare Turnstile |
 | Notifications | Discord webhooks |
@@ -94,8 +94,8 @@ src/
 │   ├── podcast-index.ts     # Podcast Index API client
 │   ├── rss.ts               # RSS parsing + episode matching
 │   ├── transcription.ts     # OpenAI gpt-transcribe (whisper-1 fallback)
-│   ├── summarization.ts     # GPT-5.4 summary generation
-│   ├── tag-generation.ts    # GPT-5.4 tag generation
+│   ├── summarization.ts     # gpt-5.6-terra summary generation
+│   ├── tag-generation.ts    # gpt-5.6-luna tag generation
 │   └── postmark.ts          # Postmark email for request form
 ├── routes/
 │   ├── public.ts            # Public pages + request form
@@ -116,8 +116,8 @@ src/
    - Fetch episode metadata via Podcast Index + RSS
    - Check for existing transcript in RSS feed
    - Transcribe with OpenAI gpt-transcribe (chunking for >25MB)
-   - Generate summary with GPT-5.4
-   - Generate 2-3 tags with GPT-5.4 (non-critical)
+   - Generate summary with gpt-5.6-terra
+   - Generate 2-3 tags with gpt-5.6-luna (non-critical)
    - Store in KV with 365-day TTL
    - Log to activity feed, notify Discord on failure
 3. **View** (`GET /episode/:id`): Serve cached episode with summary

@@ -564,7 +564,7 @@ describe("Queue Consumer - process_manual", () => {
 
         vi.mocked(generateEpisodeTags).mockResolvedValue({
             tags: ["business", "ai"],
-            model: "gpt-5.4",
+            model: "gpt-5.6-terra",
         });
 
         const job = createSampleJob();

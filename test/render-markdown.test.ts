@@ -31,7 +31,7 @@ function createTestSummary(overrides: Partial<Summary> = {}): Summary {
         episodeId: "xss_test_episode",
         templateId: "key-takeaways",
         text: "# Summary\n\nDefault summary text.",
-        model: "gpt-5.4",
+        model: "gpt-5.6-terra",
         createdAt: new Date().toISOString(),
         ...overrides,
     };

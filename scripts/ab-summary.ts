@@ -43,7 +43,7 @@ const PRICING: Record<string, { in: number; out: number }> = {
     "gpt-5.6-sol": { in: 5.0, out: 30 },
 };
 
-const DEFAULT_MODELS = ["gpt-5.4", "gpt-5.5"];
+const DEFAULT_MODELS = ["gpt-5.6-terra", "gpt-5.4"];
 const DEFAULT_TEMPLATE = "key-takeaways"; // prod default (wrangler.toml DEFAULT_TEMPLATE)
 
 // Curated default sample: 6 episodes across 6 distinct shows, mixed lengths.

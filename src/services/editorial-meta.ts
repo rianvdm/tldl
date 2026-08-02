@@ -31,7 +31,7 @@ interface ResponsesApiResponse {
 }
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const MODEL = "gpt-5.4";
+const MODEL = "gpt-5.6-terra";
 
 const PROMPT = `You are writing for a weekly newspaper that summarizes podcast episodes.
 

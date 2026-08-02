@@ -1,5 +1,5 @@
 /**
- * Tests for Summarization Service (GPT-5.2 Responses API)
+ * Tests for Summarization Service (OpenAI Responses API)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -109,7 +109,7 @@ describe("generateSummary", () => {
             });
 
             const body = JSON.parse(options?.body as string);
-            expect(body.model).toBe("gpt-5.4");
+            expect(body.model).toBe("gpt-5.6-terra");
             expect(body.input).toBe("Test transcript");
             expect(body.instructions).toContain("Analyze this podcast transcript");
         });

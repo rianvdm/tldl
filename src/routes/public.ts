@@ -310,7 +310,7 @@ publicRoutes.get("/about", async (c) => {
     <li><a href="https://developers.cloudflare.com/durable-objects/" target="_blank" rel="noopener noreferrer">Durable Objects</a> — Strongly consistent coordination</li>
     <li><a href="https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/" target="_blank" rel="noopener noreferrer">Cloudflare Access</a> — Zero Trust authentication</li>
 </ul>
-<p>Transcription powered by <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a>'s gpt-transcribe model. Summarization and tagging by GPT-5.4.</p>
+<p>Transcription powered by <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a>'s gpt-transcribe model. Summarization and tagging by GPT-5.6.</p>
 
 <h2>Credits</h2>
 <p>TL;DL was created by <a href="https://elezea.com" target="_blank" rel="noopener noreferrer">Rian van der Merwe</a>.</p>

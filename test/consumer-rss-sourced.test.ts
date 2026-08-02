@@ -118,12 +118,12 @@ describe("consumer: rssSourced branch", () => {
 
         vi.mocked(summarization.generateSummary).mockResolvedValue({
             text: "summary",
-            model: "gpt-5.4",
+            model: "gpt-5.6-terra",
         });
 
         vi.mocked(tagGen.generateEpisodeTags).mockResolvedValue({
             tags: ["ai"],
-            model: "gpt-5.4",
+            model: "gpt-5.6-terra",
         });
 
         const message: QueueMessage = {

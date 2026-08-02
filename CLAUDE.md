@@ -39,7 +39,7 @@ rm -rf .wrangler/state && npx tsx scripts/seed-local-data.ts
 
 Compare summary models before adopting a new one (see [Model A/B harness](#model-ab-harness)):
 ```bash
-npm run ab:summary                  # curated 6-episode sample, gpt-5.4 vs gpt-5.5
+npm run ab:summary                  # curated 6-episode sample, gpt-5.6-terra vs gpt-5.4
 npm run ab:summary -- --random 8    # 8 random prod transcripts
 npm run ab:summary -- --help
 ```
@@ -57,8 +57,8 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI gpt-transcribe for transcription (with chunking for >25MB files; whisper-1 fallback for rejected files)
-   - Generates summary via OpenAI GPT-5.4
-   - Generates 2-3 AI tags using GPT-5.4 (non-critical: continues if fails)
+   - Generates summary via OpenAI gpt-5.6-terra
+   - Generates 2-3 AI tags using gpt-5.6-luna (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
    - Logs completion/failure to activity log
    - Sends Discord notification on failure
@@ -80,7 +80,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 - **Discord notifications**: `src/lib/discord.ts` sends webhook notifications on job failures and monitoring errors. No-op when `DISCORD_WEBHOOK_URL` is not set.
 - **Postmark email**: `src/services/postmark.ts` sends email for the "Request a Podcast" form. No-op when `POSTMARK_API_KEY` is not set.
 - **Styling**: All CSS is in `src/lib/styles.ts` (not a `.css` file) — Cloudflare Workers can't read from the filesystem, so styles are embedded in TypeScript
-- **Episode Tags**: AI-generated using GPT-5.4 Responses API during queue processing (2-3 tags per episode)
+- **Episode Tags**: AI-generated using gpt-5.6-luna via the Responses API during queue processing (2-3 tags per episode)
   - Tags stored inline in both Episode and EpisodeIndexEntry for efficient filtering
   - Predefined tag list in `src/lib/constants.ts` (EPISODE_TAGS)
   - Tag generation is non-critical: empty tags don't fail jobs
@@ -208,17 +208,17 @@ wrangler kv key put "monitored:<podcastId>" '<edited-json>' --namespace-id=$NS -
 ```
 This is forward-only — already-processed episodes keep their existing `summary:{episodeId}:{templateId}` blobs; regenerate per-episode via `POST /admin/episodes/:id/summaries/:templateId` if you want them converted.
 
-The summary model is a single constant: `MODEL` in `src/services/summarization.ts` (also `editorial-meta.ts` for deck/pull quote, `tag-generation.ts` for tags). Currently `gpt-5.4` via the OpenAI Responses API. Swapping it is a one-line change per service.
+The summary model is a single constant: `MODEL` in `src/services/summarization.ts` (also `editorial-meta.ts` for deck/pull quote, `tag-generation.ts` for tags). Currently `gpt-5.6-terra` for summaries + editorial meta and `gpt-5.6-luna` for tags, via the OpenAI Responses API. Swapping is a one-line change per service.
 
 ### Model A/B harness
 
 `scripts/ab-summary.ts` (run via `npm run ab:summary`) compares summary models head-to-head before you change that constant. It runs the **exact production prompt** over **real prod transcripts** (pulled from KV) through two or more models with fresh, cache-bypassed calls, and writes a side-by-side markdown report with per-run **token usage, word count, latency, and cost**. Output lands in `scripts/ab-results/` (gitignored). It's not wired into the Worker — it's a standalone decision tool.
 
 ```bash
-npm run ab:summary                              # curated 6-episode sample, gpt-5.4 vs gpt-5.5
+npm run ab:summary                              # curated 6-episode sample, gpt-5.6-terra vs gpt-5.4
 npm run ab:summary -- --random 8                # 8 random prod transcripts
 npm run ab:summary -- <episodeId> <episodeId>   # specific episodes
-npm run ab:summary -- --models gpt-5.4,gpt-5.6  # compare against a newly released model
+npm run ab:summary -- --models gpt-5.6-terra,gpt-6  # compare against a newly released model
 npm run ab:summary -- --template narrative-summary
 ```
 
@@ -297,8 +297,8 @@ src/
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI gpt-transcribe (whisper-1 fallback)
-│   ├── summarization.ts  # OpenAI GPT-5.4
-│   ├── tag-generation.ts # OpenAI GPT-5.4 for episode tags
+│   ├── summarization.ts  # OpenAI gpt-5.6-terra
+│   ├── tag-generation.ts # OpenAI gpt-5.6-luna for episode tags
 │   └── postmark.ts       # Postmark email for request form
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages + request form
@@ -416,7 +416,7 @@ Worth building if it happens more than 2-3 times: a `POST /admin/episodes/{podca
 
 ## Important Notes
 
-- **GPT-5.4 exists**: The project uses OpenAI GPT-5.4 for both summarization and tag generation. This is a real model — do not change references to GPT-4o or other models unless explicitly instructed.
+- **GPT-5.6 exists**: The project uses OpenAI gpt-5.6-terra for summarization/editorial meta and gpt-5.6-luna for tags. These are real models (5.6 ships as luna/sol/terra tiers) — do not change references to GPT-4o or other models unless explicitly instructed.
 - **Admin-only model**: There are no "regular users." Only admins can submit episodes. Visitors can request podcasts via `/request`.
 - **No auth on public pages**: Public pages have zero auth detection, no login buttons, no client-side auth scripts.
 - **Discord and Postmark are optional**: Both degrade gracefully when their secrets are not configured. The app works without them.

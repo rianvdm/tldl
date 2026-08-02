@@ -92,7 +92,7 @@ describe("Integration: Manual transcript submission — full flow", () => {
         });
         vi.mocked(generateEpisodeTags).mockResolvedValue({
             tags: ["business"],
-            model: "gpt-5.4",
+            model: "gpt-5.6-terra",
         });
 
         const transcriptText = "A".repeat(500) + " full end to end test body";

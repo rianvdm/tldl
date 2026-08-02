@@ -1,7 +1,7 @@
 /**
  * Tag Generation Service
  *
- * Generates AI-powered episode tags using GPT-5.4 based on
+ * Generates AI-powered episode tags using gpt-5.6-luna based on
  * the episode transcript and summary.
  */
 
@@ -40,7 +40,7 @@ interface ResponsesApiResponse {
 // ============================================================================
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const MODEL = "gpt-5.4";
+const MODEL = "gpt-5.6-luna";
 
 /**
  * Build the tag generation prompt
@@ -90,7 +90,7 @@ export async function generateEpisodeTags(
         content += `\n\nTRANSCRIPT (excerpt):\n${transcriptSample}`;
     }
 
-    // Call GPT-5.4 with retry logic
+    // Call the tag model with retry logic
     const result = await withRetry(
         () => callTagGenerationApi(content, openaiApiKey),
         {
