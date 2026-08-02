@@ -63,7 +63,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
    - Logs completion/failure to activity log
    - Sends Discord notification on failure
 3. **View** (`GET /episode/:id`): Serves cached episodes with summary, transcript, and tags
-4. **Monitoring** (cron every 8h): Checks monitored podcasts for new episodes, queues them automatically
+4. **Monitoring** (cron every 2h): Checks monitored podcasts for new episodes, queues them automatically
 
 ### Key Components
 
@@ -185,7 +185,7 @@ All debug routes return 403 in production (`ENVIRONMENT !== "development"`).
 
 Automatically monitors podcasts for new episodes and queues them for processing:
 - **Core logic**: `src/lib/monitor.ts` — Functions for adding podcasts, checking for new episodes
-- **Cron trigger**: Runs every 8 hours (configured in `wrangler.toml`)
+- **Cron trigger**: Runs every 2 hours (`0 */2 * * *`, configured in `wrangler.toml`)
 - **Stale job sweep**: Runs at the start of each cron cycle, marks jobs >20 min as failed
 - **Admin UI**: `/admin/podcasts` — Add/remove podcasts, configure settings, manual check
 - **Episode deduplication**: Tracks processed episode GUIDs per podcast to avoid re-processing
@@ -265,7 +265,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 
 ## Testing
 
-Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 305+ tests covering:
+Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 498 tests (as of 2026-08-02) covering:
 - Unit tests for all services and admin routes (`test/admin.test.ts`, `test/discord.test.ts`, etc.)
 - Integration tests in `test/integration/full-flow.test.ts` (CRUD lifecycle, access control, request form)
 - Note: Tests involving Durable Objects may show "Isolated storage" warnings (infrastructure issue in vitest-pool-workers, not failures)
@@ -317,6 +317,7 @@ src/
 - **Large audio files**: Automatically chunked at MP3 frame boundaries (>25MB)
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
 - **Stuck jobs**: Jobs running >20 minutes are auto-detected and marked as failed by `listActiveJobsWithDO()` (runs on home page render and in cron handler). Discord notification is sent.
+- **Job "transcribing" forever / `updatedAt` jumping by exactly +15:00**: Queue consumer invocations have a hard 15-minute wall clock (Cloudflare platform limit). A long episode whose every chunk falls back to whisper-1 (~90–150s/chunk — happens when the primary model 400s the file as "corrupted or unsupported"; whisper-1 usually decodes it fine) gets killed (`exceededWallTime`) and the retry restarts from chunk 1, so it never converges (#48 tracks the fix: per-chunk KV cache). Killed invocations do NOT persist their console logs. Manual rescue: run `transcribeAudio` locally via `npx tsx` (no wall clock), write the `transcript:{episodeId}` record to KV, then requeue via the runbook below — the consumer finds the transcript and skips straight to summarizing.
 - **Invalid tags showing**: After removing tags from EPISODE_TAGS, run "Cleanup Invalid Tags" from admin tools to remove them from existing episodes
 - **Admin endpoints 401/403**: Admin endpoints must be under `/admin` or `/admin/*` to work with Cloudflare Access. Both paths must be configured in the Access application.
 - **Debug routes in production**: All `/debug/*` routes return 403 in production. Use admin tools instead.
