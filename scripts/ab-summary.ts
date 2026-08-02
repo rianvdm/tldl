@@ -38,6 +38,9 @@ const PRICING: Record<string, { in: number; out: number }> = {
     "gpt-5.4": { in: 2.5, out: 15 },
     "gpt-5.5": { in: 5.0, out: 30 },
     "gpt-5.5-pro": { in: 30, out: 180 },
+    "gpt-5.6-luna": { in: 0.2, out: 1.2 },
+    "gpt-5.6-terra": { in: 2.0, out: 12 },
+    "gpt-5.6-sol": { in: 5.0, out: 30 },
 };
 
 const DEFAULT_MODELS = ["gpt-5.4", "gpt-5.5"];
