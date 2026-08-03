@@ -35,6 +35,35 @@ describe("generateEpisodeTags", () => {
         vi.restoreAllMocks();
     });
 
+    it("should return tags when a reasoning item precedes the message", async () => {
+        // gpt-5.6-luna emits output = ["reasoning", "message"] when it thinks.
+        // Indexing output[0] silently yielded zero tags on every episode.
+        vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+            new Response(
+                JSON.stringify({
+                    id: "resp_123",
+                    model: "gpt-5.6-luna",
+                    output: [
+                        { type: "reasoning", summary: [], content: [] },
+                        {
+                            type: "message",
+                            content: [{ type: "output_text", text: "ai, product" }],
+                        },
+                    ],
+                }),
+                { status: 200 }
+            )
+        );
+
+        const result = await generateEpisodeTags(
+            "A summary about AI and product management.",
+            undefined,
+            "test-api-key"
+        );
+
+        expect(result.tags).toEqual(["ai", "product"]);
+    });
+
     it("should send correct request format and model to Responses API", async () => {
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
             new Response(JSON.stringify(createMockResponse("ai, product")), {

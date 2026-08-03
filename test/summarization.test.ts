@@ -56,6 +56,37 @@ describe("generateSummary", () => {
             expect(result.model).toBe("gpt-5.2");
         });
 
+        it("should generate summary when a reasoning item precedes the message", async () => {
+            // gpt-5.6-terra emits output = ["reasoning", "message"] when it thinks,
+            // which happens on real transcripts but not on trivial inputs.
+            const mockSummary = "## Key Takeaways\n\n1. First insight";
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        id: "resp_123",
+                        model: "gpt-5.6-terra",
+                        output: [
+                            { type: "reasoning", summary: [], content: [] },
+                            {
+                                type: "message",
+                                content: [{ type: "output_text", text: mockSummary }],
+                            },
+                        ],
+                    }),
+                    { status: 200 }
+                )
+            );
+
+            const result = await generateSummary(
+                "This is a test transcript about productivity.",
+                "key-takeaways",
+                "test-api-key"
+            );
+
+            expect(result.text).toBe(mockSummary);
+            expect(result.model).toBe("gpt-5.6-terra");
+        });
+
         it("should generate summary with narrative-summary template", async () => {
             const mockSummary = "The episode tells the story of...";
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(

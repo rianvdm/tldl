@@ -8,6 +8,7 @@
 import { AppError } from "../lib/errors";
 import { ERROR_CODES, getTemplate, isValidTemplateId } from "../lib/constants";
 import { withRetry, isServerError } from "../lib/retry";
+import { extractOutputText } from "../lib/openai-response";
 
 // ============================================================================
 // Types
@@ -170,7 +171,7 @@ async function callResponsesApi(
     }
 
     // Extract text from response
-    const text = extractTextFromResponse(data);
+    const text = extractOutputText(data);
     if (!text) {
         throw new AppError(
             ERROR_CODES.SUMMARIZATION_FAILED,
@@ -184,39 +185,3 @@ async function callResponsesApi(
     };
 }
 
-/**
- * Extract the text content from a Responses API response.
- *
- * Response structure:
- * {
- *   output: [{
- *     type: "message",
- *     role: "assistant",
- *     content: [{
- *       type: "output_text",  // Note: "output_text" not "text"
- *       text: "..."
- *     }]
- *   }]
- * }
- *
- * @internal
- */
-function extractTextFromResponse(data: ResponsesApiResponse): string | null {
-    try {
-        // Navigate: output[0].content[0].text
-        const output = data.output?.[0];
-        if (!output || output.type !== "message") {
-            return null;
-        }
-
-        const content = output.content?.[0];
-        // The Responses API uses "output_text" as the content type
-        if (!content || content.type !== "output_text") {
-            return null;
-        }
-
-        return content.text || null;
-    } catch {
-        return null;
-    }
-}

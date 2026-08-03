@@ -7,6 +7,7 @@
 import { AppError } from "../lib/errors";
 import { ERROR_CODES } from "../lib/constants";
 import { withRetry, isServerError } from "../lib/retry";
+import { extractOutputText } from "../lib/openai-response";
 
 export interface EditorialMeta {
     deck: string;
@@ -144,7 +145,7 @@ async function callApi(transcript: string, apiKey: string): Promise<EditorialMet
         );
     }
 
-    const text = data.output?.[0]?.content?.[0]?.text;
+    const text = extractOutputText(data);
     if (!text) {
         throw new AppError(
             ERROR_CODES.SUMMARIZATION_FAILED,

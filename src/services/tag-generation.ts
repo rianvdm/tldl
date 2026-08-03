@@ -8,6 +8,7 @@
 import { AppError } from "../lib/errors";
 import { ERROR_CODES, getValidTags } from "../lib/constants";
 import { withRetry, isServerError } from "../lib/retry";
+import { extractOutputText } from "../lib/openai-response";
 
 // ============================================================================
 // Types
@@ -175,7 +176,7 @@ async function callTagGenerationApi(
     }
 
     // Extract and parse tags
-    const text = extractTextFromResponse(data);
+    const text = extractOutputText(data);
     if (!text) {
         // Non-critical - return empty array rather than failing
         console.warn("Tag generation returned empty response, using default tags");
@@ -191,27 +192,6 @@ async function callTagGenerationApi(
         tags,
         model: data.model || MODEL,
     };
-}
-
-/**
- * Extract text from Responses API response
- */
-function extractTextFromResponse(data: ResponsesApiResponse): string | null {
-    try {
-        const output = data.output?.[0];
-        if (!output || output.type !== "message") {
-            return null;
-        }
-
-        const content = output.content?.[0];
-        if (!content || content.type !== "output_text") {
-            return null;
-        }
-
-        return content.text || null;
-    } catch {
-        return null;
-    }
 }
 
 /**
