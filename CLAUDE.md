@@ -265,7 +265,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 
 ## Testing
 
-Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 498 tests (as of 2026-08-02) covering:
+Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 512 tests (as of 2026-08-03) covering:
 - Unit tests for all services and admin routes (`test/admin.test.ts`, `test/discord.test.ts`, etc.)
 - Integration tests in `test/integration/full-flow.test.ts` (CRUD lifecycle, access control, request form)
 - Note: Tests involving Durable Objects may show "Isolated storage" warnings (infrastructure issue in vitest-pool-workers, not failures)
@@ -318,6 +318,7 @@ src/
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
 - **Stuck jobs**: Jobs running >20 minutes are auto-detected and marked as failed by `listActiveJobsWithDO()` (runs on home page render and in cron handler). Discord notification is sent.
 - **Job "transcribing" forever / `updatedAt` jumping by exactly +15:00**: Queue consumer invocations have a hard 15-minute wall clock (Cloudflare platform limit). A long episode whose every chunk falls back to whisper-1 (~90–150s/chunk — happens when the primary model 400s the file as "corrupted or unsupported"; whisper-1 usually decodes it fine) gets killed (`exceededWallTime`) and the retry restarts from chunk 1, so it never converges (#48 tracks the fix: per-chunk KV cache). Killed invocations do NOT persist their console logs. Manual rescue: run `transcribeAudio` locally via `npx tsx` (no wall clock), write the `transcript:{episodeId}` record to KV, then requeue via the runbook below — the consumer finds the transcript and skips straight to summarizing.
+- **`OpenAI API returned empty or malformed response` / tags silently empty**: The Responses API does **not** put the assistant message at `output[0]` — reasoning-capable models (the gpt-5.6 tiers) emit a `reasoning` item first, so `output` is `["reasoning", "message"]`. Always extract via `extractOutputText()` in `src/lib/openai-response.ts` (searches `output` for the `message` item, then its content for `output_text`); never index `output[0]`. The behavior is **adaptive** — a short prompt returns `["message"]` but a real transcript returns `["reasoning", "message"]` — so a quick probe won't reproduce it. Broke every cron episode on 2026-08-03 after the gpt-5.4 → gpt-5.6 swap (fixed in `49bb738`); the same bug made tag generation return `[]` on every episode via its non-critical path. **Before adopting any new model, dump `data.output.map(o => o.type)` against a real production-sized transcript, and make sure the A/B harness and any test fixtures use the same extractor production does** (#50).
 - **Invalid tags showing**: After removing tags from EPISODE_TAGS, run "Cleanup Invalid Tags" from admin tools to remove them from existing episodes
 - **Admin endpoints 401/403**: Admin endpoints must be under `/admin` or `/admin/*` to work with Cloudflare Access. Both paths must be configured in the Access application.
 - **Debug routes in production**: All `/debug/*` routes return 403 in production. Use admin tools instead.
