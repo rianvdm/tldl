@@ -336,10 +336,57 @@ The cron's RSS path has **two independent dedup signals** that both need to be c
 
 The episode KV record (`episode:{episodeId}`) is **not** an issue when transcription failed — `saveEpisode` only fires on success, so there's nothing to clean up there.
 
+### First: find out why it failed
+
+A failure notification gives you an episode ID and nothing else. Before requeuing, read the logs — a rate-limited episode and a wall-time-killed one look identical from KV, and requeuing a rate-limited one just burns another 5 retries. Workers Logs are retained a few days, so do this promptly. Query the observability API (`observability.enabled` is on at `head_sampling_rate: 1`):
+
+```javascript
+// via the cloudflare MCP execute tool, or POST with a scoped API token
+cloudflare.request({
+  method: "POST",
+  path: `/accounts/${accountId}/workers/observability/telemetry/query`,
+  body: {
+    queryId: "tldl-fail-probe",
+    timeframe: { from: <epochMs>, to: <epochMs> },
+    limit: 500,
+    parameters: {
+      datasets: ["cloudflare-workers"],
+      filters: [{ key: "$metadata.service", operation: "eq", value: "tldl", type: "string" }],
+    },
+    view: "events",
+  },
+})
+// Each event: {timestamp, source.level, source.message, $workers.outcome, $workers.event...}
+// Filter out `GET https://tldl-pod.com/...` and `https://do/job` noise, then read what's left.
+```
+
+Read `$workers.outcome` and `source.message` together — `exceededWallTime` shows up in **both** failure modes, so it does not identify the cause on its own. `validation_rate_limited_throw` means the CDN 429'd you; its absence with repeated +15:00 gaps means the wall clock. Note the account ID is the Elezea one, `db8ef1f4b492e4727e7fab0e12907871`.
+
 ### Steps
 
 ```bash
-# 1. Find the failed episode's RSS GUID — fetch the feed and grep by title
+# 1a. Map the episode ID back to its feed GUID.
+# Cron-queued IDs are {podcastId}_rss_{first 10 hex of SHA256(guid)} — see
+# src/lib/rss-episode-id.ts. You can't reverse a hash, so hash every GUID in the
+# feed and match. This is the path to use when all you have is the episode ID.
+python3 - <<'PY'
+import hashlib, re, urllib.request
+TARGET_HASH = "51f2d1bae2"   # the part after _rss_
+RSS_URL     = "<rssUrl>"     # from monitored:{podcastId}.rssUrl
+xml = urllib.request.urlopen(urllib.request.Request(RSS_URL, headers={"User-Agent": "Mozilla/5.0"})).read().decode("utf-8", "replace")
+for item in re.findall(r"<item>(.*?)</item>", xml, re.DOTALL):
+    g = re.search(r"<guid[^>]*>(.*?)</guid>", item, re.DOTALL)
+    if not g: continue
+    guid = g.group(1).strip()
+    if hashlib.sha256(guid.encode()).hexdigest()[:10] == TARGET_HASH:
+        t = re.search(r"<title>(.*?)</title>", item, re.DOTALL)
+        e = re.search(r'<enclosure[^>]*url="([^"]+)"', item)
+        print("guid: ", guid)
+        print("title:", re.sub(r"<!\[CDATA\[|\]\]>", "", t.group(1)).strip() if t else "?")
+        print("audio:", e.group(1) if e else "?")
+PY
+
+# 1b. Or, if you already know the title, grep the feed for it
 curl -s "<rssUrl>" | python3 -c "import sys, re; xml = sys.stdin.read(); items = re.findall(r'<item>(.*?)</item>', xml, re.DOTALL); [print(re.search(r'<title>(.*?)</title>', i).group(1)[:80], '|', re.search(r'<guid[^>]*>(.*?)</guid>', i).group(1)) for i in items[:5]]"
 
 # 2. Remove the GUID from the processed list
@@ -363,11 +410,37 @@ wrangler kv key put "monitored:$PODCAST_ID" --namespace-id=$NS --remote --path /
 
 * **`wrangler kv` defaults to the local `.wrangler/state` simulator.** Always pass `--remote` for production reads/writes — without it you'll silently hit empty local KV.
 * **Never use `2>&1` when piping to a temp file you'll write back to KV.** Any python `print(..., file=sys.stderr)` debug lines will get redirected into the file, prepended to the JSON, and corrupt the KV value. The dashboard will then fail with `Unexpected token 'b', "before key"... is not valid JSON`. Either drop the stderr debug entirely, OR use `2>/dev/null` to suppress stderr in the pipeline.
+* **A missing key prints its 404 to *stdout*, so `2>/dev/null` does not hide it and a non-empty result does not mean the key exists.** `wrangler kv key get` on an absent key exits non-zero and writes `✘ [ERROR] Failed to fetch … 404: Not Found` plus wrangler's upgrade banner down the same pipe you were expecting JSON on. Measuring "did I get bytes back?" will report every missing key as present. **Check the exit code, or pipe to `python3 -c 'json.load(sys.stdin)'` and let it throw.** Tell to watch for: several different keys all returning the *same* byte count — that's the banner, not your data.
+* **`wrangler kv key put` takes `--ttl`, not `--expiration-ttl`** (as of wrangler 4.87). The wrong flag hard-errors with `Unknown arguments: expiration-ttl, expirationTtl`, which at least fails loudly. Content keys want `--ttl 31536000` to match `TTL.CONTENT`; `monitored:*` keys take no TTL at all, so omit it there or you'll silently schedule your podcast config for deletion.
 
 After both writes, the next cron tick will:
 1. Fetch the RSS feed (no etag → 200 OK with full body).
 2. See the GUID is no longer in the processed set → queue the episode.
 3. Worker processes it normally.
+
+### Variant: pre-seed the transcript (rescue for rate-limit or wall-time failures)
+
+When the consumer can't get through the audio at all — the CDN is 429ing it, or every chunk falls back to whisper-1 and the 15-minute wall clock kills the invocation — transcribe locally and hand the result to the consumer. Step 3 of `processEpisode` is guarded by `if (!transcript)`, so a transcript already in KV makes the requeued job skip **the entire audio path** and go straight to summarizing. Your laptop has no wall clock and isn't the IP being throttled.
+
+```bash
+# 1. Transcribe locally using the repo's own code (no Workers limits).
+#    Write a small .mts script — .ts outside the repo gets treated as CJS and
+#    rejects top-level await — that imports transcribeAudio from
+#    src/services/transcription.ts, resolves the enclosure URL, and writes
+#    {episodeId, text, source, model, createdAt} to a JSON file.
+npx tsx /path/to/rescue.mts        # run from the repo root so .dev.vars loads
+
+# 2. Write it to production KV with the content TTL (see the --ttl gotcha above).
+NS=ee123158d5d54359b4257f8a1b678adf
+wrangler kv key put "transcript:$ID" --namespace-id=$NS --remote \
+  --ttl 31536000 --path ./transcript-$ID.json
+
+# 3. Then do steps 2 + 3 of the failed-episode runbook (processed list + etag)
+#    and wait for the next cron tick. Completion takes <60s because only the
+#    summary and tags still need generating.
+```
+
+Done for two episodes on 2026-08-17 (~$1 of OpenAI transcription for 158 minutes of audio, ~2 min each). Verify afterwards that `episode:{id}` exists, `summary:{id}:{templateId}` exists, and the ID is in `episodes:index`.
 
 ### Variant: re-process a SUCCESSFUL episode (not failed)
 
