@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
     transcribeAudio,
     validateAudioUrl,
+    resolveAudioUrl,
     getProviderConfig,
     extensionFromMime,
     detectAudioFormat,
@@ -106,6 +107,143 @@ describe("validateAudioUrl", () => {
     });
 });
 
+describe("resolveAudioUrl", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** Build a fetch mock that replays a redirect chain keyed by URL. */
+    function mockChain(chain: Record<string, { status: number; location?: string }>) {
+        return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+            const url = typeof input === "string" ? input : (input as Request).url;
+            const hop = chain[url];
+            if (!hop) return new Response(null, { status: 200 });
+            return new Response(null, {
+                status: hop.status,
+                headers: hop.location ? { Location: hop.location } : {},
+            });
+        });
+    }
+
+    it("returns the original URL when there is no redirect", async () => {
+        mockChain({ "https://example.com/audio.mp3": { status: 200 } });
+
+        const result = await resolveAudioUrl("https://example.com/audio.mp3");
+
+        expect(result).toBe("https://example.com/audio.mp3");
+    });
+
+    it("follows a single redirect hop", async () => {
+        mockChain({
+            "https://origin.example/a.mp3": { status: 302, location: "https://cdn.example/a.mp3" },
+            "https://cdn.example/a.mp3": { status: 200 },
+        });
+
+        const result = await resolveAudioUrl("https://origin.example/a.mp3");
+
+        expect(result).toBe("https://cdn.example/a.mp3");
+    });
+
+    // Regression: the real Substack/Podscribe chain is two hops. Stopping after
+    // the first left us on api.substack.com — the host that rate-limits us —
+    // which is what broke cron episodes on 2026-08-12 and 2026-08-16.
+    it("follows a multi-hop chain to the final CDN", async () => {
+        mockChain({
+            "https://pscrb.fm/rss/p/api.substack.com/feed/podcast/1/a.mp3": {
+                status: 302,
+                location: "https://api.substack.com/feed/podcast/1/a.mp3",
+            },
+            "https://api.substack.com/feed/podcast/1/a.mp3": {
+                status: 307,
+                location: "https://substackcdn.com/video_upload/post/1/transcoded.mp3?Expires=1",
+            },
+            "https://substackcdn.com/video_upload/post/1/transcoded.mp3?Expires=1": { status: 200 },
+        });
+
+        const result = await resolveAudioUrl(
+            "https://pscrb.fm/rss/p/api.substack.com/feed/podcast/1/a.mp3"
+        );
+
+        expect(result).toBe("https://substackcdn.com/video_upload/post/1/transcoded.mp3?Expires=1");
+    });
+
+    it("resolves a relative Location header against the current URL", async () => {
+        mockChain({
+            "https://cdn.example/dir/a.mp3": { status: 302, location: "/final/b.mp3" },
+            "https://cdn.example/final/b.mp3": { status: 200 },
+        });
+
+        const result = await resolveAudioUrl("https://cdn.example/dir/a.mp3");
+
+        expect(result).toBe("https://cdn.example/final/b.mp3");
+    });
+
+    it("stops after the hop limit instead of following forever", async () => {
+        // Every URL redirects to a brand new one — an unbounded chain.
+        const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+            const url = typeof input === "string" ? input : (input as Request).url;
+            const n = Number(new URL(url).searchParams.get("n") ?? "0");
+            return new Response(null, {
+                status: 302,
+                headers: { Location: `https://example.com/a.mp3?n=${n + 1}` },
+            });
+        });
+
+        const result = await resolveAudioUrl("https://example.com/a.mp3?n=0");
+
+        expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
+        expect(result).toContain("https://example.com/a.mp3?n=");
+    });
+
+    it("breaks out of a redirect loop", async () => {
+        mockChain({
+            "https://example.com/a.mp3": { status: 302, location: "https://example.com/b.mp3" },
+            "https://example.com/b.mp3": { status: 302, location: "https://example.com/a.mp3" },
+        });
+
+        const result = await resolveAudioUrl("https://example.com/a.mp3");
+
+        expect(["https://example.com/a.mp3", "https://example.com/b.mp3"]).toContain(result);
+    });
+
+    it("falls back to the furthest URL reached when a hop throws", async () => {
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+            const url = typeof input === "string" ? input : (input as Request).url;
+            if (url === "https://origin.example/a.mp3") {
+                return new Response(null, {
+                    status: 302,
+                    headers: { Location: "https://cdn.example/a.mp3" },
+                });
+            }
+            throw new Error("network down");
+        });
+
+        const result = await resolveAudioUrl("https://origin.example/a.mp3");
+
+        expect(result).toBe("https://cdn.example/a.mp3");
+    });
+
+    it("returns the original URL when the very first hop throws", async () => {
+        vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+
+        const result = await resolveAudioUrl("https://origin.example/a.mp3");
+
+        expect(result).toBe("https://origin.example/a.mp3");
+    });
+
+    it("ignores a redirect status with no Location header", async () => {
+        mockChain({ "https://origin.example/a.mp3": { status: 302 } });
+
+        const result = await resolveAudioUrl("https://origin.example/a.mp3");
+
+        expect(result).toBe("https://origin.example/a.mp3");
+    });
+});
+
 describe("transcribeAudio", () => {
     beforeEach(() => {
         vi.restoreAllMocks();
@@ -118,8 +256,10 @@ describe("transcribeAudio", () => {
     it("should transcribe audio under 25MB successfully", async () => {
         const mockAudioBuffer = new ArrayBuffer(1024); // 1KB
 
-        // Mock HEAD request for validation
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            // Mock HEAD request for validation
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -129,8 +269,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             // Mock audio fetch
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
@@ -158,6 +296,8 @@ describe("transcribeAudio", () => {
         const mockChunkBuffer = new ArrayBuffer(15 * 1024 * 1024); // 15MB
 
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             // HEAD request for validation
             .mockResolvedValueOnce(
                 new Response(null, {
@@ -168,8 +308,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             // Header fetch (bytes 0-511) for prepending to non-first chunks
             .mockResolvedValueOnce(
                 new Response(new ArrayBuffer(512), { status: 206 })
@@ -223,10 +361,10 @@ describe("transcribeAudio", () => {
         });
 
         vi.spyOn(globalThis, "fetch")
-            // HEAD validation
-            .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-length": String(largeSize), "content-type": "audio/mpeg" } }))
             // redirect resolution
             .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            // HEAD validation
+            .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-length": String(largeSize), "content-type": "audio/mpeg" } }))
             // header fetch (512B)
             .mockResolvedValueOnce(new Response(new ArrayBuffer(512), { status: 206 }))
             // chunk 1 fetch + transcribe (success)
@@ -256,10 +394,72 @@ describe("transcribeAudio", () => {
         expect(result.text).toContain("Second chunk");
     });
 
+    // Regression: a single chunk falling back used to relabel the entire
+    // transcript with the fallback model. Real runs are routinely mixed — the
+    // 2026-08-17 rescue had 1 of 6 chunks on whisper-1 and was stored as if all
+    // six were.
+    it("reports every model used when chunks fall back individually", async () => {
+        const largeSize = 30 * 1024 * 1024; // 30MB → 3 chunks
+        const mockChunkBuffer = new ArrayBuffer(15 * 1024 * 1024);
+        const corruptedError = JSON.stringify({
+            error: { message: "Audio file might be corrupted or unsupported", type: "invalid_request_error", param: "file", code: "invalid_value" },
+        });
+
+        vi.spyOn(globalThis, "fetch")
+            // redirect resolution
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            // HEAD validation
+            .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-length": String(largeSize), "content-type": "audio/mpeg" } }))
+            // header fetch (512B)
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(512), { status: 206 }))
+            // chunk 1 fetch → gpt-transcribe rejects → whisper-1 fallback succeeds
+            .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
+            .mockResolvedValueOnce(new Response(corruptedError, { status: 400 }))
+            .mockResolvedValueOnce(new Response("First chunk transcript.", { status: 200 }))
+            // chunks 2 and 3 succeed on the primary model
+            .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "Second chunk transcript." }), { status: 200 }))
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(1024 * 1024), { status: 206 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "Third chunk transcript." }), { status: 200 }));
+
+        const result = await transcribeAudio(
+            "https://example.com/large.mp3",
+            "test-api-key"
+        );
+
+        expect(result.partial).toBeUndefined();
+        expect(result.model).toBe("whisper-1+gpt-transcribe");
+    });
+
+    it("reports a single model when no chunk falls back", async () => {
+        const largeSize = 30 * 1024 * 1024;
+        const mockChunkBuffer = new ArrayBuffer(15 * 1024 * 1024);
+
+        vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-length": String(largeSize), "content-type": "audio/mpeg" } }))
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(512), { status: 206 }))
+            .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "One." }), { status: 200 }))
+            .mockResolvedValueOnce(new Response(mockChunkBuffer, { status: 206 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "Two." }), { status: 200 }))
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(1024 * 1024), { status: 206 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "Three." }), { status: 200 }));
+
+        const result = await transcribeAudio(
+            "https://example.com/large.mp3",
+            "test-api-key"
+        );
+
+        expect(result.model).toBe("gpt-transcribe");
+    });
+
     it("should throw TRANSCRIPTION_FAILED on Whisper API error", async () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -269,8 +469,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -291,6 +489,8 @@ describe("transcribeAudio", () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -300,8 +500,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -326,6 +524,8 @@ describe("transcribeAudio", () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -335,8 +535,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -361,6 +559,8 @@ describe("transcribeAudio", () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -370,8 +570,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -394,6 +592,8 @@ describe("transcribeAudio", () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -403,8 +603,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -429,6 +627,8 @@ describe("transcribeAudio", () => {
         });
 
         const fetchSpy = vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -438,8 +638,6 @@ describe("transcribeAudio", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -564,6 +762,8 @@ describe("transcribeAudio with options object", () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         const fetchSpy = vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -573,8 +773,6 @@ describe("transcribeAudio with options object", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -602,6 +800,8 @@ describe("transcribeAudio with options object", () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         const fetchSpy = vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -611,8 +811,6 @@ describe("transcribeAudio with options object", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )
@@ -637,6 +835,8 @@ describe("transcribeAudio with options object", () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         vi.spyOn(globalThis, "fetch")
+            // Mock redirect resolution (no redirect)
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(null, {
                     status: 200,
@@ -646,8 +846,6 @@ describe("transcribeAudio with options object", () => {
                     },
                 })
             )
-            // Mock redirect resolution (no redirect)
-            .mockResolvedValueOnce(new Response(null, { status: 200 }))
             .mockResolvedValueOnce(
                 new Response(mockAudioBuffer, { status: 200 })
             )

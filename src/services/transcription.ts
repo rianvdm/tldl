@@ -201,36 +201,72 @@ export interface AudioValidation {
 }
 
 /**
- * Resolve redirects to get the final audio URL.
- * Many podcast CDNs (e.g. Substack) serve audio via a redirect to a different CDN
- * (e.g. CloudFront). By resolving the redirect first, we can fetch directly from
- * the final CDN and avoid rate limiting on the origin.
+ * Follow the whole redirect chain to get the final audio URL.
+ *
+ * Many podcast feeds point at a tracking prefix that redirects to the publisher
+ * origin, which in turn redirects to the actual CDN — e.g.
+ * `pscrb.fm` → `api.substack.com` → `substackcdn.com`. Only the CDN at the end
+ * is willing to serve us at volume; the hosts in the middle rate-limit
+ * server-originated requests. Stopping at the first hop leaves us on a
+ * rate-limited host, so follow to the end (bounded) and let callers point their
+ * validation and range requests at the CDN.
+ *
+ * Never throws: on any failure it returns the furthest URL successfully reached,
+ * falling back to the original.
  */
 export async function resolveAudioUrl(audioUrl: string): Promise<string> {
-    try {
-        const response = await fetch(audioUrl, {
-            method: "HEAD",
-            headers: { "User-Agent": AUDIO_USER_AGENT },
-            redirect: "manual",
-        });
+    let currentUrl = audioUrl;
+    const seen = new Set<string>([currentUrl]);
 
-        if (response.status >= 300 && response.status < 400) {
-            const location = response.headers.get("Location");
-            if (location) {
-                console.log(
-                    JSON.stringify({
-                        event: "audio_url_redirect_resolved",
-                        originalHost: new URL(audioUrl).hostname,
-                        resolvedHost: new URL(location).hostname,
-                    })
-                );
-                return location;
-            }
+    for (let hop = 0; hop < AUDIO_LIMITS.MAX_REDIRECT_HOPS; hop++) {
+        let response: Response;
+        try {
+            response = await fetch(currentUrl, {
+                method: "HEAD",
+                headers: { "User-Agent": AUDIO_USER_AGENT },
+                redirect: "manual",
+            });
+        } catch {
+            // Network failure — keep the furthest URL we did resolve.
+            return currentUrl;
         }
-    } catch {
-        // If redirect resolution fails, fall back to original URL
+
+        if (response.status < 300 || response.status >= 400) {
+            return currentUrl;
+        }
+
+        const location = response.headers.get("Location");
+        if (!location) {
+            return currentUrl;
+        }
+
+        // Location may be relative — resolve it against the URL we just fetched.
+        let nextUrl: string;
+        try {
+            nextUrl = new URL(location, currentUrl).toString();
+        } catch {
+            return currentUrl;
+        }
+
+        // A repeat means the chain is cycling; stop where we are.
+        if (seen.has(nextUrl)) {
+            return currentUrl;
+        }
+        seen.add(nextUrl);
+
+        console.log(
+            JSON.stringify({
+                event: "audio_url_redirect_resolved",
+                hop: hop + 1,
+                fromHost: new URL(currentUrl).hostname,
+                toHost: new URL(nextUrl).hostname,
+            })
+        );
+
+        currentUrl = nextUrl;
     }
-    return audioUrl;
+
+    return currentUrl;
 }
 
 /**
@@ -745,15 +781,25 @@ export async function transcribeAudio(
         })
     );
 
-    // Step 1: Validate audio URL and check size (with retry for rate limits)
-    // If HEAD request is persistently rate-limited, try resolving redirects to
-    // bypass origin rate limiting (e.g. Substack → CloudFront), then fall back
-    // to direct fetch with unknown size.
+    // Step 1: Resolve redirects BEFORE validating.
+    // Podcast trackers and publisher origins (pscrb.fm, api.substack.com)
+    // rate-limit server-originated requests; the CDN they redirect to does not.
+    // Resolving first means the rate-limited hosts see exactly one cheap HEAD,
+    // and validation, retries and range requests all target the CDN. Doing this
+    // the other way round aimed four HEADs plus a 90 MB range read at the host
+    // most likely to 429 — which is what broke cron episodes on 2026-08-12 and
+    // 2026-08-16.
     let validation: AudioValidation;
     if (opts.skipValidation) {
         // Caller has already resolved the URL — skip validation and redirect resolution
         validation = { contentLength: 0, contentType: "audio/mpeg" };
     } else {
+        audioUrl = await resolveAudioUrl(audioUrl);
+
+        // Step 2: Validate the resolved URL and check size (retrying rate limits).
+        // If the CDN still rate-limits us, bubble up so queue retry handles it
+        // after a delay — never fall back to a whole-file fetch, because for
+        // large files that turns one 429 into a guaranteed 429 on a 90+ MB read.
         try {
             validation = await withRetry(
                 () => validateAudioUrl(audioUrl),
@@ -761,51 +807,19 @@ export async function transcribeAudio(
             );
         } catch (error) {
             if (error instanceof AppError && isRateLimitError(error)) {
-                // Origin is rate-limiting us — try resolving redirects to hit final CDN directly
-                const resolvedUrl = await resolveAudioUrl(audioUrl);
-                if (resolvedUrl !== audioUrl) {
-                    audioUrl = resolvedUrl;
-                    // Try validation again on the resolved URL
-                    try {
-                        validation = await validateAudioUrl(audioUrl);
-                    } catch (innerErr) {
-                        // Resolved URL also rate-limited. Don't fall back to a
-                        // whole-file fetch — for large files that turns one 429
-                        // into a guaranteed 429 on a 90+ MB download. Bubble
-                        // the error up so queue retry handles it after a delay.
-                        console.log(
-                            JSON.stringify({
-                                event: "validation_rate_limited_throw",
-                                message: "Both origin and resolved URL rate-limited; bubbling to queue retry",
-                            })
-                        );
-                        throw innerErr instanceof AppError
-                            ? innerErr
-                            : new AppError(
-                                  ERROR_CODES.RATE_LIMITED,
-                                  "Audio validation rate-limited after redirect resolution",
-                              );
-                    }
-                } else {
-                    console.log(
-                        JSON.stringify({
-                            event: "validation_rate_limited_throw",
-                            message: "HEAD request rate-limited; bubbling to queue retry",
-                        })
-                    );
-                    throw error;
-                }
-            } else {
-                throw error;
+                console.log(
+                    JSON.stringify({
+                        event: "validation_rate_limited_throw",
+                        host: new URL(audioUrl).hostname,
+                        message: "Audio host rate-limited after redirect resolution; bubbling to queue retry",
+                    })
+                );
             }
+            throw error;
         }
-
-        // Step 1.5: Resolve redirects to get final CDN URL
-        // This avoids rate limiting on the origin (e.g. api.substack.com → substackcdn.com)
-        audioUrl = await resolveAudioUrl(audioUrl);
     }
 
-    // Step 2: Route based on file size
+    // Step 3: Route based on file size
     if (requiresChunking(validation.contentLength)) {
         // Large file - use chunked transcription
         console.log(
@@ -849,7 +863,7 @@ export async function transcribeAudio(
         );
     }
 
-    // Step 3: Call transcription API with retry for transient errors
+    // Step 4: Call transcription API with retry for transient errors
     const result = await withRetry(
         () => callWhisperApi(audioBuffer, opts.apiKey, providerConfig, validation.contentType),
         {
@@ -919,7 +933,9 @@ async function transcribeWithChunking(
 
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
-    let usedFallbackModel: string | null = null;
+    // Distinct models actually used, in first-use order. A single chunk falling
+    // back must not relabel the whole transcript — mixed runs are the norm.
+    const modelsUsed: string[] = [];
     let tailChunkSkipped: { chunkIndex: number; error: string } | null = null;
 
     for (let i = 0; i < chunks.length; i++) {
@@ -992,8 +1008,8 @@ async function transcribeWithChunking(
             });
 
             // Track actual model used (may differ from primary if fallback occurred)
-            if (chunkResult.model !== provider.model) {
-                usedFallbackModel = chunkResult.model;
+            if (!modelsUsed.includes(chunkResult.model)) {
+                modelsUsed.push(chunkResult.model);
             }
 
             console.log(
@@ -1064,7 +1080,8 @@ async function transcribeWithChunking(
     return {
         text: combinedText,
         source: provider.name,
-        model: usedFallbackModel || provider.model,
+        // "gpt-transcribe+whisper-1" when chunks used different models.
+        model: modelsUsed.length > 0 ? modelsUsed.join("+") : provider.model,
         ...(tailChunkSkipped && {
             partial: true,
             partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both ${provider.model} and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the audio from the last chunk.`,

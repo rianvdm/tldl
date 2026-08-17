@@ -334,5 +334,6 @@ export const AUDIO_LIMITS = {
     MAX_SIZE_BYTES: 25 * 1024 * 1024,   // 25MB (OpenAI API limit)
     CHUNK_OVERLAP_BYTES: 32 * 1024,     // 32KB overlap for transcript stitching
     // Chunk size is controlled by TARGET_CHUNK_SIZE_BYTES in src/lib/audio.ts
+    MAX_REDIRECT_HOPS: 5,               // tracker → origin → CDN is 2 hops; 5 leaves headroom
 } as const;
 
