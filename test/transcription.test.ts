@@ -242,6 +242,96 @@ describe("resolveAudioUrl", () => {
 
         expect(result).toBe("https://origin.example/a.mp3");
     });
+
+    // Regression for #52. api.substack.com throttles Cloudflare egress
+    // probabilistically — measured 9 successes in 34 attempts on 2026-08-24,
+    // with no method, user-agent or Range effect. A 429 is therefore not a
+    // verdict on the URL, it's a coin flip, and the old code treated it as
+    // "chain finished" and handed the throttled origin straight to validation.
+    it("retries a rate-limited hop and follows the chain once it succeeds", async () => {
+        let originCalls = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+            const url = typeof input === "string" ? input : (input as Request).url;
+            if (url === "https://api.substack.com/a.mp3") {
+                originCalls++;
+                // Throttled twice, then lets us through.
+                if (originCalls <= 2) return new Response(null, { status: 429 });
+                return new Response(null, {
+                    status: 307,
+                    headers: { Location: "https://substackcdn.com/a.mp3?Expires=1" },
+                });
+            }
+            return new Response(null, { status: 200 });
+        });
+
+        const result = await resolveAudioUrl("https://api.substack.com/a.mp3", {
+            rateLimitRetries: 4,
+            rateLimitBaseDelayMs: 1,
+        });
+
+        expect(result).toBe("https://substackcdn.com/a.mp3?Expires=1");
+        expect(originCalls).toBe(3);
+    });
+
+    // The hop-zero case (Supra Insider, 2026-08-24): the feed enclosure IS the
+    // throttled origin, so there is no earlier hop to fall back to.
+    it("retries a rate-limited first hop", async () => {
+        let calls = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+            calls++;
+            if (calls === 1) return new Response(null, { status: 429 });
+            return new Response(null, {
+                status: 307,
+                headers: { Location: "https://substackcdn.com/a.mp3" },
+            });
+        });
+
+        const result = await resolveAudioUrl("https://api.substack.com/a.mp3", {
+            rateLimitRetries: 4,
+            rateLimitBaseDelayMs: 1,
+        });
+
+        expect(result).toBe("https://substackcdn.com/a.mp3");
+    });
+
+    // The never-throws contract has to survive the new retry path.
+    it("returns the furthest URL reached when the retry budget is exhausted", async () => {
+        vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 429 }));
+
+        const result = await resolveAudioUrl("https://api.substack.com/a.mp3", {
+            rateLimitRetries: 2,
+            rateLimitBaseDelayMs: 1,
+        });
+
+        expect(result).toBe("https://api.substack.com/a.mp3");
+    });
+
+    it("does not burn retries on a genuine terminal status", async () => {
+        const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValue(new Response(null, { status: 200 }));
+
+        const result = await resolveAudioUrl("https://cdn.example/a.mp3", {
+            rateLimitRetries: 4,
+            rateLimitBaseDelayMs: 1,
+        });
+
+        expect(result).toBe("https://cdn.example/a.mp3");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry a 404", async () => {
+        const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValue(new Response(null, { status: 404 }));
+
+        await resolveAudioUrl("https://cdn.example/missing.mp3", {
+            rateLimitRetries: 4,
+            rateLimitBaseDelayMs: 1,
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe("transcribeAudio", () => {

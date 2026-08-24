@@ -335,5 +335,13 @@ export const AUDIO_LIMITS = {
     CHUNK_OVERLAP_BYTES: 32 * 1024,     // 32KB overlap for transcript stitching
     // Chunk size is controlled by TARGET_CHUNK_SIZE_BYTES in src/lib/audio.ts
     MAX_REDIRECT_HOPS: 5,               // tracker → origin → CDN is 2 hops; 5 leaves headroom
+    // api.substack.com throttles Cloudflare egress probabilistically: measured
+    // 9 successes in 34 attempts on 2026-08-24, independent of method,
+    // user-agent and Range. A 429 is a coin flip, not a verdict on the URL, so
+    // retry the hop instead of giving up on it. 7 attempts at ~26% per-attempt
+    // success clears the hop ~88% of the time.
+    HOP_RATE_LIMIT_RETRIES: 6,
+    HOP_RATE_LIMIT_BASE_DELAY_MS: 400,  // doubles per attempt, capped below
+    HOP_RATE_LIMIT_MAX_DELAY_MS: 2000,  // no Retry-After is ever sent, so don't wait long
 } as const;
 

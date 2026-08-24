@@ -211,21 +211,84 @@ export interface AudioValidation {
  * rate-limited host, so follow to the end (bounded) and let callers point their
  * validation and range requests at the CDN.
  *
+ * A 429 on a hop is retried rather than treated as the end of the chain — see
+ * AUDIO_LIMITS.HOP_RATE_LIMIT_RETRIES for why a throttled hop is a coin flip
+ * rather than a verdict.
+ *
  * Never throws: on any failure it returns the furthest URL successfully reached,
  * falling back to the original.
  */
-export async function resolveAudioUrl(audioUrl: string): Promise<string> {
+/**
+ * HEAD a single hop, retrying while the host rate-limits us.
+ *
+ * The throttle carries no Retry-After header, and successive attempts succeed
+ * independently rather than after a cooldown, so back off gently and cheaply
+ * instead of waiting the host out.
+ */
+async function fetchHopFollowingRateLimits(
+    url: string,
+    rateLimitRetries: number,
+    baseDelayMs: number
+): Promise<Response> {
+    let response = await fetch(url, {
+        method: "HEAD",
+        headers: { "User-Agent": AUDIO_USER_AGENT },
+        redirect: "manual",
+    });
+
+    for (let attempt = 0; response.status === 429 && attempt < rateLimitRetries; attempt++) {
+        // Without this the throttled hop is silently invisible: the success log
+        // below only fires on a hop that resolved, so a chain dying on a 429
+        // used to leave no trace at all in Workers Logs.
+        console.log(
+            JSON.stringify({
+                event: "audio_url_hop_rate_limited",
+                host: new URL(url).hostname,
+                attempt: attempt + 1,
+                maxAttempts: rateLimitRetries,
+            })
+        );
+
+        await sleep(
+            Math.min(baseDelayMs * Math.pow(2, attempt), AUDIO_LIMITS.HOP_RATE_LIMIT_MAX_DELAY_MS)
+        );
+
+        response = await fetch(url, {
+            method: "HEAD",
+            headers: { "User-Agent": AUDIO_USER_AGENT },
+            redirect: "manual",
+        });
+    }
+
+    return response;
+}
+
+export interface ResolveAudioUrlOptions {
+    /** Extra attempts for a hop that comes back 429. */
+    rateLimitRetries?: number;
+    /** Backoff before the first retry; doubles per attempt, capped. */
+    rateLimitBaseDelayMs?: number;
+}
+
+export async function resolveAudioUrl(
+    audioUrl: string,
+    options: ResolveAudioUrlOptions = {}
+): Promise<string> {
+    const rateLimitRetries = options.rateLimitRetries ?? AUDIO_LIMITS.HOP_RATE_LIMIT_RETRIES;
+    const rateLimitBaseDelayMs =
+        options.rateLimitBaseDelayMs ?? AUDIO_LIMITS.HOP_RATE_LIMIT_BASE_DELAY_MS;
+
     let currentUrl = audioUrl;
     const seen = new Set<string>([currentUrl]);
 
     for (let hop = 0; hop < AUDIO_LIMITS.MAX_REDIRECT_HOPS; hop++) {
         let response: Response;
         try {
-            response = await fetch(currentUrl, {
-                method: "HEAD",
-                headers: { "User-Agent": AUDIO_USER_AGENT },
-                redirect: "manual",
-            });
+            response = await fetchHopFollowingRateLimits(
+                currentUrl,
+                rateLimitRetries,
+                rateLimitBaseDelayMs
+            );
         } catch {
             // Network failure — keep the furthest URL we did resolve.
             return currentUrl;
