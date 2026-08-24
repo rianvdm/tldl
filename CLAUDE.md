@@ -318,7 +318,13 @@ src/
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
 - **Stuck jobs**: Jobs running >20 minutes are auto-detected and marked as failed by `listActiveJobsWithDO()` (runs on home page render and in cron handler). Discord notification is sent.
 - **Job fails with `exceededWallTime` — check for a 429 first.** `exceededWallTime` is a *symptom* shared by two unrelated causes, and the rate-limit one is more common. Read the Workers logs before assuming the wall clock is the problem; filter for `validation_rate_limited_throw` and `audio_url_redirect_resolved`. See the two entries below.
-- **Audio CDN rate limiting (`validation_rate_limited_throw`)**: Log line reads `Audio host rate-limited after redirect resolution; bubbling to queue retry` (older builds: `HEAD request rate-limited` / `Both origin and resolved URL rate-limited`). The podcast host is 429ing Cloudflare's egress on the audio HEAD, so every one of the 5 queue retries fails and the episode never transcribes. Broke Lenny's on 2026-08-16 and The Pragmatic Engineer on 2026-08-12 — both Substack, and 9 of 12 monitored podcasts are Substack-hosted. Root cause was that `resolveAudioUrl()` followed only **one** redirect hop: the real chain is `pscrb.fm` → `api.substack.com` → `substackcdn.com`, so one hop landed back on the rate-limited origin. Fixed 2026-08-17 — `resolveAudioUrl()` now follows the chain to the end (`AUDIO_LIMITS.MAX_REDIRECT_HOPS`), and `transcribeAudio()` resolves **before** validating so the throttled hosts see one cheap HEAD while validation and range reads hit the CDN. If this recurs, the CDN itself is throttling: use the **Audio URL (override)** field under Advanced options on `/admin/submit` with a direct CDN URL, or do the manual rescue below.
+- **Audio CDN rate limiting (`validation_rate_limited_throw`)**: Log line reads `Audio host rate-limited after redirect resolution; bubbling to queue retry` (older builds: `HEAD request rate-limited` / `Both origin and resolved URL rate-limited`). The podcast host is 429ing Cloudflare's egress on the audio HEAD, so every one of the 5 queue retries fails and the episode never transcribes. Broke Lenny's on 2026-08-16 and The Pragmatic Engineer on 2026-08-12 — both Substack, and 9 of 12 monitored podcasts are Substack-hosted. Root cause was that `resolveAudioUrl()` followed only **one** redirect hop: the real chain is `pscrb.fm` → `api.substack.com` → `substackcdn.com`, so one hop landed back on the rate-limited origin. Partially fixed 2026-08-17 — `resolveAudioUrl()` now follows the chain to the end (`AUDIO_LIMITS.MAX_REDIRECT_HOPS`), and `transcribeAudio()` resolves **before** validating so the throttled hosts see one cheap HEAD while validation and range reads hit the CDN.
+
+  **Recurred 2026-08-23 on the same two podcasts**, because following the chain isn't enough when a hop *itself* 429s. `resolveAudioUrl()` treats any non-3xx status as "chain finished" (`if (response.status < 300 || response.status >= 400) return currentUrl`), and 429 is ≥400 — so a throttled hop is silently accepted as the final URL. The Worker resolved `pscrb.fm` → `prefix-v4.pscrb.fm` → `api.substack.com`, got 429 on the next HEAD, and returned `api.substack.com` — the rate-limited origin, one hop short of `substackcdn.com`. `validateAudioUrl()` then HEADs that same throttled host, correctly throws `RATE_LIMITED`, and all 5 queue retries repeat it. `MAX_REDIRECT_HOPS` (5) is **not** the constraint; don't raise it. Tracked in #52.
+
+  Two tells that distinguish this from a genuine end-of-chain: the last `audio_url_redirect_resolved` line has a `toHost` that is an origin rather than a CDN (`api.substack.com`, not `substackcdn.com`), and the 429 hop logs **nothing** — the log only fires on a successful hop, so the chain just stops mid-stream. Confirm by running the same chain from your laptop with `curl -sIL`: if it reaches the CDN with a 200 and the Worker didn't, the throttle is specific to Cloudflare's egress, not the URL.
+
+  Workaround when it recurs: use the **Audio URL (override)** field under Advanced options on `/admin/submit` with the resolved CDN URL — but note substackcdn.com URLs are signed with a short `Expires`, so resolve and submit promptly. Otherwise do the manual rescue below, which sidesteps the audio path entirely.
 - **Job "transcribing" forever / `updatedAt` jumping by exactly +15:00**: Queue consumer invocations have a hard 15-minute wall clock (Cloudflare platform limit). A long episode whose every chunk falls back to whisper-1 (~90–150s/chunk — happens when the primary model 400s the file as "corrupted or unsupported"; whisper-1 usually decodes it fine) gets killed (`exceededWallTime`) and the retry restarts from chunk 1, so it never converges (#48 tracks the fix: per-chunk KV cache). Killed invocations do NOT persist their console logs. Manual rescue: run `transcribeAudio` locally via `npx tsx` (no wall clock), write the `transcript:{episodeId}` record to KV, then requeue via the runbook below — the consumer finds the transcript and skips straight to summarizing. Because Step 3 of the consumer is guarded by `if (!transcript)`, a pre-seeded transcript also skips the audio fetch entirely, which is what makes this the right rescue for rate-limit failures too.
 - **`OpenAI API returned empty or malformed response` / tags silently empty**: The Responses API does **not** put the assistant message at `output[0]` — reasoning-capable models (the gpt-5.6 tiers) emit a `reasoning` item first, so `output` is `["reasoning", "message"]`. Always extract via `extractOutputText()` in `src/lib/openai-response.ts` (searches `output` for the `message` item, then its content for `output_text`); never index `output[0]`. The behavior is **adaptive** — a short prompt returns `["message"]` but a real transcript returns `["reasoning", "message"]` — so a quick probe won't reproduce it. Broke every cron episode on 2026-08-03 after the gpt-5.4 → gpt-5.6 swap (fixed in `49bb738`); the same bug made tag generation return `[]` on every episode via its non-critical path. **Before adopting any new model, dump `data.output.map(o => o.type)` against a real production-sized transcript, and make sure the A/B harness and any test fixtures use the same extractor production does** (#50).
 - **Invalid tags showing**: After removing tags from EPISODE_TAGS, run "Cleanup Invalid Tags" from admin tools to remove them from existing episodes
@@ -348,19 +354,35 @@ cloudflare.request({
   body: {
     queryId: "tldl-fail-probe",
     timeframe: { from: <epochMs>, to: <epochMs> },
-    limit: 500,
+    limit: 1000,
     parameters: {
       datasets: ["cloudflare-workers"],
-      filters: [{ key: "$metadata.service", operation: "eq", value: "tldl", type: "string" }],
+      // Filter on origin, NOT service. Episode processing is all queue-origin, so
+      // this drops every page-view and DO-fetch row in one step instead of
+      // regexing them out afterwards (`$metadata.service == "tldl"` returns ~90%
+      // `GET http://tldl-pod.com/...` noise, and episode IDs appear in those URLs,
+      // so naive grepping for an episode ID matches page views, not job logs).
+      filters: [{ key: "$metadata.origin", operation: "eq", value: "queue", type: "string" }],
     },
     view: "events",
   },
 })
-// Each event: {timestamp, source.level, source.message, $workers.outcome, $workers.event...}
-// Filter out `GET https://tldl-pod.com/...` and `https://do/job` noise, then read what's left.
 ```
 
-Read `$workers.outcome` and `source.message` together — `exceededWallTime` shows up in **both** failure modes, so it does not identify the cause on its own. `validation_rate_limited_throw` means the CDN 429'd you; its absence with repeated +15:00 gaps means the wall clock. Note the account ID is the Elezea one, `db8ef1f4b492e4727e7fab0e12907871`.
+**Read `source.event`, not `source.message`.** This is the trap — every structured log in this repo is a `console.log(JSON.stringify({event: "...", ...}))`, and the observability API parses that JSON and spreads it into `source` as its own fields. So a redirect log arrives as:
+
+```json
+{"source": {"event": "audio_url_redirect_resolved", "fromHost": "pscrb.fm",
+            "toHost": "prefix-v4.pscrb.fm", "hop": 1},
+ "$workers": {"event": {"queue": "tldl-jobs", "batchSize": 1}, "outcome": "ok"},
+ "$metadata": {"origin": "queue", "service": "tldl"}}
+```
+
+`source.message` is **empty** for all of them — it is only populated for bare `console.log("some string")` calls, of which this repo has almost none. A probe that reads `source.message` comes back blank and looks like "no logs retained," which is wrong and wasted two query round-trips on 2026-08-23. Group by `source.event` to get the shape of a failure fast.
+
+`$workers.outcome` is also absent (`undefined`) on most individual log rows — it is attached to the invocation summary row, not to every line. Don't treat a missing `outcome` as a missing failure.
+
+Read the events together as a timeline — `exceededWallTime` shows up in **both** failure modes, so it does not identify the cause on its own. `validation_rate_limited_throw` means the CDN 429'd you; its absence with repeated +15:00 gaps means the wall clock. But see the next caveat: **a chain that dies on a 429 inside `resolveAudioUrl()` logs nothing at all**, so "no rate-limit event" is not proof it wasn't a 429 — check the last `audio_url_redirect_resolved` line and ask whether its `toHost` is actually a CDN. Note the account ID is the Elezea one, `db8ef1f4b492e4727e7fab0e12907871`.
 
 ### Steps
 
@@ -422,25 +444,25 @@ After both writes, the next cron tick will:
 
 When the consumer can't get through the audio at all — the CDN is 429ing it, or every chunk falls back to whisper-1 and the 15-minute wall clock kills the invocation — transcribe locally and hand the result to the consumer. Step 3 of `processEpisode` is guarded by `if (!transcript)`, so a transcript already in KV makes the requeued job skip **the entire audio path** and go straight to summarizing. Your laptop has no wall clock and isn't the IP being throttled.
 
+**Use `scripts/rescue-transcript.ts` — it does this entire runbook in one command.** It reverse-maps the episode ID to its feed GUID, transcribes locally with the repo's own `transcribeAudio()`, writes `transcript:{id}` to prod KV with the right TTL, and clears **both** dedup signals (processed-GUID list and etag). Run it from the repo root so `.dev.vars` loads:
+
 ```bash
-# 1. Transcribe locally using the repo's own code (no Workers limits).
-#    Write a small .mts script — .ts outside the repo gets treated as CJS and
-#    rejects top-level await — that imports transcribeAudio from
-#    src/services/transcription.ts, resolves the enclosure URL, and writes
-#    {episodeId, text, source, model, createdAt} to a JSON file.
-npx tsx /path/to/rescue.mts        # run from the repo root so .dev.vars loads
-
-# 2. Write it to production KV with the content TTL (see the --ttl gotcha above).
-NS=ee123158d5d54359b4257f8a1b678adf
-wrangler kv key put "transcript:$ID" --namespace-id=$NS --remote \
-  --ttl 31536000 --path ./transcript-$ID.json
-
-# 3. Then do steps 2 + 3 of the failed-episode runbook (processed list + etag)
-#    and wait for the next cron tick. Completion takes <60s because only the
-#    summary and tags still need generating.
+npm run rescue -- <episodeId> [<episodeId> ...]
+npm run rescue -- <episodeId> --dry-run          # transcribe only, write local JSON, touch no KV
+npm run rescue -- <episodeId> --audio-url <url>  # skip feed lookup (episode aged out of the feed)
+npm run rescue -- --help
 ```
 
-Done for two episodes on 2026-08-17 (~$1 of OpenAI transcription for 158 minutes of audio, ~2 min each). Verify afterwards that `episode:{id}` exists, `summary:{id}:{templateId}` exists, and the ID is in `episodes:index`.
+It **refuses to write a partial transcript** to KV, and prints the last 90 characters so you can confirm the episode ends on a sign-off rather than mid-sentence. Then wait for the next cron tick; completion takes <60s because only the summary and tags still need generating.
+
+Do it by hand only if the script can't help (e.g. the podcast is no longer monitored, so `monitored:{podcastId}` is gone). The manual path is: transcribe locally → `wrangler kv key put "transcript:$ID" --namespace-id=$NS --remote --ttl 31536000 --path ./transcript-$ID.json` → steps 2 + 3 above.
+
+Done for two episodes on 2026-08-17 (~$1 of OpenAI transcription for 158 minutes of audio, ~2 min each), and again on 2026-08-23 for Lenny's `1627920305_rss_8586f646f6` (85 min → 87,105 chars, 5.0 min wall) and The Pragmatic Engineer `1769051199_rss_4c54613009` (92 min → 61,196 chars, 1.7 min wall). Verify afterwards that `episode:{id}` exists, `summary:{id}:{templateId}` exists, and the ID is in `episodes:index`.
+
+Two things worth knowing before you run it:
+
+* **Check `result.partial` and eyeball the tail of the text.** A partial transcript still writes a plausible-looking KV record and the summary will be generated from truncated content. A complete podcast transcript almost always ends on a sign-off ("see you in the next episode"); a mid-sentence ending means a chunk was dropped.
+* **The wall-clock difference is mostly whisper-1 fallback, not network.** On 2026-08-23 all 6 of Lenny's chunks were rejected by `gpt-transcribe` as "corrupted or unsupported" and fell back to whisper-1 (~50s/chunk vs ~15s), while The Pragmatic Engineer needed only one fallback. That episode was failing **two** ways at once — the 429 above *and* the #48 wall-clock pattern — so a fix for either alone would not have rescued it.
 
 ### Variant: re-process a SUCCESSFUL episode (not failed)
 
@@ -489,7 +511,9 @@ Root cause for why the gap exists: `addPodcastToMonitoring` at `src/lib/monitor.
 
 ### Faster than this manual flow?
 
-Worth building if it happens more than 2-3 times: a `POST /admin/episodes/{podcastId}/{guid}/requeue` endpoint that performs both deletions in one call. Would also enforce that we never forget the etag step (the painful one — easy to skip and then wait 2h confused about why nothing happened).
+Mostly solved: `scripts/rescue-transcript.ts` (added 2026-08-23, after the fourth occurrence) does the clearing automatically, so the etag step — the painful one, easy to skip and then wait 2h confused about why nothing happened — can no longer be forgotten.
+
+Still worth building if this keeps recurring: a `POST /admin/episodes/{podcastId}/{guid}/requeue` endpoint that clears both dedup signals from the admin UI, so a requeue that doesn't need a local transcribe doesn't require a laptop and a KV token at all.
 
 ## Important Notes
 

@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "ab:summary": "tsx scripts/ab-summary.ts"
+    "ab:summary": "tsx scripts/ab-summary.ts",
+    "rescue": "tsx scripts/rescue-transcript.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^5.3.3",
