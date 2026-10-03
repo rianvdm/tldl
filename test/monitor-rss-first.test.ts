@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { env } from "cloudflare:test";
 import { checkPodcastForNewEpisodes } from "../src/lib/monitor";
 import * as rss from "../src/services/rss";
-import { saveMonitoredPodcast, getMonitoredPodcast, markEpisodesProcessed } from "../src/lib/kv";
+import { saveMonitoredPodcast, getMonitoredPodcast, markEpisodesProcessed, getProcessedEpisodes } from "../src/lib/kv";
 import type { MonitoredPodcast, Env } from "../src/types";
 
 // Mock DO and queue to prevent actual Durable Object / queue interactions
@@ -137,5 +137,67 @@ describe("monitor: RSS-first", () => {
         // PI will fail in test env (no real credentials), but result must still be defined
         const result = await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
         expect(result).toBeDefined();
+    });
+
+    describe("republished back catalogue", () => {
+        // A publisher regenerating GUIDs (host migration, feed rebuild) makes
+        // every old episode look unseen. Anything dated well before the last
+        // check is backlog: mark it processed instead of transcribing it.
+        const CHECKED = { ...PODCAST, lastChecked: "2026-10-01T10:00:00Z" };
+
+        function feedEp(guid: string, pubDate: string) {
+            return { guid, title: `Ep ${guid}`, pubDate, duration: 1000, audioUrl: `https://example.com/${guid}.mp3` };
+        }
+
+        it("queues the fresh episode and marks every stale unseen GUID processed in one run", async () => {
+            await saveMonitoredPodcast(env.TLDL_DATA, CHECKED);
+            vi.spyOn(rss, "fetchFeedIfChanged").mockResolvedValue({
+                status: "ok",
+                feed: {
+                    title: "AI and I",
+                    episodes: [
+                        feedEp("fresh", "2026-09-30T20:00:00Z"),
+                        feedEp("old-1", "2025-12-10T15:50:00Z"),
+                        feedEp("old-2", "2023-12-13T16:31:25Z"),
+                    ],
+                },
+            });
+
+            const result = await checkPodcastForNewEpisodes(getTestEnv(), CHECKED, 1);
+
+            expect(result.newEpisodes).toBe(1);
+            expect(result.queued).toEqual(["Ep fresh"]);
+            expect(vi.mocked(enqueueJob)).toHaveBeenCalledTimes(1);
+            const processed = await getProcessedEpisodes(env.TLDL_DATA, PODCAST.id);
+            expect(processed).toEqual(expect.arrayContaining(["fresh", "old-1", "old-2"]));
+        });
+
+        it("does not let backlog consume the maxEpisodes budget", async () => {
+            await saveMonitoredPodcast(env.TLDL_DATA, CHECKED);
+            vi.spyOn(rss, "fetchFeedIfChanged").mockResolvedValue({
+                status: "ok",
+                feed: {
+                    title: "AI and I",
+                    episodes: [feedEp("old-1", "2025-12-10T15:50:00Z"), feedEp("fresh", "2026-09-30T20:00:00Z")],
+                },
+            });
+
+            const result = await checkPodcastForNewEpisodes(getTestEnv(), CHECKED, 1);
+
+            expect(result.queued).toEqual(["Ep fresh"]);
+        });
+
+        it("still queues an old unseen episode on the first check after adding", async () => {
+            // No lastChecked yet: the add flow deliberately leaves the latest
+            // episode unseeded as a safety net, however old it is.
+            vi.spyOn(rss, "fetchFeedIfChanged").mockResolvedValue({
+                status: "ok",
+                feed: { title: "How I AI", episodes: [feedEp("latest", "2026-01-05T00:00:00Z")] },
+            });
+
+            const result = await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 1);
+
+            expect(result.queued).toEqual(["Ep latest"]);
+        });
     });
 });

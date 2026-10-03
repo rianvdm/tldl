@@ -31,6 +31,48 @@ function generateUUID(): string {
     return crypto.randomUUID();
 }
 
+// Unseen episodes published this long before the previous check are back
+// catalogue, not new releases.
+const BACKLOG_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Drop back-catalogue episodes from a list of unseen episodes, marking them
+ * processed so they are never queued.
+ *
+ * A publisher that regenerates GUIDs (host migration, feed rebuild) makes its
+ * whole archive look unseen. Without this, the cron transcribes the archive
+ * newest-first, maxEpisodesPerCheck at a time.
+ *
+ * Skipped until the podcast has been checked once: the add flow leaves the
+ * latest episode unseeded on purpose, however old it is. Episodes with an
+ * unparseable date are kept.
+ */
+async function dropBacklog<T extends { guid: string; title: string }>(
+    env: Env,
+    podcast: MonitoredPodcast,
+    unseen: T[],
+    publishedAtMs: (ep: T) => number
+): Promise<T[]> {
+    if (!podcast.lastChecked || unseen.length === 0) return unseen;
+
+    const cutoff = Date.parse(podcast.lastChecked) - BACKLOG_GRACE_MS;
+    const backlog = unseen.filter(ep => publishedAtMs(ep) < cutoff);
+    if (backlog.length === 0) return unseen;
+
+    await markEpisodesProcessed(env.TLDL_DATA, podcast.id, backlog.map(ep => ep.guid));
+    console.log(JSON.stringify({
+        event: "monitor_backlog_skipped",
+        podcastId: podcast.id,
+        podcastName: podcast.name,
+        count: backlog.length,
+        cutoff: new Date(cutoff).toISOString(),
+        sampleTitles: backlog.slice(0, 3).map(ep => ep.title),
+    }));
+
+    const backlogSet = new Set(backlog);
+    return unseen.filter(ep => !backlogSet.has(ep));
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -304,7 +346,12 @@ export async function checkPodcastForNewEpisodes(
         const feed = fetchResult.feed;
         const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
         const processedSet = new Set(processedGuids);
-        const newEpisodes = feed.episodes.filter(ep => !processedSet.has(ep.guid));
+        const newEpisodes = await dropBacklog(
+            env,
+            podcast,
+            feed.episodes.filter(ep => !processedSet.has(ep.guid)),
+            ep => Date.parse(ep.pubDate)
+        );
 
         const currentPodcast = await getMonitoredPodcast(env.TLDL_DATA, podcast.id);
         const baseUpdate: Partial<MonitoredPodcast> = {
@@ -419,7 +466,12 @@ async function checkViaPodcastIndex(
             // Filter against already-processed GUIDs
             const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
             const processedSet = new Set(processedGuids);
-            const newEpisodes = piEpisodes.filter(ep => !processedSet.has(ep.guid));
+            const newEpisodes = await dropBacklog(
+                env,
+                podcast,
+                piEpisodes.filter(ep => !processedSet.has(ep.guid)),
+                ep => ep.datePublished * 1000
+            );
 
             if (newEpisodes.length === 0) {
                 await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {
@@ -484,7 +536,12 @@ async function checkViaPodcastIndex(
             const feed = await fetchAndParseFeed(podcast.rssUrl);
             const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
             const processedSet = new Set(processedGuids);
-            const newEpisodes = feed.episodes.filter(ep => !processedSet.has(ep.guid));
+            const newEpisodes = await dropBacklog(
+                env,
+                podcast,
+                feed.episodes.filter(ep => !processedSet.has(ep.guid)),
+                ep => Date.parse(ep.pubDate)
+            );
 
             if (newEpisodes.length === 0) {
                 await updateMonitoredPodcastStatus(env.TLDL_DATA, podcast.id, {

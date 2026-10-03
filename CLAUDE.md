@@ -189,6 +189,7 @@ Automatically monitors podcasts for new episodes and queues them for processing:
 - **Stale job sweep**: Runs at the start of each cron cycle, marks jobs >20 min as failed
 - **Admin UI**: `/admin/podcasts` — Add/remove podcasts, configure settings, manual check
 - **Episode deduplication**: Tracks processed episode GUIDs per podcast to avoid re-processing
+- **Backlog guard**: Unseen GUIDs published >7 days before the previous check are marked processed, not queued (`dropBacklog`). Stops a publisher's GUID regeneration from replaying the back catalogue one episode per cron. Logs `monitor_backlog_skipped`.
 - **Settings**: `enabled` (global on/off), `maxEpisodesPerCheck` (cap per podcast per cycle)
 - **Failure notifications**: Discord webhook on monitoring errors and job failures
 
@@ -265,7 +266,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 
 ## Testing
 
-Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 523 tests (as of 2026-08-17) covering:
+Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 532 tests (as of 2026-10-02) covering:
 - Unit tests for all services and admin routes (`test/admin.test.ts`, `test/discord.test.ts`, etc.)
 - Integration tests in `test/integration/full-flow.test.ts` (CRUD lifecycle, access control, request form)
 - Note: Tests involving Durable Objects may show "Isolated storage" warnings (infrastructure issue in vitest-pool-workers, not failures)

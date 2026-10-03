@@ -242,6 +242,36 @@ describe("checkPodcastForNewEpisodes", () => {
     });
 });
 
+describe("checkPodcastForNewEpisodes backlog guard (Podcast Index path)", () => {
+    beforeEach(async () => {
+        await clearMonitorData();
+        vi.clearAllMocks();
+    });
+
+    it("marks a republished old episode processed instead of queuing it", async () => {
+        const podcast = createTestPodcast({ lastChecked: "2026-10-01T10:00:00.000Z" });
+        await saveMonitoredPodcast(env.TLDL_DATA, podcast);
+
+        vi.mocked(getEpisodesByItunesId).mockResolvedValue([
+            {
+                id: 111,
+                guid: "regenerated-guid",
+                title: "Episode From 2024",
+                datePublished: Math.floor(new Date("2024-03-01T00:00:00.000Z").getTime() / 1000),
+                duration: 1800,
+                enclosureUrl: "https://example.com/2024.mp3",
+            },
+        ]);
+
+        const result = await checkPodcastForNewEpisodes(getTestEnv(), podcast);
+
+        expect(result.newEpisodes).toBe(0);
+        expect(result.queued).toHaveLength(0);
+        const processed = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
+        expect(processed).toContain("regenerated-guid");
+    });
+});
+
 // ============================================================================
 // Tests — addPodcastToMonitoring seeding (#41)
 // ============================================================================
