@@ -184,7 +184,8 @@ export interface Env {
     JOB_STATUS: DurableObjectNamespace;
 
     // Secrets (set via wrangler secret put)
-    OPENAI_API_KEY: string;
+    OPENAI_API_KEY: string;        // Transcription, tags, editorial meta
+    ANTHROPIC_API_KEY: string;     // Episode summaries (claude-opus-5-5)
     PODCAST_INDEX_KEY: string;
     PODCAST_INDEX_SECRET: string;
     TURNSTILE_SECRET: string;

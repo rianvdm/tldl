@@ -2,17 +2,22 @@
  * Episode-summary model A/B harness.
  *
  * Runs the EXACT production summary prompt over real prod transcripts through
- * two or more models (OpenAI Responses API) and writes a side-by-side markdown
- * report with per-run token usage, word count, latency, and cost. Use it to
- * decide whether to adopt a newly released model for episode summaries before
- * touching `src/services/summarization.ts`.
+ * two or more models and writes a side-by-side markdown report with per-run
+ * token usage, word count, latency, and cost. Use it to decide whether to adopt
+ * a newly released model for episode summaries before touching
+ * `src/services/summarization.ts`.
+ *
+ * Providers are picked by model name: `claude-*` goes to the Anthropic Messages
+ * API (ANTHROPIC_API_KEY), everything else to the OpenAI Responses API
+ * (OPENAI_API_KEY). Both keys are read from `.dev.vars`.
  *
  * Not wired into the Worker. Cache-bypassed (fresh API calls every run).
  *
- *   npm run ab:summary                       # curated 6-episode sample, gpt-5.4 vs gpt-5.5
+ *   npm run ab:summary                       # curated 6-episode sample, gpt-5.6-terra vs claude-opus-5-5
  *   npm run ab:summary -- --random 8         # 8 random transcripts from prod KV
  *   npm run ab:summary -- <id> <id> ...      # specific episode IDs
- *   npm run ab:summary -- --models gpt-5.4,gpt-5.5,gpt-5.6
+ *   npm run ab:summary -- --models gpt-5.6-terra,claude-opus-5-5,claude-sonnet-5-5
+ *   npm run ab:summary -- --effort low       # Anthropic effort level (default: medium)
  *   npm run ab:summary -- --template narrative-summary
  *   npm run ab:summary -- --help
  *
@@ -24,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
 import { getTemplate, isValidTemplateId } from "../src/lib/constants";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,9 +47,24 @@ const PRICING: Record<string, { in: number; out: number }> = {
     "gpt-5.6-luna": { in: 0.2, out: 1.2 },
     "gpt-5.6-terra": { in: 2.0, out: 12 },
     "gpt-5.6-sol": { in: 5.0, out: 30 },
+    "claude-opus-5-5": { in: 4.0, out: 20 },
+    "claude-sonnet-5-5": { in: 2.0, out: 10 },
+    "claude-haiku-5-5": { in: 0.1, out: 0.5 },
 };
 
-const DEFAULT_MODELS = ["gpt-5.6-terra", "gpt-5.4"];
+const DEFAULT_MODELS = ["gpt-5.6-terra", "claude-opus-5-5"];
+
+// Anthropic effort level. Opus 5.5 defaults to medium if omitted; set it
+// explicitly so a run is reproducible and the report can name it.
+type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+const EFFORT_LEVELS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+const DEFAULT_EFFORT: Effort = "medium";
+// Summaries are ~600 words; this is headroom for thinking + output, not a target.
+const ANTHROPIC_MAX_TOKENS = 16000;
+
+function isAnthropicModel(model: string): boolean {
+    return model.startsWith("claude-");
+}
 const DEFAULT_TEMPLATE = "key-takeaways"; // prod default (wrangler.toml DEFAULT_TEMPLATE)
 
 // Curated default sample: 6 episodes across 6 distinct shows, mixed lengths.
@@ -65,12 +86,20 @@ interface Args {
     episodes: string[];
     models: string[];
     template: string;
+    effort: Effort;
     random: number | null;
     out: string | null;
 }
 
 function parseArgs(argv: string[]): Args {
-    const args: Args = { episodes: [], models: DEFAULT_MODELS, template: DEFAULT_TEMPLATE, random: null, out: null };
+    const args: Args = {
+        episodes: [],
+        models: DEFAULT_MODELS,
+        template: DEFAULT_TEMPLATE,
+        effort: DEFAULT_EFFORT,
+        random: null,
+        out: null,
+    };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === "--help" || a === "-h") {
@@ -80,6 +109,10 @@ function parseArgs(argv: string[]): Args {
             args.models = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
         } else if (a === "--template") {
             args.template = argv[++i];
+        } else if (a === "--effort") {
+            const e = argv[++i] as Effort;
+            if (!EFFORT_LEVELS.includes(e)) throw new Error(`--effort must be one of ${EFFORT_LEVELS.join(", ")}`);
+            args.effort = e;
         } else if (a === "--random") {
             args.random = parseInt(argv[++i], 10);
         } else if (a === "--out") {
@@ -101,16 +134,17 @@ function printHelp() {
             `  --random N            Sample N random transcripts from prod KV\n` +
             `  --models a,b,c        Models to compare (default: ${DEFAULT_MODELS.join(", ")})\n` +
             `  --template ID         Summary template: key-takeaways | narrative-summary | eli5\n` +
+            `  --effort LEVEL        Anthropic effort for claude-* models: ${EFFORT_LEVELS.join(" | ")} (default: ${DEFAULT_EFFORT})\n` +
             `  --out PATH            Output markdown path (default: scripts/ab-results/<ts>.md)\n` +
             `  --help                This help\n\n` +
             `With no episode IDs and no --random, runs a curated 6-episode sample.`
     );
 }
 
-function readApiKey(): string {
+function readDevVar(name: string): string {
     const vars = readFileSync(join(REPO_ROOT, ".dev.vars"), "utf8");
-    const match = vars.match(/^OPENAI_API_KEY\s*=\s*"?([^"\n]+)"?/m);
-    if (!match) throw new Error("OPENAI_API_KEY not found in .dev.vars");
+    const match = vars.match(new RegExp(`^${name}\\s*=\\s*"?([^"\\n]+)"?`, "m"));
+    if (!match) throw new Error(`${name} not found in .dev.vars`);
     return match[1].trim();
 }
 
@@ -119,9 +153,13 @@ function kvGet(key: string): string | null {
         return execFileSync(
             "npx",
             ["wrangler", "kv", "key", "get", key, "--namespace-id", KV_NAMESPACE, "--remote"],
-            { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], cwd: REPO_ROOT }
+            { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], cwd: REPO_ROOT }
         );
-    } catch {
+    } catch (e) {
+        // A missing key and a wrangler failure (auth, network) both land here;
+        // surface the latter so a "no transcript" line isn't mistaken for expiry.
+        const stderr = String((e as { stderr?: unknown }).stderr ?? "").trim();
+        if (stderr) console.error(`  wrangler kv get ${key} failed: ${stderr.split("\n").pop()}`);
         return null;
     }
 }
@@ -162,12 +200,13 @@ function wordCount(text: string): number {
     return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-async function runModel(
-    model: string,
-    instructions: string,
-    transcript: string,
-    apiKey: string
-): Promise<{ text: string; usage: Usage; ms: number }> {
+interface RunResult {
+    text: string;
+    usage: Usage;
+    ms: number;
+}
+
+async function runOpenAI(model: string, instructions: string, transcript: string, apiKey: string): Promise<RunResult> {
     const started = Date.now();
     const res = await fetch(RESPONSES_URL, {
         method: "POST",
@@ -183,6 +222,51 @@ async function runModel(
     return { text: extractText(data), usage: data.usage ?? { input_tokens: 0, output_tokens: 0 }, ms };
 }
 
+/**
+ * Anthropic Messages API. The template prompt goes in `system` and the
+ * transcript is the sole user turn — the same split as the OpenAI
+ * `instructions` / `input` pair. Streamed because transcripts run to ~50K
+ * tokens and the SDK's non-streaming timeout is tight for that.
+ *
+ * No `fallbacks`: a refusal must show up as a failure here, not get silently
+ * served by a different model, or the comparison is meaningless.
+ * `usage.output_tokens` includes thinking tokens, so cost is the real cost.
+ */
+async function runAnthropic(
+    client: Anthropic,
+    model: string,
+    instructions: string,
+    transcript: string,
+    effort: Effort
+): Promise<RunResult> {
+    const started = Date.now();
+    const message = await client.messages
+        .stream({
+            model,
+            max_tokens: ANTHROPIC_MAX_TOKENS,
+            system: instructions,
+            output_config: { effort },
+            messages: [{ role: "user", content: transcript }],
+        })
+        .finalMessage();
+    const ms = Date.now() - started;
+    if (message.stop_reason === "refusal") {
+        throw new Error(`${model} refused (${message.stop_details?.category ?? "no category"})`);
+    }
+    if (message.stop_reason === "max_tokens") {
+        throw new Error(`${model} hit max_tokens (${ANTHROPIC_MAX_TOKENS}) before finishing`);
+    }
+    const text = message.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("");
+    return {
+        text,
+        usage: { input_tokens: message.usage.input_tokens, output_tokens: message.usage.output_tokens },
+        ms,
+    };
+}
+
 async function main() {
     const args = parseArgs(process.argv.slice(2));
 
@@ -190,7 +274,10 @@ async function main() {
         throw new Error(`Invalid template "${args.template}" (key-takeaways | narrative-summary | eli5)`);
     }
     const instructions = getTemplate(args.template)!.prompt;
-    const apiKey = readApiKey();
+    const needsOpenAI = args.models.some((m) => !isAnthropicModel(m));
+    const needsAnthropic = args.models.some(isAnthropicModel);
+    const openaiKey = needsOpenAI ? readDevVar("OPENAI_API_KEY") : null;
+    const anthropic = needsAnthropic ? new Anthropic({ apiKey: readDevVar("ANTHROPIC_API_KEY") }) : null;
 
     let episodeIds = args.episodes;
     if (args.random) {
@@ -200,7 +287,8 @@ async function main() {
         episodeIds = DEFAULT_EPISODES;
     }
 
-    console.error(`Models: ${args.models.join(", ")} · template: ${args.template} · episodes: ${episodeIds.length}\n`);
+    const effortNote = needsAnthropic ? ` · effort: ${args.effort}` : "";
+    console.error(`Models: ${args.models.join(", ")} · template: ${args.template}${effortNote} · episodes: ${episodeIds.length}\n`);
 
     const sections: string[] = [];
     const rows: string[] = [];
@@ -223,9 +311,11 @@ async function main() {
 
         for (const model of args.models) {
             process.stderr.write(`  running ${model}... `);
-            let r: { text: string; usage: Usage; ms: number };
+            let r: RunResult;
             try {
-                r = await runModel(model, instructions, transcript, apiKey);
+                r = isAnthropicModel(model)
+                    ? await runAnthropic(anthropic!, model, instructions, transcript, args.effort)
+                    : await runOpenAI(model, instructions, transcript, openaiKey!);
             } catch (e) {
                 console.error(`FAILED: ${(e as Error).message}`);
                 sections.push(`### ${model}\n\n_Failed: ${(e as Error).message}_\n`);
@@ -253,7 +343,7 @@ async function main() {
 
     const header =
         `# tldl episode-summary A/B\n\n` +
-        `Models: ${args.models.join(", ")} · template \`${args.template}\` · ${episodeIds.length} episodes · ${stamp}\n` +
+        `Models: ${args.models.join(", ")} · template \`${args.template}\`${effortNote} · ${episodeIds.length} episodes · ${stamp}\n` +
         `Generated by \`scripts/ab-summary.ts\` — production prompt, real prod transcripts, fresh (cache-bypassed) calls.\n\n` +
         `## Cost · words · latency per run\n\n` +
         `| Episode | Model | In | Out | Words | Latency | Cost |\n` +

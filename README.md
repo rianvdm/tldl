@@ -14,7 +14,7 @@ A curated archive of AI-powered podcast summaries. New podcasts and episodes are
 | Storage | Cloudflare KV + Durable Objects |
 | Podcast Data | [Podcast Index API](https://podcastindex.org) |
 | Transcription | OpenAI gpt-transcribe (whisper-1 fallback) |
-| Summarization | OpenAI gpt-5.6-terra (tags: gpt-5.6-luna) |
+| Summarization | Anthropic claude-opus-5-5 (tags + editorial meta: OpenAI gpt-5.6) |
 | Authentication | Cloudflare Access (admin-only) |
 | Spam Protection | Cloudflare Turnstile |
 | Notifications | Discord webhooks |
@@ -38,6 +38,7 @@ npm install
 # Create .dev.vars with your secrets
 cat > .dev.vars << 'EOF'
 OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 PODCAST_INDEX_KEY=...
 PODCAST_INDEX_SECRET=...
 TURNSTILE_SECRET=...
@@ -94,7 +95,7 @@ src/
 │   ├── podcast-index.ts     # Podcast Index API client
 │   ├── rss.ts               # RSS parsing + episode matching
 │   ├── transcription.ts     # OpenAI gpt-transcribe (whisper-1 fallback)
-│   ├── summarization.ts     # gpt-5.6-terra summary generation
+│   ├── summarization.ts     # claude-opus-5-5 summary generation
 │   ├── tag-generation.ts    # gpt-5.6-luna tag generation
 │   └── postmark.ts          # Postmark email for request form
 ├── routes/
@@ -116,7 +117,7 @@ src/
    - Fetch episode metadata via Podcast Index + RSS
    - Check for existing transcript in RSS feed
    - Transcribe with OpenAI gpt-transcribe (chunking for >25MB)
-   - Generate summary with gpt-5.6-terra
+   - Generate summary with claude-opus-5-5
    - Generate 2-3 tags with gpt-5.6-luna (non-critical)
    - Store in KV with 365-day TTL
    - Log to activity feed, notify Discord on failure
@@ -184,7 +185,8 @@ src/
 
 | Secret | Required | Description |
 |--------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `OPENAI_API_KEY` | Yes | OpenAI API key (transcription, tags, editorial meta) |
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key (episode summaries) |
 | `PODCAST_INDEX_KEY` | Yes | Podcast Index API key |
 | `PODCAST_INDEX_SECRET` | Yes | Podcast Index API secret |
 | `TURNSTILE_SECRET` | Yes | Cloudflare Turnstile secret |
@@ -219,6 +221,7 @@ npm test -- test/kv.test.ts   # Run single file
 ```bash
 # Set secrets (first time only)
 wrangler secret put OPENAI_API_KEY
+wrangler secret put ANTHROPIC_API_KEY
 wrangler secret put PODCAST_INDEX_KEY
 wrangler secret put PODCAST_INDEX_SECRET
 wrangler secret put TURNSTILE_SECRET

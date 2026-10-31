@@ -18,6 +18,7 @@ declare namespace Cloudflare {
 		ADMIN_NOTIFICATION_EMAIL: "rianvdm@gmail.com";
 		POSTMARK_MESSAGE_STREAM: "tldl";
 		OPENAI_API_KEY: string;
+		ANTHROPIC_API_KEY: string;
 		PODCAST_INDEX_KEY: string;
 		PODCAST_INDEX_SECRET: string;
 		PODCAST_INDEX_SECRET_2: string;

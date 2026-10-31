@@ -63,6 +63,7 @@ function getTestEnv(): Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
+        ANTHROPIC_API_KEY: "test-anthropic-key",
     } as unknown as Env;
 }
 

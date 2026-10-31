@@ -184,7 +184,7 @@ Disallow: /debug/
 
     // Debug route for transcription (disabled in production - calls OpenAI API)
     app.get("/debug/transcribe", async (c) => {
-        // Block in production to prevent unauthorized OpenAI API usage
+        // Block in production to prevent unauthorized API usage
         if (c.env.ENVIRONMENT !== "development") {
             return c.json({ error: "Debug routes are disabled in production" }, 403);
         }
@@ -243,9 +243,9 @@ Disallow: /debug/
         }
     });
 
-    // Debug route for summarization (disabled in production - calls OpenAI API)
+    // Debug route for summarization (disabled in production - calls the Anthropic API)
     app.get("/debug/summarize", async (c) => {
-        // Block in production to prevent unauthorized OpenAI API usage
+        // Block in production to prevent unauthorized API usage
         if (c.env.ENVIRONMENT !== "development") {
             return c.json({ error: "Debug routes are disabled in production" }, 403);
         }
@@ -258,7 +258,7 @@ Disallow: /debug/
         }
 
         try {
-            const result = await generateSummary(text, template, c.env.OPENAI_API_KEY);
+            const result = await generateSummary(text, template, c.env.ANTHROPIC_API_KEY);
             return c.json({
                 success: true,
                 model: result.model,

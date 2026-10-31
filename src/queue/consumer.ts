@@ -398,7 +398,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const summaryResult = await generateSummary(
             transcript.text,
             templateId,
-            env.OPENAI_API_KEY
+            env.ANTHROPIC_API_KEY
         );
 
         const summary: Summary = {
@@ -560,7 +560,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     const summaryResult = await generateSummary(
         transcript.text,
         templateId,
-        env.OPENAI_API_KEY
+        env.ANTHROPIC_API_KEY
     );
 
     const summary: Summary = {
@@ -715,7 +715,7 @@ async function regenerateSummary(ctx: ProcessingContext): Promise<void> {
     const summaryResult = await generateSummary(
         transcript.text,
         templateId,
-        env.OPENAI_API_KEY
+        env.ANTHROPIC_API_KEY
     );
 
     const summary: Summary = {
@@ -776,7 +776,7 @@ async function processManualJob(ctx: ProcessingContext): Promise<void> {
     const summaryResult = await generateSummary(
         transcript.text,
         templateId,
-        env.OPENAI_API_KEY
+        env.ANTHROPIC_API_KEY
     );
 
     const summary: Summary = {

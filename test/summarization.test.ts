@@ -1,5 +1,8 @@
 /**
- * Tests for Summarization Service (OpenAI Responses API)
+ * Tests for Summarization Service (Anthropic Messages API, claude-opus-5-5)
+ *
+ * The SDK is exercised for real; only the network is mocked by spying on
+ * globalThis.fetch, which the client resolves at construction time.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -7,25 +10,36 @@ import { generateSummary } from "../src/services/summarization";
 import { AppError } from "../src/lib/errors";
 import { ERROR_CODES } from "../src/lib/constants";
 
+interface MockMessageOptions {
+    model?: string;
+    stopReason?: string;
+    stopDetails?: { type: "refusal"; category: string | null; explanation?: string };
+    content?: unknown[];
+}
+
 /**
- * Helper to create a mock Responses API response
+ * Build a Messages API response body. `content` defaults to a single text
+ * block; pass it explicitly to model thinking blocks or empty output.
  */
-function createMockResponse(text: string, model = "gpt-5.2"): object {
+function createMockMessage(text: string, options: MockMessageOptions = {}): object {
     return {
-        id: "resp_123",
-        model,
-        output: [
-            {
-                type: "message",
-                content: [
-                    {
-                        type: "output_text",
-                        text,
-                    },
-                ],
-            },
-        ],
+        id: "msg_123",
+        type: "message",
+        role: "assistant",
+        model: options.model ?? "claude-opus-5-5",
+        content: options.content ?? [{ type: "text", text }],
+        stop_reason: options.stopReason ?? "end_turn",
+        stop_sequence: null,
+        stop_details: options.stopDetails ?? null,
+        usage: { input_tokens: 1000, output_tokens: 800 },
     };
+}
+
+function jsonResponse(body: object, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+    });
 }
 
 describe("generateSummary", () => {
@@ -40,11 +54,7 @@ describe("generateSummary", () => {
     describe("successful generation", () => {
         it("should generate summary with key-takeaways template", async () => {
             const mockSummary = "## Key Takeaways\n\n1. First insight\n2. Second insight";
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                    status: 200,
-                })
-            );
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(createMockMessage(mockSummary)));
 
             const result = await generateSummary(
                 "This is a test transcript about productivity.",
@@ -53,64 +63,53 @@ describe("generateSummary", () => {
             );
 
             expect(result.text).toBe(mockSummary);
-            expect(result.model).toBe("gpt-5.2");
+            expect(result.model).toBe("claude-opus-5-5");
         });
 
-        it("should generate summary when a reasoning item precedes the message", async () => {
-            // gpt-5.6-terra emits output = ["reasoning", "message"] when it thinks,
-            // which happens on real transcripts but not on trivial inputs.
-            const mockSummary = "## Key Takeaways\n\n1. First insight";
+        it("should ignore thinking blocks and join multiple text blocks", async () => {
+            // Adaptive thinking is always on for Opus 5.5; the thinking block
+            // precedes the text and must never leak into the summary.
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(
-                    JSON.stringify({
-                        id: "resp_123",
-                        model: "gpt-5.6-terra",
-                        output: [
-                            { type: "reasoning", summary: [], content: [] },
-                            {
-                                type: "message",
-                                content: [{ type: "output_text", text: mockSummary }],
-                            },
+                jsonResponse(
+                    createMockMessage("", {
+                        content: [
+                            { type: "thinking", thinking: "", signature: "sig" },
+                            { type: "text", text: "## Overview\n\nPart one." },
+                            { type: "text", text: "\n\nPart two." },
                         ],
-                    }),
-                    { status: 200 }
+                    })
                 )
             );
 
-            const result = await generateSummary(
-                "This is a test transcript about productivity.",
-                "key-takeaways",
-                "test-api-key"
+            const result = await generateSummary("Transcript", "key-takeaways", "test-api-key");
+
+            expect(result.text).toBe("## Overview\n\nPart one.\n\nPart two.");
+        });
+
+        it("should report the model that actually served the request", async () => {
+            // A server-side fallback answers with a different model; the stored
+            // Summary.model must say so.
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+                jsonResponse(createMockMessage("Summary", { model: "claude-opus-4-8" }))
             );
 
-            expect(result.text).toBe(mockSummary);
-            expect(result.model).toBe("gpt-5.6-terra");
+            const result = await generateSummary("Transcript", "key-takeaways", "test-api-key");
+
+            expect(result.model).toBe("claude-opus-4-8");
         });
 
         it("should generate summary with narrative-summary template", async () => {
             const mockSummary = "The episode tells the story of...";
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                    status: 200,
-                })
-            );
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(createMockMessage(mockSummary)));
 
-            const result = await generateSummary(
-                "This is a narrative transcript.",
-                "narrative-summary",
-                "test-api-key"
-            );
+            const result = await generateSummary("This is a narrative transcript.", "narrative-summary", "test-api-key");
 
             expect(result.text).toBe(mockSummary);
         });
 
         it("should generate summary with eli5 template", async () => {
             const mockSummary = "Imagine you have a big box of toys...";
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                    status: 200,
-                })
-            );
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(createMockMessage(mockSummary)));
 
             const result = await generateSummary(
                 "Complex technical discussion about quantum computing.",
@@ -121,39 +120,36 @@ describe("generateSummary", () => {
             expect(result.text).toBe(mockSummary);
         });
 
-        it("should send correct request format to Responses API", async () => {
-            const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(JSON.stringify(createMockResponse("Summary")), {
-                    status: 200,
-                })
-            );
+        it("should send the production request shape to the Messages API", async () => {
+            const fetchSpy = vi
+                .spyOn(globalThis, "fetch")
+                .mockResolvedValueOnce(jsonResponse(createMockMessage("Summary")));
 
             await generateSummary("Test transcript", "key-takeaways", "test-key");
 
             expect(fetchSpy).toHaveBeenCalledTimes(1);
             const [url, options] = fetchSpy.mock.calls[0];
-            expect(url).toBe("https://api.openai.com/v1/responses");
+            expect(String(url)).toBe("https://api.anthropic.com/v1/messages");
             expect(options?.method).toBe("POST");
-            expect(options?.headers).toEqual({
-                Authorization: "Bearer test-key",
-                "Content-Type": "application/json",
-            });
+
+            const headers = new Headers(options?.headers as HeadersInit);
+            expect(headers.get("authorization")).toBe("Bearer test-key");
+            expect(headers.get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
 
             const body = JSON.parse(options?.body as string);
-            expect(body.model).toBe("gpt-5.6-terra");
-            expect(body.input).toBe("Test transcript");
-            expect(body.instructions).toContain("Analyze this podcast transcript");
+            expect(body.model).toBe("claude-opus-5-5");
+            expect(body.output_config).toEqual({ effort: "medium" });
+            expect(body.fallbacks).toBe("default");
+            expect(body.system).toContain("Analyze this podcast transcript");
+            expect(body.messages).toEqual([{ role: "user", content: "Test transcript" }]);
+            expect(body.max_tokens).toBeGreaterThanOrEqual(8000);
         });
     });
 
     describe("invalid template handling", () => {
         it("should throw INVALID_TEMPLATE for unknown template ID", async () => {
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "invalid-template",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "invalid-template", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -174,22 +170,19 @@ describe("generateSummary", () => {
     });
 
     describe("rate limiting", () => {
-        it("should throw RATE_LIMITED on 429 response", async () => {
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response("Rate limit exceeded", { status: 429 })
-            );
+        it("should throw RATE_LIMITED on 429 response without retrying", async () => {
+            const fetchSpy = vi
+                .spyOn(globalThis, "fetch")
+                .mockResolvedValueOnce(new Response("Rate limit exceeded", { status: 429 }));
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
                 expect((error as AppError).code).toBe(ERROR_CODES.RATE_LIMITED);
             }
+            expect(fetchSpy).toHaveBeenCalledTimes(1);
         });
     });
 
@@ -197,43 +190,23 @@ describe("generateSummary", () => {
         it("should retry on 500 error and succeed", async () => {
             const mockSummary = "Summary after retry";
             vi.spyOn(globalThis, "fetch")
-                // First call: server error
-                .mockResolvedValueOnce(
-                    new Response("Internal server error", { status: 500 })
-                )
-                // Retry: success
-                .mockResolvedValueOnce(
-                    new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                        status: 200,
-                    })
-                );
+                .mockResolvedValueOnce(new Response("Internal server error", { status: 500 }))
+                .mockResolvedValueOnce(jsonResponse(createMockMessage(mockSummary)));
 
-            const result = await generateSummary(
-                "Test transcript",
-                "key-takeaways",
-                "test-api-key"
-            );
+            const result = await generateSummary("Test transcript", "key-takeaways", "test-api-key");
 
             expect(result.text).toBe(mockSummary);
         });
 
-        it("should retry on 503 error and succeed", async () => {
-            const mockSummary = "Summary after 503";
+        it("should retry on 529 overloaded and succeed", async () => {
+            const mockSummary = "Summary after 529";
             vi.spyOn(globalThis, "fetch")
                 .mockResolvedValueOnce(
-                    new Response("Service unavailable", { status: 503 })
+                    jsonResponse({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }, 529)
                 )
-                .mockResolvedValueOnce(
-                    new Response(JSON.stringify(createMockResponse(mockSummary)), {
-                        status: 200,
-                    })
-                );
+                .mockResolvedValueOnce(jsonResponse(createMockMessage(mockSummary)));
 
-            const result = await generateSummary(
-                "Test transcript",
-                "key-takeaways",
-                "test-api-key"
-            );
+            const result = await generateSummary("Test transcript", "key-takeaways", "test-api-key");
 
             expect(result.text).toBe(mockSummary);
         });
@@ -242,34 +215,25 @@ describe("generateSummary", () => {
     describe("client error handling", () => {
         it("should throw SUMMARIZATION_FAILED on 400 error", async () => {
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response("Bad request", { status: 400 })
+                jsonResponse({ type: "error", error: { type: "invalid_request_error", message: "Bad request" } }, 400)
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
                 expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
                 expect((error as AppError).message).toContain("400");
+                expect((error as AppError).message).toContain("Bad request");
             }
         });
 
         it("should throw SUMMARIZATION_FAILED on 401 error", async () => {
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response("Unauthorized", { status: 401 })
-            );
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
@@ -278,118 +242,76 @@ describe("generateSummary", () => {
         });
     });
 
-    describe("response parsing", () => {
-        it("should handle malformed JSON response", async () => {
+    describe("response handling", () => {
+        it("should throw SUMMARIZATION_FAILED on a refusal", async () => {
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response("not valid json", { status: 200 })
-            );
-
-            try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
-                expect.fail("Expected error");
-            } catch (error) {
-                expect(error).toBeInstanceOf(AppError);
-                expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
-                expect((error as AppError).message).toContain("parse");
-            }
-        });
-
-        it("should handle empty output array", async () => {
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(
-                    JSON.stringify({
-                        id: "resp_123",
-                        model: "gpt-5.2",
-                        output: [],
-                    }),
-                    { status: 200 }
+                jsonResponse(
+                    createMockMessage("", {
+                        content: [],
+                        stopReason: "refusal",
+                        stopDetails: { type: "refusal", category: "cyber" },
+                    })
                 )
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
                 expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
-                expect((error as AppError).message).toContain("empty or malformed");
+                expect((error as AppError).message).toContain("refused");
+                expect((error as AppError).message).toContain("cyber");
             }
         });
 
-        it("should handle missing content in output", async () => {
+        it("should throw SUMMARIZATION_FAILED when output is cut off at max_tokens", async () => {
             vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(
-                    JSON.stringify({
-                        id: "resp_123",
-                        model: "gpt-5.2",
-                        output: [{ type: "message", content: [] }],
-                    }),
-                    { status: 200 }
-                )
+                jsonResponse(createMockMessage("## Overview\n\nTruncated mid-", { stopReason: "max_tokens" }))
             );
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
                 expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
+                expect((error as AppError).message).toContain("max_tokens");
             }
         });
 
-        it("should handle API-level error in response body", async () => {
-            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-                new Response(
-                    JSON.stringify({
-                        error: {
-                            message: "Context length exceeded",
-                            type: "invalid_request_error",
-                            code: "context_length_exceeded",
-                        },
-                    }),
-                    { status: 200 }
-                )
-            );
+        it("should throw SUMMARIZATION_FAILED on empty content", async () => {
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(createMockMessage("", { content: [] })));
 
             try {
-                await generateSummary(
-                    "Very long transcript...",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);
                 expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
-                expect((error as AppError).message).toContain("Context length exceeded");
+                expect((error as AppError).message).toContain("empty");
+            }
+        });
+
+        it("should throw SUMMARIZATION_FAILED on whitespace-only text", async () => {
+            vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(createMockMessage("   \n  ")));
+
+            try {
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
+                expect.fail("Expected error");
+            } catch (error) {
+                expect(error).toBeInstanceOf(AppError);
+                expect((error as AppError).code).toBe(ERROR_CODES.SUMMARIZATION_FAILED);
             }
         });
     });
 
     describe("network errors", () => {
         it("should handle network failure", async () => {
-            vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
-                new Error("Network error")
-            );
+            vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("Network error"));
 
             try {
-                await generateSummary(
-                    "Test transcript",
-                    "key-takeaways",
-                    "test-api-key"
-                );
+                await generateSummary("Test transcript", "key-takeaways", "test-api-key");
                 expect.fail("Expected error");
             } catch (error) {
                 expect(error).toBeInstanceOf(AppError);

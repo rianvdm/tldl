@@ -39,8 +39,9 @@ rm -rf .wrangler/state && npx tsx scripts/seed-local-data.ts
 
 Compare summary models before adopting a new one (see [Model A/B harness](#model-ab-harness)):
 ```bash
-npm run ab:summary                  # curated 6-episode sample, gpt-5.6-terra vs gpt-5.4
+npm run ab:summary                  # curated 6-episode sample, gpt-5.6-terra vs claude-opus-5-5
 npm run ab:summary -- --random 8    # 8 random prod transcripts
+npm run ab:summary -- --effort low  # Anthropic effort level for claude-* models
 npm run ab:summary -- --help
 ```
 
@@ -57,7 +58,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
    - Falls back to OpenAI gpt-transcribe for transcription (with chunking for >25MB files; whisper-1 fallback for rejected files)
-   - Generates summary via OpenAI gpt-5.6-terra
+   - Generates summary via Anthropic claude-opus-5-5 (Messages API, effort `medium`)
    - Generates 2-3 AI tags using gpt-5.6-luna (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
    - Logs completion/failure to activity log
@@ -209,17 +210,20 @@ wrangler kv key put "monitored:<podcastId>" '<edited-json>' --namespace-id=$NS -
 ```
 This is forward-only — already-processed episodes keep their existing `summary:{episodeId}:{templateId}` blobs; regenerate per-episode via `POST /admin/episodes/:id/summaries/:templateId` if you want them converted.
 
-The summary model is a single constant: `MODEL` in `src/services/summarization.ts` (also `editorial-meta.ts` for deck/pull quote, `tag-generation.ts` for tags). Currently `gpt-5.6-terra` for summaries + editorial meta and `gpt-5.6-luna` for tags, via the OpenAI Responses API. Swapping is a one-line change per service.
+The summary model is a single constant: `MODEL` in `src/services/summarization.ts` (also `editorial-meta.ts` for deck/pull quote, `tag-generation.ts` for tags). Currently `claude-opus-5-5` for summaries via the Anthropic Messages API (`@anthropic-ai/sdk`, effort `medium`, server-side refusal fallback on — `Summary.model` records whichever model actually answered), `gpt-5.6-terra` for editorial meta and `gpt-5.6-luna` for tags via the OpenAI Responses API. Swapping within a provider is a one-line change per service; the summarizer moved to Anthropic on 2026-10-31 after the A/B below showed Opus 5.5 more specific and tighter to the word budget than terra, at ~3x cost and ~2x latency (free Anthropic credits made the cost moot).
 
 ### Model A/B harness
 
 `scripts/ab-summary.ts` (run via `npm run ab:summary`) compares summary models head-to-head before you change that constant. It runs the **exact production prompt** over **real prod transcripts** (pulled from KV) through two or more models with fresh, cache-bypassed calls, and writes a side-by-side markdown report with per-run **token usage, word count, latency, and cost**. Output lands in `scripts/ab-results/` (gitignored). It's not wired into the Worker — it's a standalone decision tool.
 
+Provider is picked by model name: `claude-*` goes to the Anthropic Messages API (via `@anthropic-ai/sdk`, a devDependency used only by this script; needs `ANTHROPIC_API_KEY` in `.dev.vars`), everything else to the OpenAI Responses API. The prompt maps to `system` / the transcript to the single user turn, which is the same split as OpenAI's `instructions` / `input`. Anthropic runs set `output_config.effort` explicitly (`--effort`, default `medium`, which is also Opus 5.5's own default) and the report header names it. Reported Anthropic output tokens include thinking tokens, so the cost column is the real cost. Refusals and `max_tokens` cut-offs are recorded as failures rather than silently falling back to another model, so the comparison stays honest.
+
 ```bash
-npm run ab:summary                              # curated 6-episode sample, gpt-5.6-terra vs gpt-5.4
+npm run ab:summary                              # curated 6-episode sample, gpt-5.6-terra vs claude-opus-5-5
 npm run ab:summary -- --random 8                # 8 random prod transcripts
 npm run ab:summary -- <episodeId> <episodeId>   # specific episodes
-npm run ab:summary -- --models gpt-5.6-terra,gpt-6  # compare against a newly released model
+npm run ab:summary -- --models gpt-5.6-terra,claude-opus-5-5,claude-sonnet-5-5
+npm run ab:summary -- --effort low              # cheaper/faster Anthropic runs
 npm run ab:summary -- --template narrative-summary
 ```
 
@@ -247,7 +251,8 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 - `JOB_STATUS` — Durable Object for job status consistency
 
 **Secrets** (set via `wrangler secret put`):
-- `OPENAI_API_KEY` — OpenAI API key
+- `OPENAI_API_KEY` — OpenAI API key (transcription, tags, editorial meta)
+- `ANTHROPIC_API_KEY` — Anthropic API key (episode summaries)
 - `PODCAST_INDEX_KEY` — Podcast Index API key
 - `PODCAST_INDEX_SECRET` — Podcast Index API secret
 - `TURNSTILE_SECRET` — Cloudflare Turnstile secret key (spam protection)
@@ -298,7 +303,7 @@ src/
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
 │   ├── transcription.ts  # OpenAI gpt-transcribe (whisper-1 fallback)
-│   ├── summarization.ts  # OpenAI gpt-5.6-terra
+│   ├── summarization.ts  # Anthropic claude-opus-5-5
 │   ├── tag-generation.ts # OpenAI gpt-5.6-luna for episode tags
 │   └── postmark.ts       # Postmark email for request form
 ├── routes/               # Hono route handlers
@@ -529,7 +534,7 @@ Still worth building if this keeps recurring: a `POST /admin/episodes/{podcastId
 
 ## Important Notes
 
-- **GPT-5.6 exists**: The project uses OpenAI gpt-5.6-terra for summarization/editorial meta and gpt-5.6-luna for tags. These are real models (5.6 ships as luna/sol/terra tiers) — do not change references to GPT-4o or other models unless explicitly instructed.
+- **GPT-5.6 and Claude Opus 5.5 exist**: The project uses Anthropic claude-opus-5-5 for summarization, OpenAI gpt-5.6-terra for editorial meta and gpt-5.6-luna for tags. These are real models (5.6 ships as luna/sol/terra tiers) — do not change references to GPT-4o, older Claude models, or date-suffixed model IDs unless explicitly instructed.
 - **Admin-only model**: There are no "regular users." Only admins can submit episodes. Visitors can request podcasts via `/request`.
 - **No auth on public pages**: Public pages have zero auth detection, no login buttons, no client-side auth scripts.
 - **Discord and Postmark are optional**: Both degrade gracefully when their secrets are not configured. The app works without them.

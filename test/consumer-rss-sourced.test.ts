@@ -70,6 +70,7 @@ function getTestEnv(): import("../src/types").Env {
     return {
         ...env,
         OPENAI_API_KEY: "test-api-key",
+        ANTHROPIC_API_KEY: "test-anthropic-key",
         MAX_EPISODE_MINUTES: "121",
     } as unknown as import("../src/types").Env;
 }

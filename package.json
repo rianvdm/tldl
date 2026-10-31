@@ -13,6 +13,7 @@
     "rescue": "tsx scripts/rescue-transcript.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "fast-xml-parser": "^5.3.3",
     "hono": "^4.6.0",
     "marked": "^17.0.1"
