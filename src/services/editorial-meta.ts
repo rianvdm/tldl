@@ -41,7 +41,9 @@ Given the transcript below, produce two pieces of copy:
 1. "deck": a 1-2 sentence descriptive deck in the voice of a print weekly.
    Complete sentences. Sentence case. No ellipses. No phrases like "In this
    episode" or "This episode explores". Describe what the conversation is
-   about, not what it promises.
+   about, not what it promises. Write acronyms out in full ("user-generated
+   content", not "UGC") unless a general reader already knows them, like AI
+   or CEO; a deck is too short to define a term and then use it.
 
 2. "pullQuote": a single aphoristic sentence taken or lightly condensed from
    the transcript. The kind of line a reader would screenshot. One sentence,

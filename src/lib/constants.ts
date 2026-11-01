@@ -144,6 +144,9 @@ Sentence patterns to avoid:
 Handling numbers:
 Attribute numeric claims to the speaker or paraphrase them. "The guest says they grew 10x" is fine; restating "The company grew 10x" as a standalone fact is not. Never invent precision that isn't in the transcript.
 
+Acronyms and jargon:
+Spell out an acronym the first time it appears, then use the short form: "user-generated content (UGC)", then "UGC". Guests often use industry shorthand without explaining it, so don't assume the reader knows a term because the transcript never defines it. Skip this only for terms a general reader already knows, like AI or CEO.
+
 Punctuation:
 Prefer periods and commas. Use em-dashes only for genuine interruptions, not as stylistic decoration. Use straight quotes and hyphens, not unicode characters.
 
