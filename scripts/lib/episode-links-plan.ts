@@ -7,7 +7,7 @@
  */
 
 import type { Episode } from "../../src/types";
-import type { ParsedFeed } from "../../src/services/rss";
+import { findEpisodeInFeedExact, type ExactEpisodeMatch, type ParsedFeed } from "../../src/services/rss";
 import { deriveRssEpisodeId } from "../../src/lib/rss-episode-id";
 import { resolveWebsiteUrl, toEpisodePageUrl } from "../../src/lib/podcast-links";
 
@@ -25,26 +25,13 @@ export interface PodcastLinkSources {
 }
 
 /** How the episode's RSS GUID was found; null when it couldn't be. */
-export type GuidMatch = "stored" | "rss-id-hash" | "apple-id" | "audio-url" | "title" | null;
+export type GuidMatch = "stored" | "rss-id-hash" | "apple-id" | ExactEpisodeMatch | null;
 
 export interface EpisodeLinkPlan {
     guid?: string;
     matchedBy: GuidMatch;
     /** Only the fields that differ. A key present with value undefined means "remove". */
     changes: Partial<Pick<Episode, "episodeGuid" | "appleUrl" | "episodePageUrl" | "podcastWebsiteUrl">>;
-}
-
-function withoutQuery(url: string): string {
-    try {
-        const u = new URL(url);
-        return `${u.origin}${u.pathname}`;
-    } catch {
-        return url;
-    }
-}
-
-function normalizeTitle(title: string): string {
-    return title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 function appleEpisodeId(url: string | undefined): string | null {
@@ -74,13 +61,8 @@ async function resolveGuid(ep: Episode, src: PodcastLinkSources): Promise<{ guid
         if (apple) return { guid: apple.guid, matchedBy: "apple-id" };
     }
 
-    const audio = withoutQuery(ep.audioUrl);
-    const byAudio = feedEpisodes.find(item => item.audioUrl && withoutQuery(item.audioUrl) === audio);
-    if (byAudio?.guid) return { guid: byAudio.guid, matchedBy: "audio-url" };
-
-    const title = normalizeTitle(ep.episodeTitle);
-    const byTitle = feedEpisodes.find(item => normalizeTitle(item.title) === title);
-    if (byTitle?.guid) return { guid: byTitle.guid, matchedBy: "title" };
+    const exact = src.feed ? findEpisodeInFeedExact(src.feed, { audioUrl: ep.audioUrl, title: ep.episodeTitle }) : null;
+    if (exact?.episode.guid) return { guid: exact.episode.guid, matchedBy: exact.match };
 
     return { matchedBy: null };
 }

@@ -15,7 +15,7 @@ import { ERROR_CODES } from "../lib/constants";
 import { generateEpisodeTags } from "../services/tag-generation";
 import { generateEditorialMeta } from "../services/editorial-meta";
 import { parseApplePodcastsUrl, extractPodcastId } from "../lib/url-parser";
-import { showLevelAppleUrl, toWebsiteUrl } from "../lib/podcast-links";
+import { resolveWebsiteUrl, showLevelAppleUrl, toEpisodePageUrl, toWebsiteUrl } from "../lib/podcast-links";
 import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
 import {
     getJob,
@@ -37,7 +37,12 @@ import {
 } from "../lib/job-status-do";
 import { getEpisodeMetadata } from "../services/apple-podcasts";
 import type { EpisodeMetadata } from "../services/apple-podcasts";
-import { fetchTranscript as fetchRssTranscript } from "../services/rss";
+import {
+    fetchTranscript as fetchRssTranscript,
+    fetchAndParseFeed,
+    findEpisodeInFeedExact,
+    type RssEpisode,
+} from "../services/rss";
 import { transcribeAudio } from "../services/transcription";
 import { generateSummary } from "../services/summarization";
 import { notifySubscribers } from "../notifications";
@@ -364,6 +369,35 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
 // ============================================================================
 
 /**
+ * Read the podcast's feed and find this episode in it by exact identifiers.
+ * Non-critical: links are a nicety, so any failure returns null and the job
+ * carries on without them.
+ */
+async function readFeedEpisode(
+    metadata: EpisodeMetadata,
+    episodeGuid: string | undefined,
+    episodeId: string
+): Promise<{ feedLink?: string; episode: RssEpisode | null } | null> {
+    if (!metadata.feedUrl) return null;
+    try {
+        const feed = await fetchAndParseFeed(metadata.feedUrl);
+        const found = findEpisodeInFeedExact(feed, {
+            guid: episodeGuid,
+            audioUrl: metadata.audioUrl,
+            title: metadata.episodeTitle,
+        });
+        return { feedLink: feed.link, episode: found?.episode ?? null };
+    } catch (error) {
+        console.log(JSON.stringify({
+            event: "feed_links_lookup_failed",
+            episodeId,
+            error: error instanceof Error ? error.message : String(error),
+        }));
+        return null;
+    }
+}
+
+/**
  * Full episode processing pipeline:
  * 1. Check for existing episode/transcript (fast path for regeneration)
  * 2. Fetch metadata if needed
@@ -427,6 +461,10 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
     await updateJobEstimateBoth(env, kv, jobId, 180); // ~3 minutes initial estimate
 
     let metadata: EpisodeMetadata;
+    // Outbound links. The monitor's RSS path sends these on the message; the
+    // Apple-submitted path reads them from the feed below.
+    let storedGuid = episodeGuid;
+    let episodePageUrl = ctx.prefetchedEpisodePageUrl;
 
     if (ctx.rssSourced && ctx.prefetchedAudioUrl) {
         // RSS-sourced path: metadata was pre-fetched from the feed — skip PI / iTunes entirely
@@ -479,6 +517,17 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             env,
             appleUrl,
         });
+
+        // getEpisodeMetadata's main (Podcast Index) path never reads the feed,
+        // so read it here for the episode's page and the podcast's website.
+        const feedEpisode = await readFeedEpisode(metadata, episodeGuid, episodeId);
+        const monitored = await getMonitoredPodcast(kv, parsedUrl.podcastId);
+        metadata.podcastWebsiteUrl = resolveWebsiteUrl(monitored?.websiteUrl, [feedEpisode?.feedLink, metadata.podcastWebsiteUrl]);
+        episodePageUrl = toEpisodePageUrl(feedEpisode?.episode?.link, {
+            websiteUrl: metadata.podcastWebsiteUrl,
+            audioUrl: feedEpisode?.episode?.audioUrl,
+        });
+        storedGuid = episodeGuid ?? feedEpisode?.episode?.guid;
     }
 
     // Update job with metadata so it shows on the status page
@@ -643,8 +692,8 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const episode: Episode = {
             id: episodeId,
             appleUrl: storedAppleUrl,
-            episodeGuid,
-            episodePageUrl: ctx.prefetchedEpisodePageUrl,
+            episodeGuid: storedGuid,
+            episodePageUrl,
             podcastName: metadata.podcastName,
             episodeTitle: metadata.episodeTitle,
             episodeDuration: metadata.episodeDuration,

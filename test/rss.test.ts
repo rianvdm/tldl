@@ -7,6 +7,7 @@ import {
     parseDuration,
     parseFeedXml,
     findEpisodeInFeed,
+    findEpisodeInFeedExact,
     fetchAndParseFeed,
     fetchTranscript,
     type ParsedFeed,
@@ -229,6 +230,35 @@ describe("parseFeedXml", () => {
             const feed = parseFeedXml(linkFeed);
             expect(feed.episodes[1].link).toBeUndefined();
         });
+    });
+});
+
+describe("findEpisodeInFeedExact", () => {
+    const feed: ParsedFeed = {
+        title: "Exact",
+        episodes: [
+            { guid: "g-1", title: "Scaling Slack & GitHub (with Maude)", pubDate: "2026-11-05T00:00:00Z", duration: 1, audioUrl: "https://cdn.example.com/a/one.mp3?token=1" },
+            { guid: "g-2", title: "Episode Two", pubDate: "2026-11-04T00:00:00Z", duration: 1, audioUrl: "https://cdn.example.com/a/two.mp3" },
+        ],
+    };
+
+    it("matches on GUID first", () => {
+        expect(findEpisodeInFeedExact(feed, { guid: "g-2", title: "Scaling Slack & GitHub (with Maude)" })?.match).toBe("guid");
+        expect(findEpisodeInFeedExact(feed, { guid: "g-2" })?.episode.guid).toBe("g-2");
+    });
+
+    it("matches on the audio URL, ignoring its query string", () => {
+        const found = findEpisodeInFeedExact(feed, { audioUrl: "https://cdn.example.com/a/one.mp3?token=99" });
+        expect(found).toMatchObject({ match: "audio-url", episode: { guid: "g-1" } });
+    });
+
+    it("matches on the title ignoring case and punctuation", () => {
+        const found = findEpisodeInFeedExact(feed, { title: "scaling slack github with maude" });
+        expect(found).toMatchObject({ match: "title", episode: { guid: "g-1" } });
+    });
+
+    it("returns null for anything short of an exact match", () => {
+        expect(findEpisodeInFeedExact(feed, { guid: "missing", title: "Scaling Slack and GitHub" })).toBeNull();
     });
 });
 

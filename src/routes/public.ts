@@ -283,7 +283,7 @@ publicRoutes.get("/about", async (c) => {
 </ul>
 
 <h2 id="creator-opt-out">A Note for Podcast Creators</h2>
-<p>Attribution matters. Every episode page prominently displays the podcast name, creator names, and both a &ldquo;Listen on Apple Podcasts&rdquo; link and a &ldquo;Website&rdquo; link to the official podcast website. My hope is that TL;DL helps expand a podcast's audience by making the content more accessible. Summaries should bring more people to a podcast&mdash;most have transcripts available already, after all.</p>
+<p>Attribution matters. Every episode page prominently displays the podcast name and creator names, and links back to the source where those links are available: the episode's own page on the creator's site, the official podcast website, and the episode on Apple Podcasts. My hope is that TL;DL helps expand a podcast's audience by making the content more accessible. Summaries should bring more people to a podcast&mdash;most have transcripts available already, after all.</p>
 <p>That said, if you'd prefer to opt out, please reach out at <a href="https://elezea.com/contact" target="_blank" rel="noopener noreferrer">elezea.com/contact</a> and I'll add your podcast to the blocklist.</p>
 
 <h2 id="rss-feed">RSS Feeds</h2>

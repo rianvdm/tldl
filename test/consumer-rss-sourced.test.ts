@@ -16,8 +16,11 @@ vi.mock("../src/services/apple-podcasts", () => ({
     getEpisodeMetadata: vi.fn(),
 }));
 
-vi.mock("../src/services/rss", () => ({
+// Real parsing/matching helpers; only the network calls are stubbed.
+vi.mock("../src/services/rss", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../src/services/rss")>()),
     fetchTranscript: vi.fn(),
+    fetchAndParseFeed: vi.fn(),
 }));
 
 vi.mock("../src/services/transcription", () => ({
@@ -42,6 +45,7 @@ import * as applePodcasts from "../src/services/apple-podcasts";
 import * as transcription from "../src/services/transcription";
 import * as summarization from "../src/services/summarization";
 import * as tagGen from "../src/services/tag-generation";
+import * as rss from "../src/services/rss";
 import queueConsumer from "../src/queue/consumer";
 
 // ============================================================================
@@ -220,6 +224,75 @@ describe("consumer: rssSourced branch", () => {
             const saved = await getEpisode(env.TLDL_DATA, EPISODE_ID);
             expect(saved).not.toBeNull();
             expect(saved?.podcastWebsiteUrl).toBeUndefined();
+        });
+
+        describe("Apple-submitted episodes (non-RSS path)", () => {
+            const APPLE_URL = "https://podcasts.apple.com/us/podcast/how-i-ai/id1809663079?i=1000700000001";
+            const FEED: rss.ParsedFeed = {
+                title: "How I AI",
+                link: "https://www.howiai.example/podcast",
+                episodes: [{
+                    guid: "feed-guid-1",
+                    title: "Test Episode",
+                    pubDate: "2026-04-13T11:00:00Z",
+                    duration: 3000,
+                    audioUrl: "https://example.com/audio.mp3?token=abc",
+                    link: "https://www.howiai.example/p/test-episode",
+                }],
+            };
+
+            function appleMessage(): QueueMessage {
+                return { type: "process_episode", jobId: "job-1", episodeId: EPISODE_ID, templateId: "key-takeaways", appleUrl: APPLE_URL };
+            }
+
+            beforeEach(() => {
+                vi.mocked(applePodcasts.getEpisodeMetadata).mockResolvedValue({
+                    podcastName: "How I AI",
+                    episodeTitle: "Test Episode",
+                    episodeDuration: 3000,
+                    episodeDate: "2026-04-13T11:00:00Z",
+                    audioUrl: "https://example.com/audio.mp3",
+                    feedUrl: "https://anchor.fm/s/1035b1568/podcast/rss",
+                    podcastWebsiteUrl: "https://podcast-index-link.example",
+                });
+            });
+
+            it("reads the episode page, GUID and website from the podcast's feed", async () => {
+                vi.mocked(rss.fetchAndParseFeed).mockResolvedValue(FEED);
+
+                await queueConsumer.queue(createMockBatch([appleMessage()]), getTestEnv());
+
+                const saved = await getEpisode(env.TLDL_DATA, EPISODE_ID);
+                expect(saved?.episodePageUrl).toBe("https://www.howiai.example/p/test-episode");
+                expect(saved?.episodeGuid).toBe("feed-guid-1");
+                expect(saved?.podcastWebsiteUrl).toBe("https://www.howiai.example/podcast");
+                expect(saved?.appleUrl).toBe(APPLE_URL);
+            });
+
+            it("uses the monitored podcast's website when one is set", async () => {
+                await saveMonitoredPodcast(env.TLDL_DATA, {
+                    id: "1809663079", name: "How I AI", rssUrl: "https://anchor.fm/s/1035b1568/podcast/rss",
+                    templateId: "key-takeaways", addedAt: "2026-04-17T00:00:00Z", episodesProcessed: 0,
+                    status: "active", websiteUrl: "https://www.platformer.news",
+                });
+                vi.mocked(rss.fetchAndParseFeed).mockResolvedValue(FEED);
+
+                await queueConsumer.queue(createMockBatch([appleMessage()]), getTestEnv());
+
+                expect((await getEpisode(env.TLDL_DATA, EPISODE_ID))?.podcastWebsiteUrl).toBe("https://www.platformer.news");
+            });
+
+            it("still saves the episode when the feed can't be read", async () => {
+                vi.mocked(rss.fetchAndParseFeed).mockRejectedValue(new Error("feed down"));
+
+                const batch = createMockBatch([appleMessage()]);
+                await queueConsumer.queue(batch, getTestEnv());
+
+                expect(batch.messages[0].ack).toHaveBeenCalled();
+                const saved = await getEpisode(env.TLDL_DATA, EPISODE_ID);
+                expect(saved?.episodePageUrl).toBeUndefined();
+                expect(saved?.podcastWebsiteUrl).toBe("https://podcast-index-link.example");
+            });
         });
 
         it("stores a show-level Apple URL when the queued one was built from a Podcast Index ID", async () => {

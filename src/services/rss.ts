@@ -256,6 +256,48 @@ export function parseFeedXml(xml: string, { maxEpisodes = MAX_EPISODES }: { maxE
     return { title, ...(link && { link }), episodes };
 }
 
+/** Which identifier matched in findEpisodeInFeedExact. */
+export type ExactEpisodeMatch = "guid" | "audio-url" | "title";
+
+function withoutQuery(url: string): string {
+    try {
+        const u = new URL(url);
+        return `${u.origin}${u.pathname}`;
+    } catch {
+        return url;
+    }
+}
+
+function normalizeTitleExact(title: string): string {
+    return title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * Find an episode by exact identifiers only: GUID, then audio URL (ignoring
+ * the query string, which hosts use for signed tokens), then title ignoring
+ * case and punctuation. No similarity, date or position fallbacks, unlike
+ * findEpisodeInFeed: callers use this to attach a link to a stored episode,
+ * where a wrong match is worse than none.
+ */
+export function findEpisodeInFeedExact(
+    feed: ParsedFeed,
+    identifiers: { guid?: string; audioUrl?: string; title?: string }
+): { episode: RssEpisode; match: ExactEpisodeMatch } | null {
+    const { guid, audioUrl, title } = identifiers;
+    const byGuid = guid ? feed.episodes.find(ep => ep.guid === guid) : undefined;
+    if (byGuid) return { episode: byGuid, match: "guid" };
+
+    const audio = audioUrl ? withoutQuery(audioUrl) : "";
+    const byAudio = audio ? feed.episodes.find(ep => ep.audioUrl && withoutQuery(ep.audioUrl) === audio) : undefined;
+    if (byAudio) return { episode: byAudio, match: "audio-url" };
+
+    const normalized = title ? normalizeTitleExact(title) : "";
+    const byTitle = normalized ? feed.episodes.find(ep => normalizeTitleExact(ep.title) === normalized) : undefined;
+    if (byTitle) return { episode: byTitle, match: "title" };
+
+    return null;
+}
+
 /**
  * Options for finding episodes with additional context for better matching
  */
