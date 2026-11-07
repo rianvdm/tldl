@@ -17,6 +17,7 @@ import { webhookRoutes } from "./routes/webhooks";
 import queueConsumer from "./queue/consumer";
 import { Footer } from "./lib/components";
 import { checkAllPodcasts } from "./lib/monitor";
+import { enrichAppleEpisodeLinks } from "./lib/apple-link-enrichment";
 import { appendActivityEvent } from "./lib/kv";
 import { notifyDiscord, DISCORD_COLORS } from "./lib/discord";
 import { listActiveJobsWithDO } from "./lib/job-status-do";
@@ -506,6 +507,17 @@ async function scheduledHandler(
         } catch {
             // Activity log and Discord are non-critical
         }
+    }
+
+    // Swap show-level Apple URLs on recent episodes for episode URLs once Apple
+    // lists them. Independent of the podcast check above, so it runs even if that failed.
+    try {
+        await enrichAppleEpisodeLinks(env);
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: "apple_link_enrichment_error",
+            error: error instanceof Error ? error.message : String(error),
+        }));
     }
 
     try {

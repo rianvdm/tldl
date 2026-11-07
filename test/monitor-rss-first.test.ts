@@ -10,24 +10,10 @@ vi.mock("../src/lib/job-status-do", () => ({
     createJobDO: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../src/lib/queue", () => ({
+// Keep the real message builder (pure) so assertions see exactly what production enqueues.
+vi.mock("../src/lib/queue", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../src/lib/queue")>()),
     enqueueJob: vi.fn().mockResolvedValue(undefined),
-    createProcessEpisodeMessage: vi.fn((params) => ({
-        type: "process_episode",
-        jobId: params.jobId,
-        episodeId: params.episodeId,
-        templateId: params.templateId,
-        rssSourced: params.rssSourced,
-        audioUrl: params.audioUrl,
-        durationSeconds: params.durationSeconds,
-        transcriptUrl: params.transcriptUrl,
-        transcriptType: params.transcriptType,
-        podcastTitle: params.podcastTitle,
-        episodeGuid: params.episodeGuid,
-        expectedTitle: params.expectedTitle,
-        expectedDate: params.expectedDate,
-        submittedBy: params.submittedBy,
-    })),
 }));
 
 // Import after mocking
@@ -108,6 +94,85 @@ describe("monitor: RSS-first", () => {
         const updated = await getMonitoredPodcast(env.TLDL_DATA, PODCAST.id);
         expect(updated?.etag).toBe("\"new-etag\"");
         expect(updated?.lastModified).toBe("Mon, 13 Apr 2026 11:00:00 GMT");
+    });
+
+    describe("outbound links", () => {
+        function mockFeed(feed: rss.ParsedFeed) {
+            vi.spyOn(rss, "fetchFeedIfChanged").mockResolvedValue({ status: "ok", feed });
+        }
+
+        const EPISODE = {
+            guid: "link-guid-1",
+            title: "Linked Episode",
+            pubDate: new Date().toISOString(),
+            duration: 1800,
+            audioUrl: "https://cdn.example.com/ep1.mp3",
+        };
+
+        it("passes the feed's website and the item's episode page to the queue message", async () => {
+            mockFeed({
+                title: "How I AI",
+                link: "https://www.lennysnewsletter.com/podcast",
+                episodes: [{ ...EPISODE, link: "https://www.lennysnewsletter.com/p/linked-episode" }],
+            });
+
+            await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
+
+            const [, msg] = vi.mocked(enqueueJob).mock.calls[0];
+            expect(msg.podcastWebsiteUrl).toBe("https://www.lennysnewsletter.com/podcast");
+            expect(msg.episodePageUrl).toBe("https://www.lennysnewsletter.com/p/linked-episode");
+        });
+
+        it("drops item links that are not episode-specific", async () => {
+            mockFeed({
+                title: "How I AI",
+                link: "https://www.ted.com/podcasts/worklife",
+                episodes: [{ ...EPISODE, link: "https://audiocollective.ted.com/" }],
+            });
+
+            await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
+
+            const [, msg] = vi.mocked(enqueueJob).mock.calls[0];
+            expect(msg.episodePageUrl).toBeUndefined();
+        });
+
+        it("replaces a stored Apple URL on the monitored podcast with the feed's website", async () => {
+            await saveMonitoredPodcast(env.TLDL_DATA, {
+                ...PODCAST,
+                websiteUrl: "https://podcasts.apple.com/us/podcast/hbr-on-leadership/id1683948659",
+            });
+            mockFeed({ title: "How I AI", link: "https://hbr.org/podcasts/on-leadership", episodes: [EPISODE] });
+
+            await checkPodcastForNewEpisodes(getTestEnv(), PODCAST, 5);
+
+            const updated = await getMonitoredPodcast(env.TLDL_DATA, PODCAST.id);
+            expect(updated?.websiteUrl).toBe("https://hbr.org/podcasts/on-leadership");
+            const [, msg] = vi.mocked(enqueueJob).mock.calls[0];
+            expect(msg.podcastWebsiteUrl).toBe("https://hbr.org/podcasts/on-leadership");
+        });
+
+        it("keeps a valid website already on the monitored podcast over the feed's link", async () => {
+            const stored = { ...PODCAST, websiteUrl: "https://crooked.com" };
+            await saveMonitoredPodcast(env.TLDL_DATA, stored);
+            mockFeed({ title: "How I AI", link: "https://audioboom.com/channels/5166624", episodes: [EPISODE] });
+
+            await checkPodcastForNewEpisodes(getTestEnv(), stored, 5);
+
+            expect((await getMonitoredPodcast(env.TLDL_DATA, PODCAST.id))?.websiteUrl).toBe("https://crooked.com");
+            const [, msg] = vi.mocked(enqueueJob).mock.calls[0];
+            expect(msg.podcastWebsiteUrl).toBe("https://crooked.com");
+        });
+
+        it("never sends an Apple URL as the website when the feed has no usable link", async () => {
+            const stored = { ...PODCAST, websiteUrl: "https://podcasts.apple.com/us/podcast/x/id1" };
+            await saveMonitoredPodcast(env.TLDL_DATA, stored);
+            mockFeed({ title: "How I AI", link: "https://feeds.acast.com/public/shows/x", episodes: [EPISODE] });
+
+            await checkPodcastForNewEpisodes(getTestEnv(), stored, 5);
+
+            const [, msg] = vi.mocked(enqueueJob).mock.calls[0];
+            expect(msg.podcastWebsiteUrl).toBeUndefined();
+        });
     });
 
     it("skips already-processed GUIDs", async () => {

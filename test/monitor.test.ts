@@ -49,6 +49,7 @@ vi.mock("../src/lib/job-status-do", () => ({
 // Import after mocking
 import { fetchAndParseFeed } from "../src/services/rss";
 import { getEpisodesByItunesId, lookupPodcastByItunesId } from "../src/services/podcast-index";
+import { createProcessEpisodeMessage } from "../src/lib/queue";
 import { checkPodcastForNewEpisodes, addPodcastToMonitoring } from "../src/lib/monitor";
 
 // ============================================================================
@@ -126,6 +127,27 @@ describe("checkPodcastForNewEpisodes", () => {
 
         // RSS should NOT have been called (PI succeeded)
         expect(fetchAndParseFeed).not.toHaveBeenCalled();
+    });
+
+    it("flags the Podcast Index-built Apple URL as synthetic so it is never displayed", async () => {
+        const podcast = createTestPodcast();
+        await saveMonitoredPodcast(env.TLDL_DATA, podcast);
+        vi.mocked(getEpisodesByItunesId).mockResolvedValue([
+            {
+                id: 62880121466, // a Podcast Index ID, not Apple's 1000… episode ID
+                guid: "pi-guid-1",
+                title: "Podcast Index Episode",
+                datePublished: Math.floor(new Date("2026-03-16T11:00:00.000Z").getTime() / 1000),
+                duration: 1800,
+                enclosureUrl: "https://example.com/pi.mp3",
+            },
+        ]);
+
+        await checkPodcastForNewEpisodes(getTestEnv(), podcast);
+
+        expect(createProcessEpisodeMessage).toHaveBeenCalledWith(
+            expect.objectContaining({ appleUrlIsSynthetic: true, episodeGuid: "pi-guid-1" })
+        );
     });
 
     it("reports no new episodes when all are already processed", async () => {

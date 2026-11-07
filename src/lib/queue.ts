@@ -22,6 +22,7 @@ export function createProcessEpisodeMessage(params: {
     jobId: string;
     episodeId: string;
     appleUrl?: string;
+    appleUrlIsSynthetic?: boolean;
     templateId: string;
     episodeGuid?: string;
     expectedTitle?: string;
@@ -36,6 +37,8 @@ export function createProcessEpisodeMessage(params: {
     transcriptUrl?: string;
     transcriptType?: string;
     podcastTitle?: string;
+    podcastWebsiteUrl?: string;
+    episodePageUrl?: string;
 }): QueueMessage {
     return {
         type: "process_episode",
@@ -43,6 +46,7 @@ export function createProcessEpisodeMessage(params: {
         episodeId: params.episodeId,
         templateId: params.templateId,
         ...(params.appleUrl && { appleUrl: params.appleUrl }),
+        ...(params.appleUrlIsSynthetic && { appleUrlIsSynthetic: true }),
         ...(params.episodeGuid && { episodeGuid: params.episodeGuid }),
         ...(params.expectedTitle && { expectedTitle: params.expectedTitle }),
         ...(params.expectedDate && { expectedDate: params.expectedDate }),
@@ -55,6 +59,8 @@ export function createProcessEpisodeMessage(params: {
         ...(params.transcriptUrl && { transcriptUrl: params.transcriptUrl }),
         ...(params.transcriptType && { transcriptType: params.transcriptType }),
         ...(params.podcastTitle && { podcastTitle: params.podcastTitle }),
+        ...(params.podcastWebsiteUrl && { podcastWebsiteUrl: params.podcastWebsiteUrl }),
+        ...(params.episodePageUrl && { episodePageUrl: params.episodePageUrl }),
     };
 }
 

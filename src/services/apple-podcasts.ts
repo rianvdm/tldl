@@ -10,6 +10,7 @@ import type { ParsedAppleUrl } from "../lib/url-parser";
 import type { Env } from "../types";
 import { fetchAndParseFeed, findEpisodeInFeed } from "./rss";
 import { decodeHtmlEntities } from "../lib/html-entities";
+import { toWebsiteUrl } from "../lib/podcast-links";
 import {
     lookupPodcastByItunesId,
     getEpisodesByItunesId,
@@ -113,63 +114,6 @@ async function getEpisodeTitleFromApplePage(
             error: error instanceof Error ? error.message : String(error),
         }));
         return null;
-    }
-}
-
-/**
- * Clean a podcast link URL that might be an RSS feed URL
- * Strips RSS-specific paths/filenames while preserving the directory structure
- * e.g., https://www.thisamericanlife.org/podcast/rss.xml -> https://www.thisamericanlife.org/podcast
- */
-function cleanPodcastWebsiteUrl(url: string): string {
-    try {
-        const parsed = new URL(url);
-        let pathname = parsed.pathname;
-        const lowerPath = pathname.toLowerCase();
-
-        // Check if it looks like an RSS feed path
-        const isRssFeed =
-            lowerPath.endsWith('.xml') ||
-            lowerPath.endsWith('.rss') ||
-            lowerPath.endsWith('/feed') ||
-            lowerPath.endsWith('/feed/') ||
-            lowerPath.endsWith('/rss') ||
-            lowerPath.endsWith('/rss/') ||
-            lowerPath.includes('/feed/') ||
-            lowerPath.includes('/rss/');
-
-        if (!isRssFeed) {
-            // Not an RSS URL, return as-is
-            return url;
-        }
-
-        // Remove RSS/XML filenames (keep the directory)
-        if (lowerPath.endsWith('.xml') || lowerPath.endsWith('.rss')) {
-            pathname = pathname.substring(0, pathname.lastIndexOf('/'));
-        }
-
-        // Remove /feed, /feed/, /rss, or /rss/ from the end
-        pathname = pathname.replace(/\/(feed|rss)\/?$/i, '');
-
-        // If /feed/ or /rss/ appears in the middle, remove it and everything after
-        const feedMiddleIndex = pathname.toLowerCase().indexOf('/feed/');
-        const rssMiddleIndex = pathname.toLowerCase().indexOf('/rss/');
-
-        if (feedMiddleIndex !== -1) {
-            pathname = pathname.substring(0, feedMiddleIndex);
-        } else if (rssMiddleIndex !== -1) {
-            pathname = pathname.substring(0, rssMiddleIndex);
-        }
-
-        // If pathname is empty or just a slash, return the origin
-        if (!pathname || pathname === '/') {
-            return parsed.origin;
-        }
-
-        return `${parsed.origin}${pathname}`;
-    } catch {
-        // If URL parsing fails, return as-is
-        return url;
     }
 }
 
@@ -733,7 +677,7 @@ async function getEpisodeFromPodcastIndex(
                 feedUrl: podcast.url,
                 ...(episode.transcriptUrl && { transcriptUrl: episode.transcriptUrl }),
                 ...(podcast.author && { podcastAuthor: podcast.author }),
-                ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
+                podcastWebsiteUrl: toWebsiteUrl(podcast.link),
             };
         }
 
@@ -778,7 +722,7 @@ async function getEpisodeFromPodcastIndex(
                     ...(rssEpisode.transcriptUrl && { transcriptUrl: rssEpisode.transcriptUrl }),
                     ...(rssEpisode.transcriptType && { transcriptType: rssEpisode.transcriptType }),
                     ...(podcast.author && { podcastAuthor: podcast.author }),
-                    ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
+                    podcastWebsiteUrl: toWebsiteUrl(podcast.link),
                 };
             }
 
@@ -839,7 +783,7 @@ async function getEpisodeFromPodcastIndex(
                             ...(correctedEpisode.transcriptUrl && { transcriptUrl: correctedEpisode.transcriptUrl }),
                             ...(correctedEpisode.transcriptType && { transcriptType: correctedEpisode.transcriptType }),
                             ...(podcast.author && { podcastAuthor: podcast.author }),
-                            ...(podcast.link && { podcastWebsiteUrl: cleanPodcastWebsiteUrl(podcast.link) }),
+                            podcastWebsiteUrl: toWebsiteUrl(podcast.link),
                         };
                     }
 

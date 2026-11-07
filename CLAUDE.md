@@ -37,6 +37,12 @@ Clear all local state (KV + Durable Objects) and start fresh:
 rm -rf .wrangler/state && npx tsx scripts/seed-local-data.ts
 ```
 
+Backfill outbound links (Apple episode URL, episode page, website) on stored episodes — see [Episode outbound links](#episode-outbound-links):
+```bash
+npm run backfill:links                     # dry run: writes a plan to scripts/backfill-results/, touches no KV
+npm run backfill:links -- --apply          # write it (saves a .backup.json of every overwritten record first)
+```
+
 Compare summary models before adopting a new one (see [Model A/B harness](#model-ab-harness)):
 ```bash
 npm run ab:summary                  # curated 6-episode sample, gpt-5.6-terra vs claude-opus-5-5
@@ -86,6 +92,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
   - Predefined tag list in `src/lib/constants.ts` (EPISODE_TAGS)
   - Tag generation is non-critical: empty tags don't fail jobs
   - Home page supports single-tag filtering with `/?tag=tagname`
+- **Episode outbound links**: see [Episode outbound links](#episode-outbound-links) — Apple episode URL, publisher's episode page, podcast website
 - **Podcast Pages**: Browse and individual podcast pages (`/podcasts`, `/podcasts/:id`)
   - `extractPodcastId()` in `src/lib/url-parser.ts` extracts podcast ID from episode ID format `{podcastId}_{episodeId}`
   - `getPodcastList()` in `src/lib/kv.ts` aggregates podcasts from episode index, sorted by most recently updated
@@ -193,6 +200,16 @@ Automatically monitors podcasts for new episodes and queues them for processing:
 - **Backlog guard**: Unseen GUIDs published >7 days before the previous check are marked processed, not queued (`dropBacklog`). Stops a publisher's GUID regeneration from replaying the back catalogue one episode per cron. Logs `monitor_backlog_skipped`.
 - **Settings**: `enabled` (global on/off), `maxEpisodesPerCheck` (cap per podcast per cycle)
 - **Failure notifications**: Discord webhook on monitoring errors and job failures
+
+### Episode outbound links
+
+The episode page links out three ways: **Episode page →** (`Episode.episodePageUrl`), **Podcast website →** (`podcastWebsiteUrl`) and **Listen on Apple Podcasts →** (`appleUrl`). Every writer validates through `src/lib/podcast-links.ts`, which rejects Apple listings and feed hosts as websites, and bare homepages, feed URLs and audio files as episode pages. `resolveWebsiteUrl()` keeps a valid stored website over a feed's `<link>`, because feeds sometimes link a hosting page (audioboom, buzzsprout) that is worse than what's there.
+
+- **Website and episode page** come from the RSS channel `<link>` and item `<link>`, read in the monitor cron and passed through the queue message (`podcastWebsiteUrl`, `episodePageUrl`).
+- **Apple episode URL** is a two-step affair because the iTunes Lookup API still 403s from Workers egress (re-measured 2026-11-07; cached responses sometimes slip through, which looks like it works). Cron episodes are saved with the show-level URL plus `episodeGuid`; then every cron tick, `enrichAppleEpisodeLinks()` (`src/lib/apple-link-enrichment.ts`) fetches the podcast's **show page** (`podcasts.apple.com/us/podcast/id{X}`, which loads fine from Workers), reads the `{guid, storeUrl}` pairs from its `#serialized-server-data` JSON, and swaps in the episode URL on an exact GUID match. Apple's page lags the feed by up to about a day, so episodes are retried for 14 days. The page only lists the ~10 newest episodes; older ones are the backfill script's job.
+- **Podcast Index episode IDs are not Apple episode IDs** (`62880121466` vs `1000800393703` for the same episode). The PI fallback path in `monitor.ts` still builds `?i={piId}` URLs for routing, flagged `appleUrlIsSynthetic` so the consumer stores the show-level URL instead. Apple silently redirects a bad `?i=` to the show page, so this kind of bug looks like it works.
+
+`scripts/backfill-episode-links.ts` fixes existing episodes from a laptop, where iTunes Lookup works: it finds each episode's GUID (stored, RSS-ID hash, Apple ID, audio URL or exact title), then plans changes with the tested pure function in `scripts/lib/episode-links-plan.ts`. Run on 2026-11-07: 523 of 555 episodes updated; 36 unmatched (mostly NYT shows and This American Life, whose feeds and iTunes listings only carry recent episodes). When verifying writes, wait ~60s: KV reads are eventually consistent, and a read straight after the bulk put showed 81 stale records that were fine a minute later.
 
 ### Summary Templates
 
@@ -320,7 +337,7 @@ src/
 
 ## Common Issues
 
-- **iTunes 403 errors**: Use Podcast Index API instead (already configured)
+- **iTunes 403 errors**: Use Podcast Index API instead (already configured). For Apple episode URLs, use the show-page scraper (`src/services/apple-show-page.ts`), not iTunes Lookup.
 - **Episode title extraction**: URL slugs sometimes contain podcast name instead of episode title; `getEpisodeTitleFromApplePage()` scrapes the actual page to get reliable titles
 - **Large audio files**: Automatically chunked at MP3 frame boundaries (>25MB)
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads

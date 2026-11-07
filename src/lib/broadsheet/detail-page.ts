@@ -61,6 +61,9 @@ export function renderDetailPage(opts: DetailPageOptions): string {
     const moreLinks: string[] = [
         `<a href="${podcastHref}">All episodes from ${escape(ep.podcastName)} →</a>`,
     ];
+    if (ep.episodePageUrl) {
+        moreLinks.push(`<a href="${escape(ep.episodePageUrl)}" target="_blank" rel="noopener noreferrer">Episode page →</a>`);
+    }
     if (ep.podcastWebsiteUrl) {
         moreLinks.push(`<a href="${escape(ep.podcastWebsiteUrl)}" target="_blank" rel="noopener noreferrer">Podcast website →</a>`);
     }

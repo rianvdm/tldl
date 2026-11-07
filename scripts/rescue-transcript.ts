@@ -28,19 +28,16 @@
  * `summary:{id}:{templateId}` exist and the ID is in `episodes:index`.
  */
 
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { transcribeAudio } from "../src/services/transcription";
+import { CONTENT_TTL_SECONDS, kvGetJson, kvPutJson } from "./lib/prod-kv";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..");
 
-const KV_NAMESPACE = "ee123158d5d54359b4257f8a1b678adf"; // TLDL_DATA (prod), see wrangler.toml
-const CONTENT_TTL_SECONDS = 31536000; // 365 days, matches TTL.CONTENT
 const FEED_UA = "Mozilla/5.0";
 
 interface Args {
@@ -90,51 +87,6 @@ function readApiKey(): string {
     const match = vars.match(/^OPENAI_API_KEY\s*=\s*"?([^"\n]+)"?/m);
     if (!match) throw new Error("OPENAI_API_KEY not found in .dev.vars");
     return match[1].trim();
-}
-
-/**
- * Read a KV key. Returns null when the key is absent.
- *
- * Note: `wrangler kv key get` on a missing key exits non-zero AND prints its 404
- * to stdout, so "did I get bytes back?" is not a valid existence check. We rely
- * on the exit code (execFileSync throws) and discard stderr entirely.
- */
-function kvGet(key: string): string | null {
-    try {
-        return execFileSync(
-            "npx",
-            ["wrangler", "kv", "key", "get", key, "--namespace-id", KV_NAMESPACE, "--remote"],
-            { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], cwd: REPO_ROOT }
-        );
-    } catch {
-        return null;
-    }
-}
-
-function kvGetJson<T>(key: string): T | null {
-    const raw = kvGet(key);
-    if (raw === null) return null;
-    try {
-        return JSON.parse(raw) as T;
-    } catch {
-        throw new Error(`KV key ${key} did not contain valid JSON (got ${raw.length} bytes)`);
-    }
-}
-
-/**
- * Write a KV value from a temp file.
- *
- * `ttlSeconds` omitted means no expiry — required for `monitored:*` records,
- * which must never be scheduled for deletion. Content keys pass CONTENT_TTL_SECONDS.
- * The flag is `--ttl`; `--expiration-ttl` hard-errors on wrangler 4.x.
- */
-function kvPutJson(key: string, value: unknown, ttlSeconds?: number): void {
-    const dir = mkdtempSync(join(tmpdir(), "tldl-rescue-"));
-    const file = join(dir, "value.json");
-    writeFileSync(file, JSON.stringify(value));
-    const args = ["wrangler", "kv", "key", "put", key, "--namespace-id", KV_NAMESPACE, "--remote", "--path", file];
-    if (ttlSeconds !== undefined) args.push("--ttl", String(ttlSeconds));
-    execFileSync("npx", args, { stdio: ["ignore", "ignore", "inherit"], cwd: REPO_ROOT });
 }
 
 interface FeedMatch {

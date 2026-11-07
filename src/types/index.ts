@@ -58,6 +58,10 @@ export interface Episode {
     tags?: string[];               // AI-generated episode tags (1-4 tags)
     podcastAuthor?: string;        // Podcast author/host name
     podcastWebsiteUrl?: string;    // Podcast website URL
+    /** The publisher's web page for this episode (RSS item <link>), when it is episode-specific. */
+    episodePageUrl?: string;
+    /** RSS item GUID. Lets the cron swap a show-level appleUrl for the episode's own Apple URL. */
+    episodeGuid?: string;
     /** 1-2 sentence deck for Index + Detail hero. Populated going forward; undefined for pre-redesign episodes. */
     deck?: string;
     /** One-sentence aphoristic pull quote from the transcript. Populated going forward; undefined for pre-redesign episodes. */
@@ -130,6 +134,9 @@ export interface QueueMessage {
     episodeId: string;
     // URL-based fields (required for process_episode, unused for process_manual/regenerate_summary)
     appleUrl?: string;
+    // True when appleUrl's ?i= is a Podcast Index episode ID rather than Apple's
+    // (monitor's Podcast Index path). Still fine for routing; never displayed.
+    appleUrlIsSynthetic?: boolean;
     templateId: string;
     // Pre-fetched iTunes metadata (to avoid 403 errors in queue consumer)
     episodeGuid?: string;
@@ -149,6 +156,9 @@ export interface QueueMessage {
     transcriptUrl?: string;
     transcriptType?: string;
     podcastTitle?: string;
+    // Outbound links read from the feed, already validated (see lib/podcast-links.ts)
+    podcastWebsiteUrl?: string;
+    episodePageUrl?: string;
 }
 
 /**

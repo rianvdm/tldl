@@ -181,6 +181,55 @@ describe("parseFeedXml", () => {
         expect(feed.title).toBe("Café & Co");
         expect(feed.episodes[0].title).toBe("How to Cultivate Your “Personal Power” as a Leader");
     });
+
+    describe("episode cap", () => {
+        const items = Array.from({ length: 120 }, (_, i) =>
+            `<item><guid>g${i}</guid><title>E${i}</title><enclosure url="https://example.com/${i}.mp3"/></item>`
+        ).join("");
+        const longFeed = `<?xml version="1.0"?><rss><channel><title>Long</title>${items}</channel></rss>`;
+
+        it("parses the 100 newest items by default", () => {
+            expect(parseFeedXml(longFeed).episodes).toHaveLength(100);
+        });
+
+        it("parses more when maxEpisodes asks for it", () => {
+            expect(parseFeedXml(longFeed, { maxEpisodes: Infinity }).episodes).toHaveLength(120);
+        });
+    });
+
+    describe("links", () => {
+        const linkFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>
+  <title>Linked</title>
+  <atom:link href="https://example.com/feed.xml" rel="self" type="application/rss+xml"/>
+  <link>https://example.com/podcast</link>
+  <item>
+    <guid>with-link</guid>
+    <title>Has a page</title>
+    <link><![CDATA[https://example.com/p/episode-one]]></link>
+    <enclosure url="https://example.com/a.mp3" type="audio/mpeg" length="1"/>
+  </item>
+  <item>
+    <guid>without-link</guid>
+    <title>No page</title>
+    <enclosure url="https://example.com/b.mp3" type="audio/mpeg" length="1"/>
+  </item>
+</channel></rss>`;
+
+        it("reads the channel <link> as the feed link, ignoring atom:link", () => {
+            expect(parseFeedXml(linkFeed).link).toBe("https://example.com/podcast");
+        });
+
+        it("reads each item's <link>, including CDATA-wrapped values", () => {
+            const feed = parseFeedXml(linkFeed);
+            expect(feed.episodes[0].link).toBe("https://example.com/p/episode-one");
+        });
+
+        it("leaves link undefined when an item has none", () => {
+            const feed = parseFeedXml(linkFeed);
+            expect(feed.episodes[1].link).toBeUndefined();
+        });
+    });
 });
 
 describe("findEpisodeInFeed", () => {

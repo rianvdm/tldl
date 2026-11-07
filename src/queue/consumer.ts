@@ -15,6 +15,7 @@ import { ERROR_CODES } from "../lib/constants";
 import { generateEpisodeTags } from "../services/tag-generation";
 import { generateEditorialMeta } from "../services/editorial-meta";
 import { parseApplePodcastsUrl, extractPodcastId } from "../lib/url-parser";
+import { showLevelAppleUrl, toWebsiteUrl } from "../lib/podcast-links";
 import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
 import {
     getJob,
@@ -79,6 +80,7 @@ interface ProcessingContext {
     jobId: string;
     episodeId: string;
     appleUrl?: string;
+    appleUrlIsSynthetic?: boolean;
     templateId: string;
     // Pre-fetched iTunes metadata (avoids 403 errors from iTunes API)
     episodeGuid?: string;
@@ -97,6 +99,8 @@ interface ProcessingContext {
     prefetchedTranscriptUrl?: string;
     prefetchedTranscriptType?: string;
     prefetchedPodcastTitle?: string;
+    prefetchedWebsiteUrl?: string;
+    prefetchedEpisodePageUrl?: string;
 }
 
 // ============================================================================
@@ -307,6 +311,7 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         jobId: msg.jobId,
         episodeId: msg.episodeId,
         appleUrl: msg.appleUrl,
+        appleUrlIsSynthetic: msg.appleUrlIsSynthetic,
         templateId: msg.templateId,
         episodeGuid: msg.episodeGuid,
         expectedTitle: msg.expectedTitle,
@@ -320,6 +325,8 @@ async function processMessage(msg: QueueMessage, env: Env): Promise<void> {
         prefetchedTranscriptUrl: msg.transcriptUrl,
         prefetchedTranscriptType: msg.transcriptType,
         prefetchedPodcastTitle: msg.podcastTitle,
+        prefetchedWebsiteUrl: msg.podcastWebsiteUrl,
+        prefetchedEpisodePageUrl: msg.episodePageUrl,
     };
 
     console.log(
@@ -442,7 +449,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             audioUrl: ctx.prefetchedAudioUrl,
             feedUrl: monitored?.rssUrl || "",
             podcastAuthor: monitored?.author,
-            podcastWebsiteUrl: monitored?.websiteUrl,
+            podcastWebsiteUrl: ctx.prefetchedWebsiteUrl ?? toWebsiteUrl(monitored?.websiteUrl),
             ...(ctx.prefetchedTranscriptUrl && { transcriptUrl: ctx.prefetchedTranscriptUrl }),
             ...(ctx.prefetchedTranscriptType && { transcriptType: ctx.prefetchedTranscriptType }),
         };
@@ -626,15 +633,18 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         const expiresAt = new Date(now);
         expiresAt.setDate(expiresAt.getDate() + 365);
 
-        // For RSS-ingested episodes we don't have an Apple episode ID, so fall
-        // back to a show-level Apple Podcasts URL using the numeric podcastId.
-        const rssPodcastId = ctx.rssSourced ? episodeId.split("_")[0] : "";
-        const fallbackAppleUrl = ctx.rssSourced && /^\d+$/.test(rssPodcastId)
-            ? `https://podcasts.apple.com/us/podcast/id${rssPodcastId}`
-            : "";
+        // Monitor-queued episodes have no real Apple episode ID yet (RSS path:
+        // none at all; Podcast Index path: PI's own ID), so start with the
+        // show-level URL. The cron upgrades it once Apple lists the episode
+        // (see lib/apple-link-enrichment.ts), matching on episodeGuid.
+        const storedAppleUrl = ctx.rssSourced || ctx.appleUrlIsSynthetic
+            ? showLevelAppleUrl(episodeId.split("_")[0]) ?? ""
+            : appleUrl ?? "";
         const episode: Episode = {
             id: episodeId,
-            appleUrl: appleUrl || fallbackAppleUrl,
+            appleUrl: storedAppleUrl,
+            episodeGuid,
+            episodePageUrl: ctx.prefetchedEpisodePageUrl,
             podcastName: metadata.podcastName,
             episodeTitle: metadata.episodeTitle,
             episodeDuration: metadata.episodeDuration,

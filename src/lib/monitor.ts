@@ -25,6 +25,7 @@ import { enqueueJob, createProcessEpisodeMessage } from "./queue";
 import { createJobDO } from "./job-status-do";
 import { AppError } from "./errors";
 import { ERROR_CODES } from "./constants";
+import { resolveWebsiteUrl, toEpisodePageUrl } from "./podcast-links";
 
 // Generate a UUID v4
 function generateUUID(): string {
@@ -344,6 +345,8 @@ export async function checkPodcastForNewEpisodes(
 
         // status === "ok"
         const feed = fetchResult.feed;
+        // Fill in (or repair) the podcast's website from the feed's own <link>.
+        const websiteUrl = resolveWebsiteUrl(podcast.websiteUrl, [feed.link]);
         const processedGuids = await getProcessedEpisodes(env.TLDL_DATA, podcast.id);
         const processedSet = new Set(processedGuids);
         const newEpisodes = await dropBacklog(
@@ -359,6 +362,7 @@ export async function checkPodcastForNewEpisodes(
             status: "active",
             etag: fetchResult.etag,
             lastModified: fetchResult.lastModified,
+            ...(websiteUrl && websiteUrl !== podcast.websiteUrl && { websiteUrl }),
         };
 
         if (newEpisodes.length === 0) {
@@ -392,6 +396,8 @@ export async function checkPodcastForNewEpisodes(
                     transcriptUrl: rssEp.transcriptUrl,
                     transcriptType: rssEp.transcriptType,
                     templateId: podcast.templateId,
+                    podcastWebsiteUrl: websiteUrl,
+                    episodePageUrl: toEpisodePageUrl(rssEp.link, { websiteUrl, audioUrl: rssEp.audioUrl }),
                 });
 
                 await markEpisodeProcessed(env.TLDL_DATA, podcast.id, rssEp.guid);
@@ -787,6 +793,8 @@ async function queueEpisodeForProcessing(
         jobId,
         episodeId: params.episodeId,
         appleUrl: params.appleUrl,
+        // Every caller builds ?i= from a Podcast Index episode ID (see QueueMessage).
+        appleUrlIsSynthetic: true,
         templateId: params.templateId,
         episodeGuid: params.episodeGuid,
         expectedTitle: params.expectedTitle,
@@ -816,6 +824,8 @@ interface QueueRssEpisodeParams {
     transcriptUrl?: string;
     transcriptType?: string;
     templateId: string;
+    podcastWebsiteUrl?: string;
+    episodePageUrl?: string;
 }
 
 /**
@@ -856,6 +866,8 @@ async function queueRssEpisodeForProcessing(
         transcriptUrl: params.transcriptUrl,
         transcriptType: params.transcriptType,
         podcastTitle: params.podcastName,
+        podcastWebsiteUrl: params.podcastWebsiteUrl,
+        episodePageUrl: params.episodePageUrl,
     });
 
     await enqueueJob(env.TLDL_QUEUE, message);

@@ -20,6 +20,7 @@ export interface RssEpisode {
     audioUrl: string;
     transcriptUrl?: string;
     transcriptType?: string; // srt, vtt, json, etc.
+    link?: string; // Item <link>, raw; validate with toEpisodePageUrl before showing
 }
 
 /**
@@ -27,6 +28,7 @@ export interface RssEpisode {
  */
 export interface ParsedFeed {
     title: string;
+    link?: string; // Channel <link>, raw; validate with toWebsiteUrl before showing
     episodes: RssEpisode[];
 }
 
@@ -151,9 +153,22 @@ export async function fetchAndParseFeed(feedUrl: string): Promise<ParsedFeed> {
 }
 
 /**
- * Parse RSS XML into structured data
+ * Read an RSS <link> element. fast-xml-parser yields a string, or an array
+ * when a feed repeats the element; atom:link is a separate key and never
+ * lands here.
  */
-export function parseFeedXml(xml: string): ParsedFeed {
+function readLink(value: unknown): string | undefined {
+    const first = Array.isArray(value) ? value[0] : value;
+    const text = typeof first === "string" ? first.trim() : "";
+    return text || undefined;
+}
+
+/**
+ * Parse RSS XML into structured data.
+ * `maxEpisodes` caps how many items are parsed (newest first); the Worker keeps
+ * the default for CPU time, offline scripts that need the whole feed raise it.
+ */
+export function parseFeedXml(xml: string, { maxEpisodes = MAX_EPISODES }: { maxEpisodes?: number } = {}): ParsedFeed {
     const parser = new XMLParser({
         ignoreAttributes: false,
         attributeNamePrefix: "@_",
@@ -187,7 +202,7 @@ export function parseFeedXml(xml: string): ParsedFeed {
     const title = decodeHtmlEntities(String(channel.title || "Unknown Podcast"));
     const items = (channel.item || []) as Array<Record<string, unknown>>;
 
-    const episodes: RssEpisode[] = items.slice(0, MAX_EPISODES).map((item) => {
+    const episodes: RssEpisode[] = items.slice(0, maxEpisodes).map((item) => {
         // Extract guid
         let guid = "";
         if (typeof item.guid === "string") {
@@ -223,6 +238,8 @@ export function parseFeedXml(xml: string): ParsedFeed {
         const itunesDuration = item["itunes:duration"];
         const duration = parseDuration(itunesDuration as string | number | undefined);
 
+        const link = readLink(item.link);
+
         return {
             guid,
             title: decodeHtmlEntities(String(item.title || "Untitled Episode")),
@@ -231,10 +248,12 @@ export function parseFeedXml(xml: string): ParsedFeed {
             audioUrl,
             ...(transcriptUrl && { transcriptUrl }),
             ...(transcriptType && { transcriptType }),
+            ...(link && { link }),
         };
     });
 
-    return { title, episodes };
+    const link = readLink(channel.link);
+    return { title, ...(link && { link }), episodes };
 }
 
 /**
