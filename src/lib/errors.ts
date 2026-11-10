@@ -24,6 +24,8 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
         "Unable to access the episode audio. It may be geo-restricted or no longer available.",
     [ERROR_CODES.AUDIO_TOO_LARGE]:
         "The audio file is too large to process. Try a shorter episode.",
+    [ERROR_CODES.AUDIO_UNSUPPORTED]:
+        "This episode's audio format isn't supported.",
     [ERROR_CODES.TRANSCRIPTION_FAILED]:
         "Transcription failed. Please try again in a few minutes.",
     [ERROR_CODES.SUMMARIZATION_FAILED]:
@@ -53,6 +55,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
     [ERROR_CODES.EPISODE_TOO_LONG]: 400,
     [ERROR_CODES.AUDIO_UNAVAILABLE]: 502,
     [ERROR_CODES.AUDIO_TOO_LARGE]: 400,
+    [ERROR_CODES.AUDIO_UNSUPPORTED]: 422,
     [ERROR_CODES.TRANSCRIPTION_FAILED]: 502,
     [ERROR_CODES.SUMMARIZATION_FAILED]: 502,
     [ERROR_CODES.RATE_LIMITED]: 429,
