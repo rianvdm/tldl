@@ -451,8 +451,10 @@ function u32Array(values: ArrayLike<number>): Uint8Array {
     for (let i = 0; i < values.length; i++) dv.setUint32(i * 4, values[i]);
     return out;
 }
-const u32 = (...values: number[]): Uint8Array => u32Array(values);
-const u16 = (...values: number[]): Uint8Array => {
+/** Big-endian 32-bit values, for box payloads. */
+export const u32 = (...values: number[]): Uint8Array => u32Array(values);
+/** Big-endian 16-bit values, for box payloads. */
+export const u16 = (...values: number[]): Uint8Array => {
     const out = new Uint8Array(values.length * 2);
     const dv = new DataView(out.buffer);
     values.forEach((v, i) => dv.setUint16(i * 2, v));

@@ -17,7 +17,8 @@ import {
     id3Length,
     requiresChunking,
 } from "../lib/audio";
-import { planChunks, type ChunkSizeLimits } from "./chunk-planning";
+import { adtsToM4a } from "../lib/adts";
+import { detectContainer, exactBuffer, planChunks, type ChunkSizeLimits } from "./chunk-planning";
 
 
 // Use centralized constant for Whisper size limit
@@ -144,6 +145,29 @@ export function detectAudioFormat(buffer: ArrayBuffer, contentType: string): str
 
     // Fallback to content-type header
     return extensionFromMime(contentType);
+}
+
+/**
+ * Make a whole file uploadable as-is. OpenAI rejects raw ADTS AAC at any size
+ * and under any filename, so ADTS is rewrapped as M4A; everything else, MP4
+ * included, is returned unchanged. Chunked uploads rewrap ADTS per chunk in
+ * `planChunks`, with the same `adtsToM4a`.
+ *
+ * @throws AppError(AUDIO_UNSUPPORTED) for ADTS that can't be rewrapped
+ */
+export function prepareForUpload(buffer: ArrayBuffer): ArrayBuffer {
+    const bytes = new Uint8Array(buffer);
+    if (detectContainer(bytes) !== "adts") return buffer;
+
+    const m4a = adtsToM4a(bytes);
+    console.log(
+        JSON.stringify({
+            event: "adts_rewrapped",
+            inputBytes: bytes.length,
+            outputBytes: m4a.length,
+        }),
+    );
+    return exactBuffer(m4a);
 }
 
 // ============================================================================
@@ -933,8 +957,9 @@ export async function transcribeAudio(
     }
 
     // Step 4: Call transcription API with retry for transient errors
+    const uploadBuffer = prepareForUpload(audioBuffer);
     const result = await withRetry(
-        () => callWhisperApi(audioBuffer, opts.apiKey, providerConfig, validation.contentType),
+        () => callWhisperApi(uploadBuffer, opts.apiKey, providerConfig, validation.contentType),
         {
             maxRetries: 3,
             baseDelayMs: 1000,
