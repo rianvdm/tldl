@@ -572,6 +572,7 @@ Still worth building if this keeps recurring: a `POST /admin/episodes/{podcastId
 - **Admin-only model**: There are no "regular users." Only admins can submit episodes. Visitors can request podcasts via `/request`.
 - **No auth on public pages**: Public pages have zero auth detection, no login buttons, no client-side auth scripts.
 - **Discord and Postmark are optional**: Both degrade gracefully when their secrets are not configured. The app works without them.
+- **GitHub releases cross-post to elezea.com**: publishing a release runs `.github/workflows/elezea-release-post.yml`, which posts it to elezea.com within a minute. Name and body must follow the release-notes contract in product-ai (`05-personal/side-projects/release-notes-contract.md`): `tldl vX.Y.Z — <tagline>`, an opening paragraph, then only `## Breaking changes` / `## What's new` / `## Fixes` / `## Under the hood`, written from the reader's side. The endpoint rejects anything else. Put `<!-- skip-elezea-post -->` on its own line at the end of the body to publish on GitHub only. Show Rian the draft before `gh release create`.
 
 ## How to Restore Transcripts on Episode Pages
 
