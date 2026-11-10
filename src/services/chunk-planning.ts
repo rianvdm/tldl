@@ -1,0 +1,235 @@
+/**
+ * Chunk planning for audio files too large for one transcription upload (#53).
+ *
+ * Sniffs the container from a probe of the file's first bytes, then plans
+ * chunks that the transcription loop loads and uploads one at a time:
+ * - MP4/M4A: cut on sample boundaries; each chunk is rewritten as a
+ *   standalone M4A, because MP4 audio can't be decoded without its `moov`.
+ * - Everything else (MP3, OGG, WAV, and ADTS for now): byte ranges, with
+ *   the file's first 512 bytes prepended to every chunk after the first.
+ *
+ * Must not import from `./transcription` (which imports this module).
+ */
+
+import { readAdtsHeader } from "../lib/adts";
+import { CHUNK_OVERLAP_SECONDS, RUN_COALESCE_GAP_BYTES, calculateChunkRanges, id3Length } from "../lib/audio";
+import { ERROR_CODES } from "../lib/constants";
+import { AppError } from "../lib/errors";
+import { coalesceRuns, parseAudioTrack, planSampleChunks } from "../lib/mp4";
+import { loadMp4Chunk, locateMoov, type FetchRange } from "./audio-containers";
+
+/**
+ * Size of the file header prepended to byte-range chunks after the first,
+ * so the API can recognise the format. Enough for MP3 headers and metadata.
+ */
+const AUDIO_HEADER_SIZE_BYTES = 512;
+
+export type AudioContainer = "mp3" | "mp4" | "adts" | "other";
+
+/** Per-chunk caps. The byte path uses only `maxBytes`. */
+export interface ChunkSizeLimits {
+    maxBytes: number;
+    maxSeconds: number;
+}
+
+export interface PlannedChunk {
+    /** 0-based position in the plan. */
+    index: number;
+    isFirst: boolean;
+    isLast: boolean;
+    /** Audio bytes shared with the previous chunk, which already transcribed them. */
+    overlapBytes: number;
+    /** Audio bytes only this chunk holds; its share of the audio is `newBytes / ChunkPlan.totalBytes`. */
+    newBytes: number;
+    /** Container-specific fields for the `chunk_processing` log event. */
+    logFields: Record<string, unknown>;
+    /** Fetch the chunk's audio and return the bytes to upload. */
+    load(): Promise<ArrayBuffer>;
+}
+
+export interface ChunkPlan {
+    container: AudioContainer;
+    /** All the audio bytes: the file size on the byte path, the track's sample bytes for MP4. */
+    totalBytes: number;
+    chunks: PlannedChunk[];
+}
+
+export interface PlanChunksInput {
+    /** The file's first bytes (up to `CONTAINER_PROBE_BYTES`). */
+    probe: Uint8Array;
+    fileSize: number;
+    /** Only logged: the bytes decide the container. */
+    contentType: string;
+    limits: ChunkSizeLimits;
+    fetchRange: FetchRange;
+}
+
+/**
+ * Classify a file from its first bytes.
+ *
+ * - `mp4`: an `ftyp` box at offset 4.
+ * - `adts`: after any ID3 tag, a valid ADTS header and a second one exactly
+ *   `frame_length` bytes on. One sync word alone is common in MP3 data, so
+ *   an unconfirmed header (including one the probe cuts short) is `other`.
+ * - `mp3`: an MPEG Layer III sync after any ID3 tag, or an ID3-tagged file
+ *   that is nothing else recognisable.
+ * - `other`: anything else.
+ */
+export function detectContainer(probe: Uint8Array): AudioContainer {
+    if (probe.length >= 8 && probe[4] === 0x66 && probe[5] === 0x74 && probe[6] === 0x79 && probe[7] === 0x70) {
+        return "mp4";
+    }
+
+    const id3 = id3Length(probe);
+    const tagged = id3 > 0;
+    if (id3 + 2 > probe.length) return tagged ? "mp3" : "other";
+
+    // 11-bit MPEG sync; the layer bits split ADTS (00) from MPEG Layer III (01).
+    if (probe[id3] === 0xff && (probe[id3 + 1] & 0xe0) === 0xe0) {
+        const layer = (probe[id3 + 1] >> 1) & 0x03;
+        if (layer === 0) {
+            const first = readAdtsHeader(probe, id3);
+            return first && readAdtsHeader(probe, id3 + first.length) ? "adts" : "other";
+        }
+        if (layer === 1) return "mp3";
+    }
+
+    return tagged ? "mp3" : "other";
+}
+
+/** Detect the container and plan its chunks. */
+export async function planChunks(input: PlanChunksInput): Promise<ChunkPlan> {
+    const container = detectContainer(input.probe);
+    console.log(
+        JSON.stringify({
+            event: "container_detected",
+            container,
+            contentType: input.contentType,
+            id3Bytes: id3Length(input.probe),
+        }),
+    );
+
+    if (container === "mp4") return planMp4Chunks(input);
+    // ADTS gets its own path in a later change; until then it is chunked like MP3.
+    return planByteChunks(container, input);
+}
+
+/** Today's MP3 path: byte ranges, with the file header prepended to chunks after the first. */
+function planByteChunks(
+    container: AudioContainer,
+    { probe, fileSize, limits, fetchRange }: PlanChunksInput,
+): ChunkPlan {
+    const header = probe.slice(0, AUDIO_HEADER_SIZE_BYTES);
+    const chunks = calculateChunkRanges(fileSize, limits.maxBytes).map((range, index): PlannedChunk => {
+        const sizeBytes = range.endByte - range.startByte + 1;
+        return {
+            index,
+            isFirst: range.isFirst,
+            isLast: range.isLast,
+            overlapBytes: range.overlapBytes,
+            newBytes: sizeBytes - range.overlapBytes,
+            logFields: {
+                startByte: range.startByte,
+                endByte: range.endByte,
+                sizeMB: Math.round(sizeBytes / 1024 / 1024),
+            },
+            load: async () => {
+                const body = await fetchRange(range.startByte, range.endByte);
+                return range.isFirst ? body : prependHeader(header, body, index);
+            },
+        };
+    });
+    return { container, totalBytes: fileSize, chunks };
+}
+
+function prependHeader(header: Uint8Array, body: ArrayBuffer, index: number): ArrayBuffer {
+    const combined = new Uint8Array(header.length + body.byteLength);
+    combined.set(header, 0);
+    combined.set(new Uint8Array(body), header.length);
+    console.log(
+        JSON.stringify({
+            event: "header_prepended",
+            chunkIndex: index + 1,
+            headerBytes: header.length,
+            originalChunkBytes: body.byteLength,
+            totalBytes: combined.byteLength,
+        }),
+    );
+    return combined.buffer;
+}
+
+/** MP4: cut on sample boundaries and rebuild each chunk as a standalone M4A. */
+async function planMp4Chunks({ probe, fileSize, limits, fetchRange }: PlanChunksInput): Promise<ChunkPlan> {
+    const { moov, layout, moovAtEnd } = await locateMoov(probe, fileSize, fetchRange);
+    const track = parseAudioTrack(moov);
+    console.log(
+        JSON.stringify({
+            event: "mp4_layout",
+            layout: layout.map(({ type, offset, size }) => ({ type, offset, size })),
+            moovAtEnd,
+            codec: track.codec,
+            timescale: track.timescale,
+            sampleCount: track.sampleCount,
+            durationSeconds: roundSeconds(track.durationSeconds),
+        }),
+    );
+    if (track.sampleCount === 0) {
+        throw new AppError(ERROR_CODES.AUDIO_UNSUPPORTED, "Unsupported MP4: audio track has no samples");
+    }
+
+    const sampleChunks = planSampleChunks(track, {
+        maxBytes: limits.maxBytes,
+        maxSeconds: limits.maxSeconds,
+        overlapSeconds: CHUNK_OVERLAP_SECONDS,
+    });
+    const chunkSummaries = sampleChunks.map((chunk) => ({
+        firstSample: chunk.firstSample,
+        endSample: chunk.endSample,
+        sampleCount: chunk.endSample - chunk.firstSample,
+        payloadBytes: chunk.payloadBytes,
+        startSeconds: roundSeconds(chunk.startSeconds),
+        endSeconds: roundSeconds(chunk.endSeconds),
+    }));
+    console.log(
+        JSON.stringify({
+            event: "mp4_chunk_plan",
+            totalChunks: sampleChunks.length,
+            totalPayloadBytes: track.totalPayloadBytes,
+            chunks: chunkSummaries.map((summary, i) => ({
+                ...summary,
+                rangeRequests: coalesceRuns(
+                    track.offsets,
+                    track.sizes,
+                    sampleChunks[i].firstSample,
+                    sampleChunks[i].endSample,
+                    RUN_COALESCE_GAP_BYTES,
+                ).length,
+            })),
+        }),
+    );
+
+    const chunks = sampleChunks.map(
+        (chunk, index): PlannedChunk => ({
+            index,
+            isFirst: chunk.isFirst,
+            isLast: chunk.isLast,
+            overlapBytes: chunk.payloadBytes - chunk.newPayloadBytes,
+            newBytes: chunk.newPayloadBytes,
+            logFields: chunkSummaries[index],
+            load: async () => exactBuffer(await loadMp4Chunk(track, chunk, fetchRange)),
+        }),
+    );
+    return { container: "mp4", totalBytes: track.totalPayloadBytes, chunks };
+}
+
+function roundSeconds(seconds: number): number {
+    return Math.round(seconds * 100) / 100;
+}
+
+/** The view's bytes as an ArrayBuffer of exactly that length (copying only if it is a slice). */
+function exactBuffer(view: Uint8Array): ArrayBuffer {
+    if (view.byteOffset === 0 && view.byteLength === view.buffer.byteLength && view.buffer instanceof ArrayBuffer) {
+        return view.buffer;
+    }
+    return view.slice().buffer;
+}

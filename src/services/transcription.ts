@@ -9,21 +9,18 @@ import { AppError } from "../lib/errors";
 import { ERROR_CODES, TIMEOUTS, AUDIO_LIMITS, AUDIO_USER_AGENT } from "../lib/constants";
 import { withRetry, isTransientError, isRateLimitError, sleep } from "../lib/retry";
 import {
-    calculateChunkRanges,
-    requiresChunking,
+    CONTAINER_PROBE_BYTES,
+    MAX_CHUNK_SECONDS,
+    TARGET_CHUNK_SIZE_BYTES,
     estimateTranscriptionTime,
+    id3Length,
+    requiresChunking,
 } from "../lib/audio";
+import { planChunks, type ChunkSizeLimits } from "./chunk-planning";
 
 
 // Use centralized constant for Whisper size limit
 const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
-
-/**
- * Size of audio header to prepend to non-first chunks.
- * This ensures Whisper can recognize the audio format.
- * 512 bytes is enough to contain MP3/AAC headers and metadata.
- */
-const AUDIO_HEADER_SIZE_BYTES = 512;
 
 // ============================================================================
 // MIME Type Handling
@@ -83,29 +80,18 @@ export function detectAudioFormat(buffer: ArrayBuffer, contentType: string): str
         return extensionFromMime(contentType);
     }
 
-    let offset = 0;
-
     // ID3v2 tag: skip past it to find the actual audio frames.
     // ID3 tags are codec-agnostic — podcast hosts commonly add them to AAC files.
-    if (fullBytes[0] === 0x49 && fullBytes[1] === 0x44 && fullBytes[2] === 0x33) {
-        if (fullBytes.length >= 10) {
-            // Parse ID3v2 tag size (bytes 6-9, syncsafe integer — each byte uses 7 bits)
-            const size =
-                ((fullBytes[6] & 0x7F) << 21) |
-                ((fullBytes[7] & 0x7F) << 14) |
-                ((fullBytes[8] & 0x7F) << 7) |
-                (fullBytes[9] & 0x7F);
-            offset = 10 + size; // 10-byte header + tag body
-
-            console.log(
-                JSON.stringify({
-                    event: "id3_tag_parsed",
-                    id3Version: `2.${fullBytes[3]}`,
-                    tagBodySize: size,
-                    audioStartOffset: offset,
-                })
-            );
-        }
+    const offset = id3Length(fullBytes);
+    if (offset > 0) {
+        console.log(
+            JSON.stringify({
+                event: "id3_tag_parsed",
+                id3Version: `2.${fullBytes[3]}`,
+                tagBodySize: offset - 10,
+                audioStartOffset: offset,
+            })
+        );
 
         // If we can't read past the ID3 tag, fall back to mp3 (most common with ID3)
         if (offset + 2 > fullBytes.length) {
@@ -804,7 +790,19 @@ export interface TranscribeOptions {
     onProgress?: (currentChunk: number, totalChunks: number) => void;
     /** Skip URL validation and redirect resolution (use when caller has already resolved the URL) */
     skipValidation?: boolean;
+    /** Override chunk sizing. Production uses the defaults; tests and scripts shrink them. */
+    chunkLimits?: TranscribeChunkLimits;
 }
+
+export interface TranscribeChunkLimits extends ChunkSizeLimits {
+    /** Files larger than this are chunked. Default: the API's 25 MB upload limit. */
+    uploadLimitBytes?: number;
+}
+
+const DEFAULT_CHUNK_LIMITS: ChunkSizeLimits = {
+    maxBytes: TARGET_CHUNK_SIZE_BYTES,
+    maxSeconds: MAX_CHUNK_SECONDS,
+};
 
 /**
  * Transcribe audio from URL using OpenAI gpt-transcribe.
@@ -835,6 +833,11 @@ export async function transcribeAudio(
 
     const providerConfig = getProviderConfig(opts.provider);
     const progressCallback = opts.onProgress || onProgress;
+    const uploadLimitBytes = opts.chunkLimits?.uploadLimitBytes ?? MAX_AUDIO_SIZE_BYTES;
+    const chunkLimits: ChunkSizeLimits = {
+        maxBytes: opts.chunkLimits?.maxBytes ?? DEFAULT_CHUNK_LIMITS.maxBytes,
+        maxSeconds: opts.chunkLimits?.maxSeconds ?? DEFAULT_CHUNK_LIMITS.maxSeconds,
+    };
 
     console.log(
         JSON.stringify({
@@ -883,7 +886,7 @@ export async function transcribeAudio(
     }
 
     // Step 3: Route based on file size
-    if (requiresChunking(validation.contentLength)) {
+    if (requiresChunking(validation.contentLength, uploadLimitBytes)) {
         // Large file - use chunked transcription
         console.log(
             JSON.stringify({
@@ -900,6 +903,7 @@ export async function transcribeAudio(
             providerConfig,
             progressCallback,
             validation.contentType,
+            chunkLimits,
         );
     }
 
@@ -907,7 +911,7 @@ export async function transcribeAudio(
     const audioBuffer = await fetchAudio(audioUrl);
 
     // Double-check actual size (in case Content-Length was inaccurate)
-    if (audioBuffer.byteLength > MAX_AUDIO_SIZE_BYTES) {
+    if (audioBuffer.byteLength > uploadLimitBytes) {
         // If it's bigger than expected, fall back to chunking
         console.log(
             JSON.stringify({
@@ -923,6 +927,7 @@ export async function transcribeAudio(
             providerConfig,
             progressCallback,
             validation.contentType,
+            chunkLimits,
         );
     }
 
@@ -949,15 +954,18 @@ export async function transcribeAudio(
 
 /**
  * Transcribe a large audio file by splitting it into chunks.
- * 
- * Uses HTTP Range requests to fetch audio in segments, transcribes each
- * independently, and stitches the results together.
- * 
+ *
+ * Fetches a probe of the file's first bytes to identify the container, plans
+ * chunks for it (see `planChunks`), then loads, transcribes and stitches the
+ * chunks one at a time so only one is in memory at once.
+ *
  * @param audioUrl - URL of the audio file
  * @param contentLength - Total file size in bytes
  * @param apiKey - API key for the transcription provider
  * @param provider - Provider config
  * @param onProgress - Optional progress callback
+ * @param contentType - Content-type header of the audio file
+ * @param limits - Per-chunk byte and duration caps
  * @returns Combined transcription result
  */
 async function transcribeWithChunking(
@@ -965,34 +973,32 @@ async function transcribeWithChunking(
     contentLength: number,
     apiKey: string,
     provider: ProviderConfig,
-    onProgress?: (currentChunk: number, totalChunks: number) => void,
-    contentType: string = "audio/mpeg",
+    onProgress: ((currentChunk: number, totalChunks: number) => void) | undefined,
+    contentType: string,
+    limits: ChunkSizeLimits,
 ): Promise<TranscriptionResult> {
-    // Calculate chunk ranges
-    const chunks = calculateChunkRanges(contentLength);
+    const probeBytes = Math.min(CONTAINER_PROBE_BYTES, contentLength);
+    console.log(JSON.stringify({ event: "fetching_container_probe", probeBytes }));
+    const probe = new Uint8Array(await fetchAudioChunk(audioUrl, 0, probeBytes - 1));
+
+    const { container, totalBytes, chunks } = await planChunks({
+        probe,
+        fileSize: contentLength,
+        contentType,
+        limits,
+        fetchRange: (start, end) => fetchAudioChunk(audioUrl, start, end),
+    });
     const totalChunks = chunks.length;
 
     console.log(
         JSON.stringify({
             event: "chunking_plan",
+            container,
             totalChunks,
             contentLengthMB: Math.round(contentLength / 1024 / 1024),
             estimatedSeconds: estimateTranscriptionTime(contentLength, totalChunks),
         })
     );
-
-    // Fetch audio header (first 512 bytes) to prepend to non-first chunks
-    // This ensures Whisper can recognize the audio format for all chunks
-    let audioHeader: ArrayBuffer | null = null;
-    if (totalChunks > 1) {
-        console.log(
-            JSON.stringify({
-                event: "fetching_audio_header",
-                headerSizeBytes: AUDIO_HEADER_SIZE_BYTES,
-            })
-        );
-        audioHeader = await fetchAudioChunk(audioUrl, 0, AUDIO_HEADER_SIZE_BYTES - 1);
-    }
 
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
@@ -1001,57 +1007,28 @@ async function transcribeWithChunking(
     const modelsUsed: string[] = [];
     let tailChunkSkipped: { chunkIndex: number; error: string; sharePercent: number } | null = null;
 
-    for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
+    for (const chunk of chunks) {
+        const chunkNumber = chunk.index + 1;
 
         // Report progress
-        onProgress?.(i + 1, totalChunks);
+        onProgress?.(chunkNumber, totalChunks);
 
         console.log(
             JSON.stringify({
                 event: "chunk_processing",
-                chunkIndex: i + 1,
+                chunkIndex: chunkNumber,
                 totalChunks,
-                startByte: chunk.startByte,
-                endByte: chunk.endByte,
-                sizeMB: Math.round((chunk.endByte - chunk.startByte + 1) / 1024 / 1024),
+                ...chunk.logFields,
             })
         );
 
         try {
             // Add delay between chunks to avoid CDN rate limits (skip first chunk)
-            if (i > 0) {
+            if (chunk.index > 0) {
                 await sleep(TIMEOUTS.CHUNK_FETCH_DELAY_MS);
             }
 
-            // Fetch this chunk via Range request
-            const chunkBuffer = await fetchAudioChunk(
-                audioUrl,
-                chunk.startByte,
-                chunk.endByte
-            );
-
-            // For non-first chunks, prepend the audio header so Whisper can recognize the format
-            let bufferToTranscribe: ArrayBuffer;
-            if (!chunk.isFirst && audioHeader) {
-                // Concatenate header + chunk data
-                const combined = new Uint8Array(audioHeader.byteLength + chunkBuffer.byteLength);
-                combined.set(new Uint8Array(audioHeader), 0);
-                combined.set(new Uint8Array(chunkBuffer), audioHeader.byteLength);
-                bufferToTranscribe = combined.buffer;
-
-                console.log(
-                    JSON.stringify({
-                        event: "header_prepended",
-                        chunkIndex: i + 1,
-                        headerBytes: audioHeader.byteLength,
-                        originalChunkBytes: chunkBuffer.byteLength,
-                        totalBytes: bufferToTranscribe.byteLength,
-                    })
-                );
-            } else {
-                bufferToTranscribe = chunkBuffer;
-            }
+            const bufferToTranscribe = await chunk.load();
 
             // Transcribe the chunk
             const chunkResult = await withRetry(
@@ -1078,7 +1055,7 @@ async function transcribeWithChunking(
             console.log(
                 JSON.stringify({
                     event: "chunk_completed",
-                    chunkIndex: i + 1,
+                    chunkIndex: chunkNumber,
                     totalChunks,
                     textLength: chunkResult.text.length,
                 })
@@ -1090,11 +1067,16 @@ async function transcribeWithChunking(
             console.error(
                 JSON.stringify({
                     event: "chunk_failed",
-                    chunkIndex: i + 1,
+                    chunkIndex: chunkNumber,
                     totalChunks,
                     error: errorMessage,
                 })
             );
+
+            // The file itself can't be chunked: dropping the tail would hide that.
+            if (error instanceof AppError && error.code === ERROR_CODES.AUDIO_UNSUPPORTED) {
+                throw error;
+            }
 
             // Tolerate failure of a small trailing chunk: some podcast files end in
             // a non-decodable trailer (ID3v1 footers, ad markers, etc.) that both the
@@ -1102,22 +1084,21 @@ async function transcribeWithChunking(
             // failing the episode. But the last chunk can hold up to a full chunk of
             // audio (half of a two-chunk file), so a large tail fails like any other
             // chunk rather than silently dropping real content (#54).
-            const isLastChunk = i === chunks.length - 1;
-            if (isLastChunk && transcriptions.length > 0 && totalChunks > 1) {
-                // Overlap bytes were already transcribed with the previous chunk.
-                const lostBytes = chunk.endByte - chunk.startByte + 1 - chunk.overlapBytes;
-                const share = lostBytes / contentLength;
+            if (chunk.isLast && transcriptions.length > 0 && totalChunks > 1) {
+                // Overlap was already transcribed with the previous chunk, so only
+                // the chunk's new audio is lost.
+                const share = chunk.newBytes / totalBytes;
                 const sharePercent = Math.round(share * 1000) / 10;
                 const logFields = {
-                    chunkIndex: i + 1,
+                    chunkIndex: chunkNumber,
                     totalChunks,
                     successfulChunks: transcriptions.length,
-                    chunkSizeBytes: chunk.endByte - chunk.startByte + 1,
+                    chunkSizeBytes: chunk.overlapBytes + chunk.newBytes,
                     sharePercent,
                     error: errorMessage,
                 };
                 if (share <= AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE) {
-                    tailChunkSkipped = { chunkIndex: i + 1, error: errorMessage, sharePercent };
+                    tailChunkSkipped = { chunkIndex: chunkNumber, error: errorMessage, sharePercent };
                     console.warn(JSON.stringify({ event: "tail_chunk_skipped", ...logFields }));
                     break;
                 }
@@ -1130,7 +1111,7 @@ async function transcribeWithChunking(
             }
             throw new AppError(
                 ERROR_CODES.TRANSCRIPTION_FAILED,
-                `Failed to transcribe chunk ${i + 1}/${totalChunks}: ${errorMessage}`,
+                `Failed to transcribe chunk ${chunkNumber}/${totalChunks}: ${errorMessage}`,
                 error instanceof Error ? error : undefined
             );
         }

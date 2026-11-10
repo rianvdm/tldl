@@ -68,6 +68,29 @@ export interface AudioChunk {
 }
 
 // ============================================================================
+// ID3
+// ============================================================================
+
+/**
+ * Bytes taken by a leading ID3v2 tag (10-byte header plus body), or 0 when
+ * `bytes` doesn't start with one. Podcast hosts add ID3 tags to MP3 and raw
+ * AAC alike, so format sniffing starts after the tag. The result can exceed
+ * `bytes.length` when only part of the tag was read.
+ */
+export function id3Length(bytes: Uint8Array): number {
+    if (bytes.length < 10 || bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) {
+        return 0;
+    }
+    // Tag body size: bytes 6-9, a syncsafe integer (7 bits per byte).
+    const bodySize =
+        ((bytes[6] & 0x7f) << 21) |
+        ((bytes[7] & 0x7f) << 14) |
+        ((bytes[8] & 0x7f) << 7) |
+        (bytes[9] & 0x7f);
+    return 10 + bodySize;
+}
+
+// ============================================================================
 // MP3 Frame Detection
 // ============================================================================
 
@@ -259,10 +282,10 @@ export function estimateTranscriptionTime(
  * Check if a file size requires chunking.
  * 
  * @param contentLength - File size in bytes
- * @param whisperLimit - Whisper API limit (default 25MB). Note: this threshold is not used
- *   in practice — all callers rely on the default. The actual chunk size is controlled by
- *   TARGET_CHUNK_SIZE_BYTES (currently 15MB), which is intentionally smaller than this
- *   limit to stay clear of the transcription model's per-request audio budget.
+ * @param whisperLimit - Upload limit (default 25MB, the API's). Production uses the default;
+ *   tests lower it to force small fixtures onto the chunked path. The actual chunk size is
+ *   controlled by TARGET_CHUNK_SIZE_BYTES (currently 15MB), which is intentionally smaller
+ *   than this limit to stay clear of the transcription model's per-request audio budget.
  * @returns true if chunking is required
  */
 export function requiresChunking(

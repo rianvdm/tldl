@@ -14,6 +14,20 @@ import {
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
 import { ERROR_CODES } from "../src/lib/constants";
+import { CHUNK_OVERLAP_SECONDS } from "../src/lib/audio";
+import { parseAudioTrack, planSampleChunks, type SampleChunk } from "../src/lib/mp4";
+import { locateMoov } from "../src/services/audio-containers";
+import { detectContainer } from "../src/services/chunk-planning";
+import {
+    ADTS_AAC,
+    ADTS_AAC_ID3,
+    ALAC_M4A,
+    CHAPTERS_M4A,
+    FRAGMENTED_M4A,
+    MOOV_FIRST_M4A,
+    MOOV_LAST_M4A,
+    fixtureBytes,
+} from "./fixtures/audio";
 
 describe("validateAudioUrl", () => {
     beforeEach(() => {
@@ -1112,5 +1126,357 @@ describe("detectAudioFormat", () => {
     it("should fall back to mp3 for unrecognized bytes and generic header", () => {
         const buffer = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).buffer;
         expect(detectAudioFormat(buffer, "application/octet-stream")).toBe("mp3");
+    });
+});
+
+// ============================================================================
+// Container-aware chunking (#53)
+// ============================================================================
+
+const AUDIO_URL = "https://cdn.example.com/episode.m4a";
+const OPENAI_URL = getProviderConfig().baseUrl;
+const CORRUPTED_ERROR = JSON.stringify({
+    error: { message: "Audio file might be corrupted or unsupported", type: "invalid_request_error", param: "file", code: "invalid_value" },
+});
+const WHISPER1_ERROR = JSON.stringify({
+    error: { message: "The audio file could not be decoded or its format is not supported.", type: "invalid_request_error", param: null, code: null },
+});
+
+interface Upload {
+    model: string;
+    name: string;
+    type: string;
+    bytes: Uint8Array;
+}
+
+interface ServeOptions {
+    contentType?: string;
+    /** Return an error to throw from the range fetch for `[start, end]`. */
+    failRange?: (start: number, end: number) => Error | undefined;
+    /** Response for the nth upload (1-based, counting fallbacks). Default: `{"text": "chunk n."}`. */
+    respond?: (upload: Upload, n: number) => Response | undefined;
+}
+
+/**
+ * Mock `fetch` to serve `file` with real HEAD and Range semantics, and to
+ * record every upload to the transcription API.
+ */
+function serveAudio(file: Uint8Array, options: ServeOptions = {}) {
+    const uploads: Upload[] = [];
+    const ranges: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url === OPENAI_URL) {
+            const form = init!.body as FormData;
+            const blob = form.get("file") as File;
+            const upload: Upload = {
+                model: String(form.get("model")),
+                name: blob.name,
+                type: blob.type,
+                bytes: new Uint8Array(await blob.arrayBuffer()),
+            };
+            uploads.push(upload);
+            return (
+                options.respond?.(upload, uploads.length) ??
+                new Response(JSON.stringify({ text: `chunk ${uploads.length}.` }), { status: 200 })
+            );
+        }
+        if (init?.method === "HEAD") {
+            return new Response(null, {
+                status: 200,
+                headers: {
+                    "content-length": String(file.length),
+                    "content-type": options.contentType ?? "audio/mp4",
+                },
+            });
+        }
+        const range = new Headers(init?.headers).get("Range") ?? "";
+        ranges.push(range);
+        const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+        if (!match) throw new Error(`unexpected request without a Range: ${url}`);
+        const start = Number(match[1]);
+        const end = Math.min(Number(match[2]), file.length - 1);
+        const failure = options.failRange?.(start, end);
+        if (failure) throw failure;
+        return new Response(file.slice(start, end + 1), { status: 206 });
+    });
+    return { uploads, ranges };
+}
+
+/** Force the chunked path on a small fixture: it is far over a 1 KB upload limit. */
+function chunkedOptions(maxSeconds: number) {
+    return { apiKey: "k", chunkLimits: { maxBytes: 1e9, maxSeconds, uploadLimitBytes: 1024 } };
+}
+
+async function readTrack(file: Uint8Array) {
+    const { moov } = await locateMoov(file, file.length, async (s, e) => file.slice(s, e + 1).buffer);
+    return parseAudioTrack(moov);
+}
+
+/** The plan production should make for `file`, computed straight from the library. */
+async function expectedPlan(file: Uint8Array, maxSeconds: number) {
+    const track = await readTrack(file);
+    const chunks: SampleChunk[] = planSampleChunks(track, {
+        maxBytes: 1e9,
+        maxSeconds,
+        overlapSeconds: CHUNK_OVERLAP_SECONDS,
+    });
+    return { track, chunks };
+}
+
+const tailPercent = (newBytes: number, totalBytes: number) => Math.round((newBytes / totalBytes) * 1000) / 10;
+
+describe("detectContainer", () => {
+    /** A 10-byte ID3v2.4 header with a `bodySize`-byte (zeroed) body. */
+    function id3(bodySize: number): Uint8Array {
+        const tag = new Uint8Array(10 + bodySize);
+        tag.set([0x49, 0x44, 0x33, 0x04, 0x00, 0x00]);
+        tag[6] = (bodySize >> 21) & 0x7f;
+        tag[7] = (bodySize >> 14) & 0x7f;
+        tag[8] = (bodySize >> 7) & 0x7f;
+        tag[9] = bodySize & 0x7f;
+        return tag;
+    }
+
+    function concat(...parts: Uint8Array[]): Uint8Array {
+        const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+        let at = 0;
+        for (const p of parts) {
+            out.set(p, at);
+            at += p.length;
+        }
+        return out;
+    }
+
+    it("returns mp4 for an ftyp box", () => {
+        expect(detectContainer(fixtureBytes(MOOV_FIRST_M4A))).toBe("mp4");
+        expect(detectContainer(fixtureBytes(MOOV_LAST_M4A))).toBe("mp4");
+    });
+
+    it("returns mp3 for an ID3 tag followed by an MPEG Layer III frame", () => {
+        const probe = concat(id3(4), new Uint8Array([0xff, 0xfb, 0x90, 0x00, 0x00, 0x00, 0x00]));
+        expect(detectContainer(probe)).toBe("mp3");
+    });
+
+    it("returns mp3 for a bare Layer III frame and for an ID3 tag longer than the probe", () => {
+        expect(detectContainer(new Uint8Array([0xff, 0xfb, 0x90, 0x00, 0x00, 0x00, 0x00]))).toBe("mp3");
+        expect(detectContainer(id3(1000).subarray(0, 512))).toBe("mp3");
+    });
+
+    it("returns adts for ADTS_AAC and ADTS_AAC_ID3", () => {
+        expect(detectContainer(fixtureBytes(ADTS_AAC))).toBe("adts");
+        expect(detectContainer(fixtureBytes(ADTS_AAC_ID3))).toBe("adts");
+    });
+
+    it("returns other for zero-filled bytes", () => {
+        expect(detectContainer(new Uint8Array(512))).toBe("other");
+    });
+
+    it("returns other for a lone 0xFFF1 header with no second header", () => {
+        const firstHeader = fixtureBytes(ADTS_AAC).slice(0, 7);
+        // Nothing valid where the second frame should start.
+        expect(detectContainer(concat(firstHeader, new Uint8Array(1024)))).toBe("other");
+        // The probe ends before the second frame could start.
+        expect(detectContainer(firstHeader)).toBe("other");
+    });
+});
+
+describe("chunked MP4 transcription", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    // 3.25 s chunks with 2 s overlap split the 5 s fixtures into 3 chunks.
+    const THREE_CHUNKS_SECONDS = 3.25;
+
+    it.each([
+        ["moov before mdat", MOOV_FIRST_M4A],
+        ["moov at the end", MOOV_LAST_M4A],
+        ["an interleaved chapter track", CHAPTERS_M4A],
+    ])("uploads only self-contained M4A chunks (%s)", async (_label, fixture) => {
+        const file = fixtureBytes(fixture);
+        const { uploads, ranges } = serveAudio(file);
+        const plan = await expectedPlan(file, THREE_CHUNKS_SECONDS);
+        expect(plan.chunks).toHaveLength(3);
+
+        const result = await transcribeAudio(AUDIO_URL, chunkedOptions(THREE_CHUNKS_SECONDS));
+
+        expect(result.partial).toBeUndefined();
+        expect(uploads).toHaveLength(3);
+        for (const [i, upload] of uploads.entries()) {
+            expect(upload.name).toBe("audio.m4a");
+            expect(upload.type).toBe("audio/mp4");
+            expect(new TextDecoder().decode(upload.bytes.subarray(4, 8))).toBe("ftyp");
+            const track = await readTrack(upload.bytes);
+            expect(track.codec).toBe("mp4a");
+            const chunk = plan.chunks[i];
+            expect(track.sampleCount).toBe(chunk.endSample - chunk.firstSample);
+            expect(track.totalPayloadBytes).toBe(chunk.payloadBytes);
+        }
+        // One probe of the whole (sub-64 KB) file, then range reads for samples only.
+        expect(ranges[0]).toBe(`bytes=0-${file.length - 1}`);
+    });
+
+    it("stitches the chunk texts in order", async () => {
+        serveAudio(fixtureBytes(MOOV_FIRST_M4A));
+
+        const result = await transcribeAudio(AUDIO_URL, chunkedOptions(THREE_CHUNKS_SECONDS));
+
+        expect(result.text).toBe("chunk 1. chunk 2. chunk 3.");
+        expect(result.model).toBe("gpt-transcribe");
+    });
+
+    it("logs the container, the MP4 layout and the chunk plan", async () => {
+        serveAudio(fixtureBytes(MOOV_LAST_M4A));
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await transcribeAudio(AUDIO_URL, chunkedOptions(THREE_CHUNKS_SECONDS));
+
+        const events = log.mock.calls
+            .map(([line]) => {
+                try {
+                    return JSON.parse(String(line)) as Record<string, unknown>;
+                } catch {
+                    return null;
+                }
+            })
+            .filter((e): e is Record<string, unknown> => e !== null);
+        const find = (name: string) => events.filter((e) => e.event === name);
+
+        expect(find("container_detected")).toEqual([
+            { event: "container_detected", container: "mp4", contentType: "audio/mp4", id3Bytes: 0 },
+        ]);
+        const [layout] = find("mp4_layout");
+        expect(layout).toMatchObject({ moovAtEnd: true, codec: "mp4a", timescale: 44100, sampleCount: 217 });
+        expect((layout.layout as Array<{ type: string }>).map((b) => b.type)).toEqual(["ftyp", "free", "mdat", "moov"]);
+        const [plan] = find("mp4_chunk_plan");
+        expect(plan.totalChunks).toBe(3);
+        expect(plan.chunks).toHaveLength(3);
+        expect((plan.chunks as Array<Record<string, unknown>>)[0]).toMatchObject({ rangeRequests: 1, startSeconds: 0 });
+        const processing = find("chunk_processing");
+        expect(processing.map((e) => [e.chunkIndex, e.totalChunks])).toEqual([[1, 3], [2, 3], [3, 3]]);
+        expect(processing[0]).toHaveProperty("firstSample", 0);
+    });
+
+    it("fails fast with AUDIO_UNSUPPORTED for a fragmented file and never calls OpenAI", async () => {
+        const { uploads } = serveAudio(fixtureBytes(FRAGMENTED_M4A));
+
+        const error = await transcribeAudio(AUDIO_URL, chunkedOptions(THREE_CHUNKS_SECONDS)).catch((e) => e);
+
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNSUPPORTED);
+        expect((error as AppError).message).toContain("fragmented");
+        expect(uploads).toHaveLength(0);
+    });
+
+    it("fails fast with AUDIO_UNSUPPORTED for a non-AAC codec", async () => {
+        const { uploads } = serveAudio(fixtureBytes(ALAC_M4A));
+
+        const error = await transcribeAudio(AUDIO_URL, chunkedOptions(THREE_CHUNKS_SECONDS)).catch((e) => e);
+
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNSUPPORTED);
+        expect((error as AppError).message).toContain("alac");
+        expect(uploads).toHaveLength(0);
+    });
+
+    it("does not tail-skip an AUDIO_UNSUPPORTED error", async () => {
+        const file = fixtureBytes(MOOV_FIRST_M4A);
+        const maxSeconds = 3.3;
+        const { track, chunks } = await expectedPlan(file, maxSeconds);
+        const tail = chunks[chunks.length - 1];
+        // Small enough that a transcription failure here would be skipped.
+        expect(tail.newPayloadBytes / track.totalPayloadBytes).toBeLessThanOrEqual(0.1);
+
+        const { uploads } = serveAudio(file, {
+            // mdat is the last box, so only the final chunk's samples reach EOF.
+            failRange: (start, end) =>
+                start > 0 && end === file.length - 1
+                    ? new AppError(ERROR_CODES.AUDIO_UNSUPPORTED, "Unsupported MP4: test failure")
+                    : undefined,
+        });
+
+        const error = await transcribeAudio(AUDIO_URL, chunkedOptions(maxSeconds)).catch((e) => e);
+
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNSUPPORTED);
+        expect((error as AppError).message).toBe("Unsupported MP4: test failure");
+        expect(uploads).toHaveLength(chunks.length - 1);
+    });
+
+    /** Both models reject the final chunk's upload. */
+    function rejectFinalChunk(totalChunks: number) {
+        let primaryUploads = 0;
+        return (upload: Upload) => {
+            if (upload.model === "whisper-1") return new Response(WHISPER1_ERROR, { status: 400 });
+            primaryUploads++;
+            return primaryUploads === totalChunks ? new Response(CORRUPTED_ERROR, { status: 400 }) : undefined;
+        };
+    }
+
+    it("measures the #54 tail share on payload bytes: a small tail is skipped", async () => {
+        const file = fixtureBytes(MOOV_FIRST_M4A);
+        const maxSeconds = 3.3;
+        const { track, chunks } = await expectedPlan(file, maxSeconds);
+        const tail = chunks[chunks.length - 1];
+        const expected = tailPercent(tail.newPayloadBytes, track.totalPayloadBytes);
+        expect(expected).toBeLessThanOrEqual(10);
+        // Measuring on file size would report a different figure.
+        expect(tailPercent(tail.newPayloadBytes, file.length)).not.toBe(expected);
+        serveAudio(file, { respond: rejectFinalChunk(chunks.length) });
+
+        const result = await transcribeAudio(AUDIO_URL, chunkedOptions(maxSeconds));
+
+        expect(result.partial).toBe(true);
+        expect(result.partialReason).toContain(`Final chunk ${chunks.length}/${chunks.length}`);
+        expect(result.partialReason).toContain(`missing the last ${expected}% of the audio`);
+        expect(result.text).toBe("chunk 1. chunk 2.");
+    });
+
+    it("measures the #54 tail share on payload bytes: a large tail fails the job", async () => {
+        const file = fixtureBytes(MOOV_FIRST_M4A);
+        const maxSeconds = 3.25;
+        const { track, chunks } = await expectedPlan(file, maxSeconds);
+        const tail = chunks[chunks.length - 1];
+        expect(tail.newPayloadBytes / track.totalPayloadBytes).toBeGreaterThan(0.1);
+        serveAudio(file, { respond: rejectFinalChunk(chunks.length) });
+
+        const error = await transcribeAudio(AUDIO_URL, chunkedOptions(maxSeconds)).catch((e) => e);
+
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).code).toBe(ERROR_CODES.TRANSCRIPTION_FAILED);
+    });
+});
+
+describe("chunked transcription of non-MP4 containers", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("keeps the byte-range path for MP3, prepending the first 512 bytes of the probe", async () => {
+        // ID3 tag + Layer III sync, then a recognisable byte pattern.
+        const file = new Uint8Array(60_000);
+        for (let i = 0; i < file.length; i++) file[i] = i % 251;
+        file.set([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0, 0, 0, 0, 0xff, 0xfb, 0x90, 0x00]);
+        const { uploads, ranges } = serveAudio(file, { contentType: "audio/mpeg" });
+
+        // 50 KB byte chunks with today's 32 KB overlap: [0, 49999] and [17232, 59999].
+        const result = await transcribeAudio("https://cdn.example.com/episode.mp3", {
+            apiKey: "k",
+            chunkLimits: { maxBytes: 50_000, maxSeconds: 900, uploadLimitBytes: 1024 },
+        });
+
+        expect(result.text).toBe("chunk 1. chunk 2.");
+        expect(ranges).toEqual(["bytes=0-59999", "bytes=0-49999", "bytes=17232-59999"]);
+        expect(uploads.map((u) => u.name)).toEqual(["audio.mp3", "audio.mp3"]);
+        expect(uploads[0].bytes).toEqual(file.slice(0, 50_000));
+        expect(uploads[1].bytes).toEqual(new Uint8Array([...file.slice(0, 512), ...file.slice(17_232)]));
     });
 });
