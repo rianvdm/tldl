@@ -145,6 +145,33 @@ describe("locateMoov", () => {
         expect(Array.from(track.sizes)).toEqual(Array.from(expected.sizes));
     });
 
+    it("ignores a probe that ends just past moov or inside the next header", async () => {
+        const file = fixtureBytes(MOOV_FIRST_M4A);
+        const boxes = topLevel(file);
+        const moov = boxes.find((b) => b.type === "moov")!;
+        const moovEnd = moov.offset + moov.size;
+        const next = boxes.find((b) => b.offset === moovEnd);
+        const cuts = [1, 4, 7].map((n) => moovEnd + n);
+        if (next) cuts.push(next.offset + 12);
+        for (const cut of cuts) {
+            const { calls, fetchRange } = memoryFetch(file);
+            const result = await locateMoov(file.subarray(0, cut), file.length, fetchRange);
+            expect(calls).toHaveLength(0);
+            expect(readBoxHeader(result.moov, 0, result.moov.length)!.type).toBe("moov");
+        }
+    });
+
+    it("ignores trailing junk or a truncated box after moov", async () => {
+        const original = fixtureBytes(MOOV_FIRST_M4A);
+        for (const tail of [new Uint8Array(4), box("free", new Uint8Array(92)).subarray(0, 50)]) {
+            const file = concat(original, tail);
+            const { calls, fetchRange } = memoryFetch(file);
+            const result = await locateMoov(file, file.length, fetchRange);
+            expect(calls).toHaveLength(0);
+            expect(readBoxHeader(result.moov, 0, result.moov.length)!.type).toBe("moov");
+        }
+    });
+
     it("treats size-0 mdat as running to EOF", async () => {
         const file = fixtureBytes(MOOV_FIRST_M4A).slice();
         const mdat = topLevel(file).find((b) => b.type === "mdat")!;
@@ -195,7 +222,7 @@ describe("locateMoov", () => {
     });
 
     it("rejects a box that runs past the end of the file", async () => {
-        const file = fixtureBytes(MOOV_FIRST_M4A);
+        const file = fixtureBytes(MOOV_LAST_M4A);
         const truncated = file.subarray(0, file.length - 10);
         const { fetchRange } = memoryFetch(truncated);
         await expectCode(
@@ -234,6 +261,36 @@ describe("loadMp4Chunk", () => {
         const { calls, fetchRange } = memoryFetch(file);
         await loadMp4Chunk(track, wholeFileChunk(track), fetchRange);
         expect(calls).toHaveLength(1);
+    });
+
+    it("fetches one range per run and keeps samples in order", async () => {
+        const real = await trackOf(fixtureBytes(MOOV_FIRST_M4A));
+        const MB = 1024 * 1024;
+        const sizes = Uint32Array.from([100, 50, 80, 120, 60, 90]);
+        // Runs: [0..149], [3MB..3MB+199], [6MB..6MB+149]; gaps exceed 1 MB.
+        const offsets = Float64Array.from([0, 100, 3 * MB, 3 * MB + 80, 6 * MB, 6 * MB + 60]);
+        const backing = new Uint8Array(6 * MB + 150);
+        for (const [i, off] of offsets.entries()) {
+            for (let b = 0; b < sizes[i]; b++) backing[off + b] = (i + 1) * 40 + (b % 7);
+        }
+        const track: Mp4AudioTrack = {
+            ...real,
+            sampleCount: sizes.length,
+            offsets,
+            sizes,
+            durations: new Uint32Array(sizes.length).fill(1024),
+            totalPayloadBytes: sizes.reduce((a, b) => a + b, 0),
+        };
+        const { calls, fetchRange } = memoryFetch(backing);
+        const out = await loadMp4Chunk(track, wholeFileChunk(track), fetchRange);
+        expect(calls).toEqual([
+            [0, 149],
+            [3 * MB, 3 * MB + 199],
+            [6 * MB, 6 * MB + 149],
+        ]);
+        const outTrack = await trackOf(out);
+        expect(Array.from(outTrack.sizes)).toEqual(Array.from(sizes));
+        expect(sourceSamples(out, outTrack)).toEqual(sourceSamples(backing, track));
     });
 
     it("throws AUDIO_UNAVAILABLE when a range comes back the wrong length", async () => {

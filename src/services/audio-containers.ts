@@ -64,14 +64,16 @@ export async function locateMoov(
             ? probe.subarray(at, at + need)
             : await fetchExact(fetchRange, at, at + need - 1);
         const header = readBoxHeader(bytes, 0, fileSize, at);
-        if (!header) throw unsupported("malformed box header");
-        if (header.offset + header.size > fileSize) {
-            throw unsupported(`${header.type} box runs past end of file`);
-        }
         if (moov) {
+            // Past moov the listing is best effort: stop at anything unreadable.
+            if (!header || header.offset + header.size > fileSize) break;
             layout.push(header);
             at += header.size;
             continue;
+        }
+        if (!header) throw unsupported("malformed box header");
+        if (header.offset + header.size > fileSize) {
+            throw unsupported(`${header.type} box runs past end of file`);
         }
 
         layout.push(header);
