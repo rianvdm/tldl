@@ -273,6 +273,7 @@ export interface MonitorSettings {
 export type ActivityEventType =
     | "episode_completed"
     | "episode_failed"
+    | "episode_partial"            // Completed, but the transcript is missing its tail
     | "monitor_check"
     | "monitor_error";
 

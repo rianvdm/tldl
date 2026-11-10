@@ -346,5 +346,9 @@ export const AUDIO_LIMITS = {
     HOP_RATE_LIMIT_RETRIES: 6,
     HOP_RATE_LIMIT_BASE_DELAY_MS: 400,  // doubles per attempt, capped below
     HOP_RATE_LIMIT_MAX_DELAY_MS: 2000,  // no Retry-After is ever sent, so don't wait long
+    // Largest share of the file a failed final chunk may hold and still be
+    // dropped with a partial transcript. Meant for an undecodable trailer (#27
+    // was 5.9MB of 96MB, ~6%); a bigger tail is real content, so fail instead (#54).
+    MAX_SKIPPABLE_TAIL_SHARE: 0.1,
 } as const;
 

@@ -108,6 +108,44 @@ interface ProcessingContext {
     prefetchedEpisodePageUrl?: string;
 }
 
+/**
+ * Surface a transcript that was accepted with its final chunk missing (#54).
+ * The episode still completes, so without this the gap would only be visible
+ * in Workers logs. Activity log and Discord are non-critical: never throws.
+ */
+async function reportPartialTranscript(
+    env: Env,
+    episodeId: string,
+    metadata: EpisodeMetadata,
+    result: { partialReason?: string; text: string },
+): Promise<void> {
+    const reason = result.partialReason ?? "Transcript is missing the end of the episode.";
+    console.warn(JSON.stringify({
+        event: "transcription_partial",
+        episodeId,
+        reason,
+        textLength: result.text.length,
+    }));
+
+    const episodeLabel = `${metadata.podcastName}: ${metadata.episodeTitle}`;
+    try {
+        await appendActivityEvent(env.TLDL_DATA, {
+            type: "episode_partial",
+            timestamp: new Date().toISOString(),
+            title: episodeLabel,
+            details: reason,
+            episodeId,
+        });
+        await notifyDiscord(env.DISCORD_WEBHOOK_URL, {
+            title: "🟡 Episode transcript is incomplete",
+            description: `**${episodeLabel}**\n\n${reason}\n\n🔗 https://tldl-pod.com/episode/${episodeId}`,
+            color: DISCORD_COLORS.WARNING,
+        });
+    } catch {
+        // Activity log and Discord are non-critical — don't fail the job
+    }
+}
+
 // ============================================================================
 // Main Queue Handler Export
 // ============================================================================
@@ -590,12 +628,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         );
 
         if (transcriptionResult.partial) {
-            console.warn(JSON.stringify({
-                event: "transcription_partial",
-                episodeId,
-                reason: transcriptionResult.partialReason,
-                textLength: transcriptionResult.text.length,
-            }));
+            await reportPartialTranscript(env, episodeId, metadata, transcriptionResult);
         }
 
         transcriptSource = transcriptionResult.source;
