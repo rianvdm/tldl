@@ -84,10 +84,10 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 - **Apple Podcasts page scraping**: `getEpisodeTitleFromApplePage()` in `src/services/apple-podcasts.ts` extracts episode titles from HTML `<title>` tags when URL slugs are unreliable
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
 - **Audio chunking**: container-aware, for files over the 25MB upload limit (up to 300MB). `src/services/chunk-planning.ts` sniffs the container from the first 64KB and picks a strategy:
-  - **MP3 and other (OGG, WAV)**: byte ranges snapped to MP3 frame boundaries (`src/lib/audio.ts`).
+  - **MP3 and other (OGG, WAV)**: byte ranges (snapped to MP3 frame boundaries for MP3), with the file's first 512 bytes prepended to every chunk after the first (`src/lib/audio.ts`).
   - **MP4/M4A**: cut on sample boundaries using the sample table (`src/lib/mp4.ts`). Each chunk is rebuilt as a self-contained M4A, since MP4 audio can't be decoded without its `moov`. `moov` can sit at either end of the file; chapter and other non-audio tracks are ignored. Ranges are fetched per chunk (`src/services/audio-containers.ts`).
   - **ADTS (raw AAC)**: wrapped in an M4A at any size, because OpenAI rejects raw ADTS (`src/lib/adts.ts`).
-  - **Two limits per chunk**: 15MB (`TARGET_CHUNK_SIZE_BYTES`) and 15 minutes (`MAX_CHUNK_SECONDS`). The duration cap exists because the model's audio token budget scales with duration, so a low-bitrate file can fit in 15MB and still be rejected.
+  - **Limits**: every chunk is capped at 15MB (`TARGET_CHUNK_SIZE_BYTES`). MP4 and ADTS chunks are also capped at 15 minutes (`MAX_CHUNK_SECONDS`), because the model's audio token budget scales with duration, so a low-bitrate file can fit in 15MB and still be rejected. The MP3/other byte path uses bytes only.
   - **Unsupported formats**: fragmented MP4 and non-AAC codecs throw `AUDIO_UNSUPPORTED`, which fails on the first queue attempt (no retries). To debug a format failure, run `npm run check:chunks -- <url-or-path> --transcribe` (see Helpful Commands).
 - **Partial transcripts**: if only the final chunk fails (both models reject it), the episode completes without it, but only when that chunk holds ≤10% of the file (`AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE`); a bigger tail fails the job (#54). An accepted partial writes an `episode_partial` activity-log entry and a yellow Discord alert with the missing share.
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
@@ -354,7 +354,7 @@ src/
 
 - **iTunes 403 errors**: Use Podcast Index API instead (already configured). For Apple episode URLs, use the show-page scraper (`src/services/apple-show-page.ts`), not iTunes Lookup.
 - **Episode title extraction**: URL slugs sometimes contain podcast name instead of episode title; `getEpisodeTitleFromApplePage()` scrapes the actual page to get reliable titles
-- **Large audio files**: Automatically chunked (>25MB): MP3 at frame boundaries, MP4/M4A on sample boundaries, ADTS wrapped in M4A. Each chunk is capped at 15MB and 15 minutes. Fragmented MP4 and non-AAC codecs fail immediately with `AUDIO_UNSUPPORTED`; reproduce with `npm run check:chunks -- <url> --transcribe`.
+- **Large audio files**: Automatically chunked (>25MB): MP3 at frame boundaries, MP4/M4A on sample boundaries, ADTS wrapped in M4A. Chunks are capped at 15MB; MP4 and ADTS chunks are also capped at 15 minutes. Fragmented MP4 and non-AAC codecs fail immediately with `AUDIO_UNSUPPORTED`; reproduce with `npm run check:chunks -- <url> --transcribe`.
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
 - **Stuck jobs**: Jobs running >20 minutes are auto-detected and marked as failed by `listActiveJobsWithDO()` (runs on home page render and in cron handler). Discord notification is sent.
 - **Job fails with `exceededWallTime` — check for a 429 first.** `exceededWallTime` is a *symptom* shared by two unrelated causes, and the rate-limit one is more common. Read the Workers logs before assuming the wall clock is the problem; filter for `validation_rate_limited_throw` and `audio_url_redirect_resolved`. See the two entries below.
