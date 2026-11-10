@@ -358,6 +358,40 @@ describe("coalesceRuns", () => {
 });
 
 describe("writeM4a", () => {
+    it("writes the same file from payload parts as from one payload buffer", () => {
+        const source = fixtureBytes(MOOV_FIRST_M4A);
+        const src = parseAudioTrack(topLevel(source).boxes.moov);
+        const parts = Array.from({ length: 30 }, (_, k) =>
+            source.subarray(src.offsets[k], src.offsets[k] + src.sizes[k]),
+        );
+        const joined = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+        let at = 0;
+        for (const part of parts) {
+            joined.set(part, at);
+            at += part.length;
+        }
+        const input = {
+            stsd: src.stsd,
+            timescale: src.timescale,
+            language: src.language,
+            sizes: src.sizes.slice(0, 30),
+            durations: src.durations.slice(0, 30),
+        };
+
+        const fromParts = writeM4a({ ...input, payload: parts });
+        const fromBuffer = writeM4a({ ...input, payload: joined });
+
+        expect(fromParts).toEqual(fromBuffer);
+        // Uneven splits (an empty part, parts straddling samples) change nothing.
+        const regrouped = [joined.subarray(0, 7), joined.subarray(7, 7), joined.subarray(7)];
+        expect(writeM4a({ ...input, payload: regrouped })).toEqual(fromBuffer);
+        // One allocation, sized exactly: the mdat ends the buffer.
+        expect(fromParts.byteLength).toBe(fromParts.buffer.byteLength);
+        const { mdat } = topLevel(fromParts);
+        expect(mdat.end).toBe(fromParts.length);
+        expect(mdat.end - mdat.start).toBe(joined.length);
+    });
+
     it("round-trips through parseAudioTrack", () => {
         const source = fixtureBytes(MOOV_FIRST_M4A);
         const src = parseAudioTrack(topLevel(source).boxes.moov);

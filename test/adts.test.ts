@@ -277,10 +277,9 @@ describe("adtsToM4a", () => {
         expect(Array.from(track.sizes)).toEqual(frames.map((f) => f.length - f.headerSize));
         expect(new Set(track.durations)).toEqual(new Set([1024]));
         expect(track.durationSeconds).toBeCloseTo((frames.length * 1024) / 44100, 6);
-        // Sample bytes are the frames' payloads, headers stripped.
-        const first = frames[0];
-        expect(m4a.subarray(track.offsets[0], track.offsets[0] + track.sizes[0])).toEqual(
-            bytes.subarray(first.offset + first.headerSize, first.offset + first.length),
-        );
+        // mdat (written last) is every frame's payload, headers stripped, in order.
+        const payloads = concat(...frames.map((f) => bytes.subarray(f.offset + f.headerSize, f.offset + f.length)));
+        expect(m4a.subarray(track.offsets[0])).toEqual(payloads);
+        expect(m4a.byteLength).toBe(m4a.buffer.byteLength);
     });
 });

@@ -204,7 +204,8 @@ export function buildAacStsd(config: AdtsConfig): Uint8Array {
 
 /**
  * Rewrap an ADTS byte range as a self-contained M4A: the frames' payloads,
- * headers stripped, become the samples of one AAC track.
+ * headers stripped, become the samples of one AAC track. Peak memory is the
+ * input plus the output.
  *
  * @throws AppError(AUDIO_UNSUPPORTED) as `parseAdtsFrames` does.
  */
@@ -212,17 +213,11 @@ export function adtsToM4a(bytes: Uint8Array): Uint8Array {
     const { config, frames } = parseAdtsFrames(bytes);
 
     const sizes = new Uint32Array(frames.length);
-    let total = 0;
-    frames.forEach((frame, i) => {
+    // Views of the input: writeM4a copies them once, into the output.
+    const payload = frames.map((frame, i) => {
         sizes[i] = frame.length - frame.headerSize;
-        total += sizes[i];
+        return bytes.subarray(frame.offset + frame.headerSize, frame.offset + frame.length);
     });
-    const payload = new Uint8Array(total);
-    let at = 0;
-    for (const frame of frames) {
-        payload.set(bytes.subarray(frame.offset + frame.headerSize, frame.offset + frame.length), at);
-        at += frame.length - frame.headerSize;
-    }
 
     return writeM4a({
         stsd: buildAacStsd(config),

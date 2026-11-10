@@ -474,14 +474,22 @@ export interface M4aInput {
     language: number;
     sizes: ArrayLike<number>;
     durations: ArrayLike<number>;
-    /** The samples' bytes, concatenated in order. */
-    payload: Uint8Array;
+    /**
+     * The samples' bytes in order: one buffer, or parts (typically views of
+     * the source) that are copied straight into the output, so callers need
+     * not concatenate them first.
+     */
+    payload: Uint8Array | readonly Uint8Array[];
 }
 
 /**
  * Write a self-contained, progressive M4A (ftyp, moov, mdat) holding one audio
  * track made of the given samples. `moov` precedes `mdat` so the single `stco`
  * entry can be computed once `moov` is sized.
+ *
+ * The file is written into one allocation, so peak memory is the caller's
+ * sample bytes plus the output: a 25 MB upload must not cost 100 MB in a
+ * 128 MB Worker.
  */
 export function writeM4a(input: M4aInput): Uint8Array {
     const { stsd, timescale, language, sizes, durations, payload } = input;
@@ -540,16 +548,21 @@ export function writeM4a(input: M4aInput): Uint8Array {
 
     // moov's size does not depend on the stco value, so size it with a placeholder.
     const moovSize = buildMoov(0).length;
-    const moov = buildMoov(ftyp.length + moovSize + 8);
-    return concat([ftyp, moov, box("mdat", payload)]);
-}
+    const payloadStart = ftyp.length + moovSize + 8;
+    const moov = buildMoov(payloadStart);
 
-function concat(parts: Uint8Array[]): Uint8Array {
-    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let at = 0;
-    for (const p of parts) {
-        out.set(p, at);
-        at += p.length;
+    const parts = payload instanceof Uint8Array ? [payload] : payload;
+    const payloadBytes = parts.reduce((n, p) => n + p.length, 0);
+    const out = new Uint8Array(payloadStart + payloadBytes);
+    out.set(ftyp, 0);
+    out.set(moov, ftyp.length);
+    // mdat header: 32-bit size, then the type.
+    new DataView(out.buffer).setUint32(payloadStart - 8, 8 + payloadBytes);
+    out.set(ascii("mdat"), payloadStart - 4);
+    let at = payloadStart;
+    for (const part of parts) {
+        out.set(part, at);
+        at += part.length;
     }
     return out;
 }

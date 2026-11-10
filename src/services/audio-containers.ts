@@ -119,9 +119,11 @@ export async function loadMp4Chunk(
         runs.map(async (run) => ({ run, bytes: await fetchExact(fetchRange, run.start, run.end) })),
     );
 
-    const payload = new Uint8Array(chunk.payloadBytes);
+    // Views of the fetched runs, one per stretch of back-to-back samples:
+    // writeM4a copies them once, into the output.
+    const payload: Uint8Array[] = [];
     let run = 0;
-    let written = 0;
+    let part: { run: number; start: number; end: number } | null = null;
     for (let i = firstSample; i < endSample; i++) {
         const size = track.sizes[i];
         if (size === 0) continue;
@@ -129,9 +131,14 @@ export async function loadMp4Chunk(
         // Runs are in sample order; advance to the run holding this sample.
         while (!(start >= fetched[run].run.start && start + size - 1 <= fetched[run].run.end)) run++;
         const rel = start - fetched[run].run.start;
-        payload.set(fetched[run].bytes.subarray(rel, rel + size), written);
-        written += size;
+        if (part && part.run === run && part.end === rel) {
+            part.end += size;
+        } else {
+            if (part) payload.push(fetched[part.run].bytes.subarray(part.start, part.end));
+            part = { run, start: rel, end: rel + size };
+        }
     }
+    if (part) payload.push(fetched[part.run].bytes.subarray(part.start, part.end));
 
     return writeM4a({
         stsd: track.stsd,
