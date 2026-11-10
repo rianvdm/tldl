@@ -18,6 +18,8 @@ import {
     getActivityLog,
 } from "../src/lib/kv";
 import { DISCORD_COLORS } from "../src/lib/discord";
+import { AppError } from "../src/lib/errors";
+import { ERROR_CODES } from "../src/lib/constants";
 import type { Job, Episode, Transcript, QueueMessage, Env } from "../src/types";
 
 // Mock the external services
@@ -460,6 +462,39 @@ describe("Queue Consumer - process_episode", () => {
 
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
+    });
+
+    it("fails unsupported audio on the first attempt without retrying", async () => {
+        vi.mocked(getEpisodeMetadata).mockResolvedValue({
+            podcastName: "Test Podcast",
+            episodeTitle: "Test Episode",
+            episodeDuration: 1800,
+            episodeDate: "2024-01-15T00:00:00.000Z",
+            audioUrl: "https://example.com/audio.mp3",
+            feedUrl: "https://example.com/feed.xml",
+        });
+
+        const reason = "Unsupported MP4: audio codec 'alac' (only AAC is supported)";
+        vi.mocked(transcribeAudio).mockRejectedValue(
+            new AppError(ERROR_CODES.AUDIO_UNSUPPORTED, reason)
+        );
+
+        const job = createSampleJob();
+        await createJob(env.TLDL_DATA, job);
+
+        const batch = createMockBatch([createQueueMessage()], { attempts: 1 });
+
+        await queueConsumer.queue(batch, getTestEnv());
+
+        expect(batch.messages[0].retry).not.toHaveBeenCalled();
+        expect(batch.messages[0].ack).toHaveBeenCalled();
+
+        const updatedJob = await getJob(env.TLDL_DATA, job.id);
+        expect(updatedJob?.status).toBe("failed");
+        expect(updatedJob?.error).toBe(reason);
+
+        const log = await getActivityLog(env.TLDL_DATA);
+        expect(log.some((e) => e.type === "episode_failed")).toBe(true);
     });
 
     it("fails job on summarization error", async () => {

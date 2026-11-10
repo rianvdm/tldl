@@ -221,7 +221,9 @@ const queueHandler = {
 
                 // Rate-limited jobs get more attempts with longer backoff to let CDN cool down
                 const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
-                const maxAttempts = isRateLimited ? 5 : 3;
+                // Unsupported audio (e.g. fragmented MP4, non-AAC codec) is deterministic: retrying can't help
+                const isUnsupported = error instanceof AppError && error.code === ERROR_CODES.AUDIO_UNSUPPORTED;
+                const maxAttempts = isUnsupported ? 1 : isRateLimited ? 5 : 3;
                 if (message.attempts >= maxAttempts) {
                     // Final attempt failed - mark job as failed and acknowledge
                     try {
