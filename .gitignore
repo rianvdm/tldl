@@ -48,3 +48,6 @@ scripts/ab-results/
 
 # Backfill script reports (scripts/backfill-episode-links.ts)
 scripts/backfill-results/
+
+# MP4 chunk check output (scripts/check-mp4-chunks.ts)
+scripts/chunk-check-results/
