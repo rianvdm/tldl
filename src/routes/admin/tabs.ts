@@ -94,16 +94,19 @@ export function renderActivityTab(activityLog: ActivityEvent[]): string {
     `;
 }
 
+/** [CSS modifier, glyph] per activity type; anything unlisted renders as info. */
+const ACTIVITY_ICONS: Record<string, [string, string]> = {
+    episode_completed: ["success", "✓"],
+    episode_failed: ["error", "✗"],
+    episode_partial: ["warning", "!"],
+    monitor_error: ["error", "!"],
+};
+
 function renderActivityList(events: ActivityEvent[], opts: { allowClear: boolean }): string {
     if (events.length === 0) return `<p class="text-muted">No recent activity.</p>`;
     return events.map(event => {
-        const icon = event.type === "episode_completed"
-            ? `<span class="activity-icon activity-icon-success">✓</span>`
-            : event.type === "episode_failed"
-                ? `<span class="activity-icon activity-icon-error">✗</span>`
-                : event.type === "monitor_error"
-                    ? `<span class="activity-icon activity-icon-error">!</span>`
-                    : `<span class="activity-icon activity-icon-info">↻</span>`;
+        const [iconClass, glyph] = ACTIVITY_ICONS[event.type] ?? ["info", "↻"];
+        const icon = `<span class="activity-icon activity-icon-${iconClass}">${glyph}</span>`;
 
         const detailsHtml = event.details
             ? `<span class="activity-details">${escapeHtml(event.details)}</span>`

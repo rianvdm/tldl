@@ -480,8 +480,43 @@ describe("transcribeAudio", () => {
         expect(result.partialReason).toContain("Final chunk 3/3");
         expect(result.partialReason).toContain("gpt-transcribe");
         expect(result.partialReason).toContain("whisper-1");
+        // The 30MB tail chunk holds only 32KB of new audio past the overlap.
+        expect(result.partialReason).toContain("missing the last 0.1% of the audio");
         expect(result.text).toContain("First chunk");
         expect(result.text).toContain("Second chunk");
+    });
+
+    // #54: the tail tolerance was meant for a few minutes of undecodable
+    // trailer. A 28MB file splits into 15MB + ~13MB, so dropping chunk 2
+    // would silently lose almost half the episode. That must fail the job.
+    it("fails instead of returning a partial transcript when the failed tail is a large share of the file", async () => {
+        const largeSize = 28 * 1024 * 1024; // → 2 chunks; chunk 2 holds ~46% of the audio
+        const corruptedError = JSON.stringify({
+            error: { message: "Audio file might be corrupted or unsupported", type: "invalid_request_error", param: "file", code: "invalid_value" },
+        });
+        const whisper1Error = JSON.stringify({
+            error: { message: "The audio file could not be decoded or its format is not supported.", type: "invalid_request_error", param: null, code: null },
+        });
+
+        vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(new Response(null, { status: 200 }))
+            .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-length": String(largeSize), "content-type": "audio/mpeg" } }))
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(512), { status: 206 }))
+            // chunk 1 succeeds
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(15 * 1024 * 1024), { status: 206 }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ text: "First half." }), { status: 200 }))
+            // chunk 2 (the tail) is rejected by both models
+            .mockResolvedValueOnce(new Response(new ArrayBuffer(13 * 1024 * 1024), { status: 206 }))
+            .mockResolvedValueOnce(new Response(corruptedError, { status: 400 }))
+            .mockResolvedValueOnce(new Response(whisper1Error, { status: 400 }));
+
+        try {
+            await transcribeAudio("https://example.com/large.mp3", "test-api-key");
+            expect.fail("Should have thrown");
+        } catch (error) {
+            expect(error).toBeInstanceOf(AppError);
+            expect((error as AppError).code).toBe(ERROR_CODES.TRANSCRIPTION_FAILED);
+        }
     });
 
     // Regression: a single chunk falling back used to relabel the entire

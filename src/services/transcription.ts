@@ -999,7 +999,7 @@ async function transcribeWithChunking(
     // Distinct models actually used, in first-use order. A single chunk falling
     // back must not relabel the whole transcript — mixed runs are the norm.
     const modelsUsed: string[] = [];
-    let tailChunkSkipped: { chunkIndex: number; error: string } | null = null;
+    let tailChunkSkipped: { chunkIndex: number; error: string; sharePercent: number } | null = null;
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -1096,25 +1096,32 @@ async function transcribeWithChunking(
                 })
             );
 
-            // Tolerate failure of the trailing chunk: if every prior chunk succeeded,
-            // accept a partial transcript rather than failing the whole episode.
-            // The tail chunk is typically only a few minutes of audio (often outro/credits)
-            // and certain podcast files have non-decodable trailers (ID3v1 footers,
-            // ad markers, etc.) that both the primary model and whisper-1 reject.
+            // Tolerate failure of a small trailing chunk: some podcast files end in
+            // a non-decodable trailer (ID3v1 footers, ad markers, etc.) that both the
+            // primary model and whisper-1 reject. Losing a few minutes of outro beats
+            // failing the episode. But the last chunk can hold up to a full chunk of
+            // audio (half of a two-chunk file), so a large tail fails like any other
+            // chunk rather than silently dropping real content (#54).
             const isLastChunk = i === chunks.length - 1;
             if (isLastChunk && transcriptions.length > 0 && totalChunks > 1) {
-                tailChunkSkipped = { chunkIndex: i + 1, error: errorMessage };
-                console.warn(
-                    JSON.stringify({
-                        event: "tail_chunk_skipped",
-                        chunkIndex: i + 1,
-                        totalChunks,
-                        successfulChunks: transcriptions.length,
-                        chunkSizeBytes: chunk.endByte - chunk.startByte + 1,
-                        error: errorMessage,
-                    })
-                );
-                break;
+                // Overlap bytes were already transcribed with the previous chunk.
+                const lostBytes = chunk.endByte - chunk.startByte + 1 - chunk.overlapBytes;
+                const share = lostBytes / contentLength;
+                const sharePercent = Math.round(share * 1000) / 10;
+                const logFields = {
+                    chunkIndex: i + 1,
+                    totalChunks,
+                    successfulChunks: transcriptions.length,
+                    chunkSizeBytes: chunk.endByte - chunk.startByte + 1,
+                    sharePercent,
+                    error: errorMessage,
+                };
+                if (share <= AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE) {
+                    tailChunkSkipped = { chunkIndex: i + 1, error: errorMessage, sharePercent };
+                    console.warn(JSON.stringify({ event: "tail_chunk_skipped", ...logFields }));
+                    break;
+                }
+                console.error(JSON.stringify({ event: "tail_chunk_too_large_to_skip", ...logFields }));
             }
 
             // Re-throw with context
@@ -1147,7 +1154,7 @@ async function transcribeWithChunking(
         model: modelsUsed.length > 0 ? modelsUsed.join("+") : provider.model,
         ...(tailChunkSkipped && {
             partial: true,
-            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both ${provider.model} and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the audio from the last chunk.`,
+            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both ${provider.model} and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the last ${tailChunkSkipped.sharePercent}% of the audio.`,
         }),
     };
 }

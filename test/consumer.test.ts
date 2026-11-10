@@ -15,7 +15,9 @@ import {
     saveTranscript,
     getTranscript,
     getSummary,
+    getActivityLog,
 } from "../src/lib/kv";
+import { DISCORD_COLORS } from "../src/lib/discord";
 import type { Job, Episode, Transcript, QueueMessage, Env } from "../src/types";
 
 // Mock the external services
@@ -379,6 +381,57 @@ describe("Queue Consumer - process_episode", () => {
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
         expect(updatedJob?.error).toBeDefined();
+    });
+
+    // #54: a partial transcript used to leave only a log line behind.
+    it("records a partial transcript in the activity log and on Discord", async () => {
+        vi.mocked(getEpisodeMetadata).mockResolvedValue({
+            podcastName: "Test Podcast",
+            episodeTitle: "Test Episode",
+            episodeDuration: 1800,
+            episodeDate: "2024-01-15T00:00:00.000Z",
+            audioUrl: "https://example.com/audio.mp3",
+            feedUrl: "https://example.com/feed.xml",
+        });
+        vi.mocked(transcribeAudio).mockResolvedValue({
+            text: "Most of the episode.",
+            source: "openai",
+            model: "gpt-transcribe",
+            partial: true,
+            partialReason: "Final chunk 7/7 failed. The transcript is missing the last 6.1% of the audio.",
+        });
+        vi.mocked(generateSummary).mockResolvedValue({ text: "# Summary", model: "claude-opus-5-5" });
+
+        const webhookUrl = "https://discord.test/webhook";
+        const realFetch = globalThis.fetch;
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+            String(input) === webhookUrl
+                ? Promise.resolve(new Response(null, { status: 204 }))
+                : realFetch(input, init)
+        );
+
+        await createJob(env.TLDL_DATA, createSampleJob());
+        const batch = createMockBatch([createQueueMessage()]);
+        await queueConsumer.queue(batch, { ...getTestEnv(), DISCORD_WEBHOOK_URL: webhookUrl });
+
+        expect((await getJob(env.TLDL_DATA, "test-job-123"))?.status).toBe("completed");
+
+        const partialEvent = (await getActivityLog(env.TLDL_DATA)).find((e) => e.type === "episode_partial");
+        expect(partialEvent).toMatchObject({
+            episodeId: "123_456",
+            title: "Test Podcast: Test Episode",
+            details: expect.stringContaining("6.1% of the audio"),
+        });
+
+        const discordBodies = fetchSpy.mock.calls
+            .filter(([input]) => String(input) === webhookUrl)
+            .map(([, init]) => JSON.parse(String(init?.body)).embeds[0]);
+        expect(discordBodies).toContainEqual(expect.objectContaining({
+            color: DISCORD_COLORS.WARNING,
+            description: expect.stringContaining("6.1% of the audio"),
+        }));
+
+        fetchSpy.mockRestore();
     });
 
     it("fails job on transcription error", async () => {

@@ -990,6 +990,10 @@ h4 {
     color: #ef4444;
 }
 
+.activity-icon-warning {
+    color: #eab308;
+}
+
 .activity-icon-info {
     color: var(--muted-foreground);
 }

@@ -79,6 +79,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 - **Apple Podcasts page scraping**: `getEpisodeTitleFromApplePage()` in `src/services/apple-podcasts.ts` extracts episode titles from HTML `<title>` tags when URL slugs are unreliable
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
 - **Audio chunking**: `src/lib/audio.ts` handles MP3 frame-aware splitting for large files (>25MB, up to 300MB)
+- **Partial transcripts**: if only the final chunk fails (both models reject it), the episode completes without it, but only when that chunk holds ≤10% of the file (`AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE`); a bigger tail fails the job (#54). An accepted partial writes an `episode_partial` activity-log entry and a yellow Discord alert with the missing share.
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
   - Home page uses `listActiveJobsWithDO()` to fetch active jobs from DO for real-time updates
   - `listActiveJobsWithDO()` also detects timed-out jobs (>20 min) and marks them as failed + notifies Discord
