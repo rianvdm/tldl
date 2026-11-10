@@ -316,3 +316,238 @@ export function fullBox(
     const head = new Uint8Array([version, (flags >> 16) & 0xff, (flags >> 8) & 0xff, flags & 0xff]);
     return box(type, head, ...parts);
 }
+
+// ============================================================================
+// Chunk planning
+// ============================================================================
+
+export interface SampleChunk {
+    firstSample: number;
+    /** Exclusive. */
+    endSample: number;
+    /** Leading samples shared with the previous chunk. */
+    overlapSamples: number;
+    /** Bytes of every sample in the chunk, overlap included. */
+    payloadBytes: number;
+    /** Bytes of the samples that are not overlap. */
+    newPayloadBytes: number;
+    startSeconds: number;
+    endSeconds: number;
+    isFirst: boolean;
+    isLast: boolean;
+}
+
+export interface ChunkLimits {
+    maxBytes: number;
+    maxSeconds: number;
+    overlapSeconds: number;
+}
+
+/**
+ * Split a sample table into chunks that each stay within `maxBytes` and
+ * `maxSeconds` (overlap included). Every chunk after the first starts about
+ * `overlapSeconds` before the previous one ended. Every chunk holds at least
+ * one sample that is not overlap, even if a single sample exceeds the limits.
+ */
+export function planSampleChunks(
+    track: Pick<Mp4AudioTrack, "sizes" | "durations" | "timescale">,
+    limits: ChunkLimits,
+): SampleChunk[] {
+    const { sizes, durations, timescale } = track;
+    const n = sizes.length;
+    if (n === 0) return [];
+
+    // Prefix sums so chunk times and overlap are cheap to compute.
+    const startTicks = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) startTicks[i + 1] = startTicks[i] + durations[i];
+
+    const maxTicks = limits.maxSeconds * timescale;
+    const overlapTicks = limits.overlapSeconds * timescale;
+    const chunks: SampleChunk[] = [];
+
+    let first = 0;
+    let overlap = 0;
+    while (true) {
+        let end = first;
+        let bytes = 0;
+        while (end < n) {
+            const mustTake = end < first + overlap + 1;
+            const fits =
+                bytes + sizes[end] <= limits.maxBytes &&
+                startTicks[end + 1] - startTicks[first] <= maxTicks;
+            if (!mustTake && !fits) break;
+            bytes += sizes[end];
+            end++;
+        }
+
+        let overlapBytes = 0;
+        for (let i = first; i < first + overlap; i++) overlapBytes += sizes[i];
+        const isLast = end >= n;
+        chunks.push({
+            firstSample: first,
+            endSample: end,
+            overlapSamples: overlap,
+            payloadBytes: bytes,
+            newPayloadBytes: bytes - overlapBytes,
+            startSeconds: startTicks[first] / timescale,
+            endSeconds: startTicks[end] / timescale,
+            isFirst: chunks.length === 0,
+            isLast,
+        });
+        if (isLast) return chunks;
+
+        // Smallest run of trailing samples covering the overlap time, leaving
+        // at least one sample so the next chunk starts after this one's start.
+        let next = end;
+        while (next > first + 1 && startTicks[end] - startTicks[next] < overlapTicks) next--;
+        overlap = end - next;
+        first = next;
+    }
+}
+
+export interface ByteRun {
+    start: number;
+    /** Inclusive. */
+    end: number;
+}
+
+/**
+ * Merge samples `[first, end)` into byte ranges for fetching. Consecutive
+ * samples whose gap is at most `maxGap` bytes share a run; a sample that
+ * starts before the previous one ended begins a new run.
+ */
+export function coalesceRuns(
+    offsets: ArrayLike<number>,
+    sizes: ArrayLike<number>,
+    first: number,
+    end: number,
+    maxGap: number,
+): ByteRun[] {
+    const runs: ByteRun[] = [];
+    let current: ByteRun | null = null;
+    for (let i = first; i < end; i++) {
+        if (sizes[i] === 0) continue;
+        const start = offsets[i];
+        const last = start + sizes[i] - 1;
+        const gap = current ? start - (current.end + 1) : 0;
+        if (current && gap >= 0 && gap <= maxGap) {
+            current.end = Math.max(current.end, last);
+        } else {
+            current = { start, end: last };
+            runs.push(current);
+        }
+    }
+    return runs;
+}
+
+// ============================================================================
+// M4A writer
+// ============================================================================
+
+/** Big-endian 32-bit values from an array (no spread, so long sample tables are safe). */
+function u32Array(values: ArrayLike<number>): Uint8Array {
+    const out = new Uint8Array(values.length * 4);
+    const dv = new DataView(out.buffer);
+    for (let i = 0; i < values.length; i++) dv.setUint32(i * 4, values[i]);
+    return out;
+}
+const u32 = (...values: number[]): Uint8Array => u32Array(values);
+const u16 = (...values: number[]): Uint8Array => {
+    const out = new Uint8Array(values.length * 2);
+    const dv = new DataView(out.buffer);
+    values.forEach((v, i) => dv.setUint16(i * 2, v));
+    return out;
+};
+const zeros = (n: number): Uint8Array => new Uint8Array(n);
+const ascii = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
+
+/** 3x3 unity transformation matrix used by `mvhd` and `tkhd`. */
+const UNITY_MATRIX = u32(0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000);
+
+export interface M4aInput {
+    /** The source track's complete `stsd` box, copied verbatim. */
+    stsd: Uint8Array;
+    timescale: number;
+    /** Packed ISO-639-2/T language code. */
+    language: number;
+    sizes: ArrayLike<number>;
+    durations: ArrayLike<number>;
+    /** The samples' bytes, concatenated in order. */
+    payload: Uint8Array;
+}
+
+/**
+ * Write a self-contained, progressive M4A (ftyp, moov, mdat) holding one audio
+ * track made of the given samples. `moov` precedes `mdat` so the single `stco`
+ * entry can be computed once `moov` is sized.
+ */
+export function writeM4a(input: M4aInput): Uint8Array {
+    const { stsd, timescale, language, sizes, durations, payload } = input;
+    const count = sizes.length;
+
+    let duration = 0;
+    for (let i = 0; i < count; i++) duration += durations[i];
+
+    // stts: run-length encode the durations
+    const runs: number[] = [];
+    for (let i = 0; i < count; i++) {
+        if (runs.length && runs[runs.length - 1] === durations[i]) {
+            runs[runs.length - 2]++;
+        } else {
+            runs.push(1, durations[i]);
+        }
+    }
+
+    const ftyp = box("ftyp", ascii("M4A "), u32(0), ascii("M4A "), ascii("mp42"), ascii("isom"));
+
+    const buildMoov = (mdatPayloadOffset: number): Uint8Array => {
+        const mvhd = fullBox(
+            "mvhd",
+            0,
+            0,
+            u32(0, 0, timescale, duration, 0x10000),
+            u16(0x0100),
+            zeros(10),
+            UNITY_MATRIX,
+            zeros(24),
+            u32(2),
+        );
+        const tkhd = fullBox(
+            "tkhd",
+            0,
+            0x7,
+            u32(0, 0, 1, 0, duration),
+            zeros(8),
+            u16(0, 0, 0x0100, 0),
+            UNITY_MATRIX,
+            u32(0, 0),
+        );
+        const mdhd = fullBox("mdhd", 0, 0, u32(0, 0, timescale, duration), u16(language, 0));
+        const hdlr = fullBox("hdlr", 0, 0, u32(0), ascii("soun"), zeros(12), ascii("SoundHandler\0"));
+        const smhd = fullBox("smhd", 0, 0, u16(0, 0));
+        const dinf = box("dinf", fullBox("dref", 0, 0, u32(1), fullBox("url ", 0, 1)));
+        const stts = fullBox("stts", 0, 0, u32(runs.length / 2), u32Array(runs));
+        const stsc = fullBox("stsc", 0, 0, u32(1, 1, count, 1));
+        const stsz = fullBox("stsz", 0, 0, u32(0, count), u32Array(sizes));
+        const stco = fullBox("stco", 0, 0, u32(1, mdatPayloadOffset));
+        const stbl = box("stbl", stsd, stts, stsc, stsz, stco);
+        const minf = box("minf", smhd, dinf, stbl);
+        const mdia = box("mdia", mdhd, hdlr, minf);
+        return box("moov", mvhd, box("trak", tkhd, mdia));
+    };
+
+    // moov's size does not depend on the stco value, so size it with a placeholder.
+    const moovSize = buildMoov(0).length;
+    const moov = buildMoov(ftyp.length + moovSize + 8);
+    return concat([ftyp, moov, box("mdat", payload)]);
+}
+
+function concat(parts: Uint8Array[]): Uint8Array {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of parts) {
+        out.set(p, at);
+        at += p.length;
+    }
+    return out;
+}

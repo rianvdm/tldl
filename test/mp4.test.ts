@@ -3,7 +3,16 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { box, findChild, fullBox, parseAudioTrack, readBoxHeader } from "../src/lib/mp4";
+import {
+    box,
+    coalesceRuns,
+    findChild,
+    fullBox,
+    parseAudioTrack,
+    planSampleChunks,
+    readBoxHeader,
+    writeM4a,
+} from "../src/lib/mp4";
 import { AppError } from "../src/lib/errors";
 import {
     ALAC_M4A,
@@ -241,5 +250,159 @@ describe("findChild", () => {
         const hdlr = findChild(boxes.moov, ["trak", "mdia", "hdlr"])!;
         expect(readBoxHeader(hdlr, 0, hdlr.length)!.type).toBe("hdlr");
         expect(findChild(boxes.moov, ["trak", "nope"])).toBeNull();
+    });
+});
+
+describe("planSampleChunks", () => {
+    const uniform = (n: number, size = 1000, dur = 1024) => ({
+        sizes: new Uint32Array(n).fill(size),
+        durations: new Uint32Array(n).fill(dur),
+        timescale: 44100,
+    });
+    const noLimit = { maxBytes: 1e9, maxSeconds: 1e9, overlapSeconds: 0 };
+
+    it("cuts on the byte limit", () => {
+        const chunks = planSampleChunks(uniform(100), { ...noLimit, maxBytes: 25_000 });
+        expect(chunks).toHaveLength(4);
+        for (const c of chunks) expect(c.endSample - c.firstSample).toBe(25);
+        expect(chunks.map((c) => c.isLast)).toEqual([false, false, false, true]);
+        expect(chunks[0].isFirst).toBe(true);
+        expect(chunks[1].isFirst).toBe(false);
+    });
+
+    it("cuts on the duration limit first when bitrate is low", () => {
+        const sample = 1024 / 44100;
+        const chunks = planSampleChunks(uniform(100), { ...noLimit, maxSeconds: 0.5 });
+        for (const c of chunks) {
+            expect(c.endSeconds - c.startSeconds).toBeLessThanOrEqual(0.5);
+            if (!c.isLast) expect(c.endSeconds - c.startSeconds).toBeGreaterThanOrEqual(0.5 - sample);
+        }
+    });
+
+    it("overlaps by ~overlapSeconds of samples", () => {
+        const chunks = planSampleChunks(uniform(100), {
+            ...noLimit,
+            maxBytes: 25_000,
+            overlapSeconds: 0.1,
+        });
+        const overlap = Math.ceil((0.1 * 44100) / 1024);
+        expect(overlap).toBe(5);
+        expect(chunks[0].overlapSamples).toBe(0);
+        for (let i = 1; i < chunks.length; i++) {
+            expect(chunks[i].overlapSamples).toBe(overlap);
+            expect(chunks[i].firstSample).toBe(chunks[i - 1].endSample - overlap);
+            expect(chunks[i].newPayloadBytes).toBe(chunks[i].payloadBytes - overlap * 1000);
+            expect(chunks[i].payloadBytes).toBeLessThanOrEqual(25_000);
+        }
+    });
+
+    it("covers every sample exactly once outside overlaps", () => {
+        const chunks = planSampleChunks(uniform(103), {
+            ...noLimit,
+            maxBytes: 25_000,
+            overlapSeconds: 0.1,
+        });
+        let next = 0;
+        for (const c of chunks) {
+            expect(c.firstSample + c.overlapSamples).toBe(next);
+            next = c.endSample;
+        }
+        expect(next).toBe(103);
+    });
+
+    it("never produces an empty or overlap-only chunk at the tail", () => {
+        for (let n = 1; n < 60; n++) {
+            const chunks = planSampleChunks(uniform(n), {
+                ...noLimit,
+                maxBytes: 7_000,
+                overlapSeconds: 0.1,
+            });
+            for (const c of chunks) expect(c.endSample - c.firstSample).toBeGreaterThan(c.overlapSamples);
+            expect(chunks[chunks.length - 1].endSample).toBe(n);
+        }
+    });
+
+    it("still makes progress when overlap would swallow the whole chunk", () => {
+        const chunks = planSampleChunks(uniform(20), { ...noLimit, maxBytes: 3_000, overlapSeconds: 1 });
+        expect(chunks[chunks.length - 1].endSample).toBe(20);
+        for (const c of chunks) expect(c.newPayloadBytes).toBeGreaterThan(0);
+    });
+
+    it("returns no chunks for an empty track", () => {
+        expect(planSampleChunks(uniform(0), noLimit)).toEqual([]);
+    });
+});
+
+describe("coalesceRuns", () => {
+    it("coalesces contiguous samples into one run", () => {
+        expect(coalesceRuns([100, 200, 300], [100, 100, 50], 0, 3, 0)).toEqual([
+            { start: 100, end: 349 },
+        ]);
+    });
+
+    it("splits runs across a gap larger than maxGap and merges smaller gaps", () => {
+        const offsets = [0, 110, 110 + 100 + 2_000_000];
+        const sizes = [100, 100, 100];
+        expect(coalesceRuns(offsets, sizes, 0, 3, 1024 * 1024)).toEqual([
+            { start: 0, end: 209 },
+            { start: 2_000_210, end: 2_000_309 },
+        ]);
+    });
+
+    it("only looks at the requested sample range", () => {
+        expect(coalesceRuns([0, 100, 5_000_000], [100, 100, 100], 1, 3, 1000)).toEqual([
+            { start: 100, end: 199 },
+            { start: 5_000_000, end: 5_000_099 },
+        ]);
+    });
+});
+
+describe("writeM4a", () => {
+    it("round-trips through parseAudioTrack", () => {
+        const source = fixtureBytes(MOOV_FIRST_M4A);
+        const src = parseAudioTrack(topLevel(source).boxes.moov);
+        const first = 10;
+        const end = 40;
+        const sizes = src.sizes.slice(first, end);
+        const durations = src.durations.slice(first, end);
+        const chunk = new Uint8Array(sizes.reduce((a, b) => a + b, 0));
+        let at = 0;
+        for (let i = first; i < end; i++) {
+            chunk.set(source.subarray(src.offsets[i], src.offsets[i] + src.sizes[i]), at);
+            at += src.sizes[i];
+        }
+
+        const out = writeM4a({
+            stsd: src.stsd,
+            timescale: src.timescale,
+            language: src.language,
+            sizes,
+            durations,
+            payload: chunk,
+        });
+
+        const order: string[] = [];
+        for (let p = 0; p < out.length; ) {
+            const h = readBoxHeader(out, p, out.length)!;
+            order.push(h.type);
+            p += h.size;
+        }
+        expect(order).toEqual(["ftyp", "moov", "mdat"]);
+
+        const { boxes, mdat } = topLevel(out);
+        const track = parseAudioTrack(boxes.moov);
+        expect(track.codec).toBe("mp4a");
+        expect(Array.from(track.sizes)).toEqual(Array.from(sizes));
+        expect(Array.from(track.durations)).toEqual(Array.from(durations));
+        expect(track.timescale).toBe(src.timescale);
+        expect(track.language).toBe(src.language);
+        expect(Array.from(track.stsd)).toEqual(Array.from(src.stsd));
+        expect(track.offsets[0]).toBe(mdat.start);
+        expect(mdat.end - mdat.start).toBe(chunk.length);
+        for (let k = 0; k < sizes.length; k++) {
+            const want = source.subarray(src.offsets[first + k], src.offsets[first + k] + sizes[k]);
+            const got = out.subarray(track.offsets[k], track.offsets[k] + sizes[k]);
+            expect(Array.from(got)).toEqual(Array.from(want));
+        }
     });
 });

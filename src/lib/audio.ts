@@ -32,6 +32,24 @@ export const CHUNK_OVERLAP_BYTES = 32 * 1024; // 32KB (~2 seconds at 128kbps)
  */
 export const MAX_TOTAL_SIZE_BYTES = 300 * 1024 * 1024; // 300MB safety limit
 
+/**
+ * Longest audio a single MP4/M4A transcription chunk may cover. The model's
+ * audio token budget scales with duration, so bytes alone are not a safe cap.
+ */
+export const MAX_CHUNK_SECONDS = 15 * 60;
+
+/** Overlap between MP4/M4A chunks, measured in time and cut on sample boundaries. */
+export const CHUNK_OVERLAP_SECONDS = 2;
+
+/** Bytes fetched up front to sniff the container and, usually, locate `moov`. */
+export const CONTAINER_PROBE_BYTES = 64 * 1024;
+
+/** Largest `moov` box we will fetch and parse (an hour of AAC needs a few hundred KB). */
+export const MAX_MOOV_BYTES = 32 * 1024 * 1024;
+
+/** Samples separated by less than this many bytes are fetched as one range. */
+export const RUN_COALESCE_GAP_BYTES = 1024 * 1024;
+
 // ============================================================================
 // Types
 // ============================================================================
