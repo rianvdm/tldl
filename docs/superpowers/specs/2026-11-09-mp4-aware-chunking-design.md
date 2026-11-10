@@ -139,7 +139,7 @@ New structured events, following the repo's `console.log(JSON.stringify({event, 
 
 ### 7. Docs
 
-Update the tldl `CLAUDE.md`: the audio-chunking bullet, the "Large audio files" common issue, and the project-structure entry, which should say the chunker is container-aware (MP3 by frame, MP4 by sample table, ADTS by frame) and name the new module(s).
+Update the tldl `CLAUDE.md`: the audio-chunking bullet, the "Large audio files" common issue, and the project-structure entry, which should say the chunker is container-aware (MP3 and other formats by byte range with the file's first 512 bytes prepended to every chunk after the first, MP4 by sample table, ADTS by frame) and name the new module(s).
 
 ## Done means
 

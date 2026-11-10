@@ -1,16 +1,20 @@
 /**
  * Local check for MP4/M4A chunking (#53): plan chunks from the sample table,
- * write them as standalone M4A files, confirm ffprobe decodes the expected
- * duration, and optionally send them to OpenAI.
+ * write them as standalone M4A files, decode each one in full with ffmpeg,
+ * and optionally send them to OpenAI.
  *
  *   npm run check:chunks -- <url-or-path> [--max-mb 15] [--max-seconds 900] [--limit N] [--transcribe]
  *
- * Chunks land in scripts/chunk-check-results/ (gitignored). `--transcribe`
- * uses the production model with no fallback and reads OPENAI_API_KEY from
- * .dev.vars. Exits non-zero on a duration mismatch over 0.5 s or any non-200.
+ * MP4/M4A only: any other container (ADTS, MP3) exits with an error naming it.
+ *
+ * Each chunk must decode with no ffmpeg errors, and ffprobe must count as
+ * many audio packets as the plan put samples in it. Chunks land in
+ * scripts/chunk-check-results/ (gitignored). `--transcribe` uses the
+ * production model with no fallback and reads OPENAI_API_KEY from .dev.vars.
+ * Exits non-zero on a decode error, a packet-count mismatch or any non-200.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,12 +27,12 @@ import {
 import { AUDIO_USER_AGENT } from "../src/lib/constants";
 import { parseAudioTrack, planSampleChunks } from "../src/lib/mp4";
 import { loadMp4Chunk, locateMoov, type FetchRange } from "../src/services/audio-containers";
+import { detectContainer } from "../src/services/chunk-planning";
 import { getProviderConfig } from "../src/services/transcription";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..");
 const OUT_DIR = join(HERE, "chunk-check-results");
-const DURATION_TOLERANCE_SECONDS = 0.5;
 
 interface Args {
     source: string;
@@ -104,10 +108,21 @@ async function openSource(source: string): Promise<{ size: number; fetchRange: F
     return { size, fetchRange };
 }
 
-function ffprobeDuration(path: string): number {
+/** Decode the whole file, discarding the audio; returns ffmpeg's errors (empty when clean). */
+function ffmpegDecodeErrors(path: string): string {
+    const result = spawnSync("ffmpeg", ["-nostdin", "-v", "error", "-i", path, "-f", "null", "-"], {
+        encoding: "utf8",
+    });
+    if (result.error) throw result.error;
+    const errors = result.stderr.trim();
+    return result.status === 0 ? errors : errors || `ffmpeg exited with status ${result.status}`;
+}
+
+/** Audio packets ffprobe reads from the first audio stream. */
+function ffprobePacketCount(path: string): number {
     const out = execFileSync(
         "ffprobe",
-        ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+        ["-v", "error", "-select_streams", "a:0", "-count_packets", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", path],
         { encoding: "utf8" },
     );
     return Number(out.trim());
@@ -134,6 +149,8 @@ async function main(): Promise<void> {
 
     const { size, fetchRange } = await openSource(args.source);
     const probe = new Uint8Array(await fetchRange(0, Math.min(CONTAINER_PROBE_BYTES, size) - 1));
+    const container = detectContainer(probe);
+    if (container !== "mp4") throw new Error(`Not an MP4/M4A file (detected ${container}); this check is MP4-only`);
     const { moov, layout, moovAtEnd } = await locateMoov(probe, size, fetchRange);
     console.log(`file: ${size} bytes, moovAtEnd=${moovAtEnd}`);
     console.log(`layout: ${layout.map((b) => `${b.type} ${b.size}B@${b.offset}`).join(" | ")}`);
@@ -165,13 +182,19 @@ async function main(): Promise<void> {
         const path = join(OUT_DIR, `${name}-${String(i + 1).padStart(2, "0")}.m4a`);
         writeFileSync(path, bytes);
 
-        const expected = chunk.endSeconds - chunk.startSeconds;
-        const decoded = ffprobeDuration(path);
-        const ok = Math.abs(decoded - expected) <= DURATION_TOLERANCE_SECONDS;
+        // Empty samples carry no packet.
+        let planned = 0;
+        for (let s = chunk.firstSample; s < chunk.endSample; s++) if (track.sizes[s] > 0) planned++;
+        const packets = ffprobePacketCount(path);
+        const decodeErrors = ffmpegDecodeErrors(path);
+        const ok = packets === planned && decodeErrors === "";
         if (!ok) failed = true;
         console.log(
-            `chunk ${i + 1}: ${bytes.length}B expected ${expected.toFixed(2)}s decoded ${decoded.toFixed(2)}s ${ok ? "OK" : "MISMATCH"}`,
+            `chunk ${i + 1}: ${bytes.length}B ${(chunk.endSeconds - chunk.startSeconds).toFixed(2)}s ` +
+            `planned ${planned} packets, read ${packets}, decode ${decodeErrors === "" ? "clean" : "ERRORS"} ` +
+            `${ok ? "OK" : "MISMATCH"}`,
         );
+        if (decodeErrors) console.log(`  ffmpeg: ${decodeErrors.split("\n").slice(0, 5).join(" | ")}`);
 
         if (args.transcribe) {
             const { status, body } = await transcribe(path, apiKey);

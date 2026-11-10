@@ -43,7 +43,7 @@ npm run backfill:links                     # dry run: writes a plan to scripts/b
 npm run backfill:links -- --apply          # write it (saves a .backup.json of every overwritten record first)
 ```
 
-Check how an MP4/M4A file chunks (plans from the sample table, writes standalone M4As, compares ffprobe duration to the plan). Reads a URL or local path; output goes to `scripts/chunk-check-results/` (gitignored). `--transcribe` also sends the chunks to OpenAI with the production model and no fallback (reads `OPENAI_API_KEY` from `.dev.vars`):
+Check how an MP4/M4A file chunks (plans from the sample table, writes standalone M4As, decodes each in full with ffmpeg and checks ffprobe reads as many audio packets as the plan put samples in it). MP4/M4A only: other containers (ADTS, MP3) exit with an error naming the container. Reads a URL or local path; output goes to `scripts/chunk-check-results/` (gitignored). `--transcribe` also sends the chunks to OpenAI with the production model and no fallback (reads `OPENAI_API_KEY` from `.dev.vars`):
 ```bash
 npm run check:chunks -- <url-or-path> [--max-mb 15] [--max-seconds 900] [--limit N] [--transcribe]
 ```
@@ -84,11 +84,11 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 - **Apple Podcasts page scraping**: `getEpisodeTitleFromApplePage()` in `src/services/apple-podcasts.ts` extracts episode titles from HTML `<title>` tags when URL slugs are unreliable
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
 - **Audio chunking**: container-aware, for files over the 25MB upload limit (up to 300MB). `src/services/chunk-planning.ts` sniffs the container from the first 64KB and picks a strategy:
-  - **MP3 and other (OGG, WAV)**: byte ranges (snapped to MP3 frame boundaries for MP3), with the file's first 512 bytes prepended to every chunk after the first (`src/lib/audio.ts`).
+  - **MP3 and other (OGG, WAV)**: plain byte ranges, with the file's first 512 bytes prepended to every chunk after the first (`calculateChunkRanges` in `src/lib/audio.ts`). Chunks are not cut on MP3 frame boundaries; MP3 frames resync on their own.
   - **MP4/M4A**: cut on sample boundaries using the sample table (`src/lib/mp4.ts`). Each chunk is rebuilt as a self-contained M4A, since MP4 audio can't be decoded without its `moov`. `moov` can sit at either end of the file; chapter and other non-audio tracks are ignored. Ranges are fetched per chunk (`src/services/audio-containers.ts`).
   - **ADTS (raw AAC)**: wrapped in an M4A at any size, because OpenAI rejects raw ADTS (`src/lib/adts.ts`).
   - **Limits**: every chunk is capped at 15MB (`TARGET_CHUNK_SIZE_BYTES`). MP4 and ADTS chunks are also capped at 15 minutes (`MAX_CHUNK_SECONDS`), because the model's audio token budget scales with duration, so a low-bitrate file can fit in 15MB and still be rejected. The MP3/other byte path uses bytes only.
-  - **Unsupported formats**: fragmented MP4 and non-AAC codecs throw `AUDIO_UNSUPPORTED`, which fails on the first queue attempt (no retries). To debug a format failure, run `npm run check:chunks -- <url-or-path> --transcribe` (see Helpful Commands).
+  - **Unsupported formats**: fragmented MP4, non-AAC codecs, truncated MP4 (the sample table runs past the end of the file), and MP4 whose audio is interleaved with video (a chunk's range fetches would exceed `MAX_CHUNK_FETCH_FACTOR` × the chunk cap) throw `AUDIO_UNSUPPORTED` before any upload, which fails on the first queue attempt (no retries). To debug a format failure, run `npm run check:chunks -- <url-or-path> --transcribe` (see Helpful Commands).
 - **Partial transcripts**: if only the final chunk fails (both models reject it), the episode completes without it, but only when that chunk holds ≤10% of the file (`AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE`); a bigger tail fails the job (#54). An accepted partial writes an `episode_partial` activity-log entry and a yellow Discord alert with the missing share.
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
   - Home page uses `listActiveJobsWithDO()` to fetch active jobs from DO for real-time updates
@@ -301,7 +301,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 
 ## Testing
 
-Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 532 tests (as of 2026-10-02) covering:
+Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 702 tests (as of 2026-11-09) covering:
 - Unit tests for all services and admin routes (`test/admin.test.ts`, `test/discord.test.ts`, etc.)
 - Integration tests in `test/integration/full-flow.test.ts` (CRUD lifecycle, access control, request form)
 - Note: Tests involving Durable Objects may show "Isolated storage" warnings (infrastructure issue in vitest-pool-workers, not failures)
@@ -317,7 +317,7 @@ src/
 │   ├── constants.ts      # Templates, error codes, TTLs, tags
 │   ├── kv.ts             # KV storage helpers + activity log
 │   ├── url-parser.ts     # Apple Podcasts URL parsing
-│   ├── audio.ts          # Chunk limits, MP3 frame-aware chunking, ID3 helper
+│   ├── audio.ts          # Chunk limits, byte-range chunking, ID3 helper (MP3 frame-boundary helpers are currently unused)
 │   ├── mp4.ts            # MP4 sample-table reader, chunk planner, M4A writer
 │   ├── adts.ts           # ADTS (raw AAC) parser, wraps frames in M4A
 │   ├── errors.ts         # Error handling
@@ -354,7 +354,7 @@ src/
 
 - **iTunes 403 errors**: Use Podcast Index API instead (already configured). For Apple episode URLs, use the show-page scraper (`src/services/apple-show-page.ts`), not iTunes Lookup.
 - **Episode title extraction**: URL slugs sometimes contain podcast name instead of episode title; `getEpisodeTitleFromApplePage()` scrapes the actual page to get reliable titles
-- **Large audio files**: Automatically chunked (>25MB): MP3 at frame boundaries, MP4/M4A on sample boundaries, ADTS wrapped in M4A. Chunks are capped at 15MB; MP4 and ADTS chunks are also capped at 15 minutes. Fragmented MP4 and non-AAC codecs fail immediately with `AUDIO_UNSUPPORTED`; reproduce with `npm run check:chunks -- <url> --transcribe`.
+- **Large audio files**: Automatically chunked (>25MB): MP3 and other formats by byte range (first 512 bytes prepended to every chunk after the first), MP4/M4A on sample boundaries, ADTS wrapped in M4A. Chunks are capped at 15MB; MP4 and ADTS chunks are also capped at 15 minutes. Fragmented, truncated or video-interleaved MP4 and non-AAC codecs fail immediately with `AUDIO_UNSUPPORTED`; reproduce with `npm run check:chunks -- <url> --transcribe`.
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
 - **Stuck jobs**: Jobs running >20 minutes are auto-detected and marked as failed by `listActiveJobsWithDO()` (runs on home page render and in cron handler). Discord notification is sent.
 - **Job fails with `exceededWallTime` — check for a 429 first.** `exceededWallTime` is a *symptom* shared by two unrelated causes, and the rate-limit one is more common. Read the Workers logs before assuming the wall clock is the problem; filter for `validation_rate_limited_throw` and `audio_url_redirect_resolved`. See the two entries below.
