@@ -35,6 +35,8 @@ export interface Mp4AudioTrack {
     durations: Uint32Array;
     totalPayloadBytes: number;
     durationSeconds: number;
+    /** Number of `trak` boxes in `moov`, audio or not. */
+    trackCount: number;
 }
 
 const TWO_POW_32 = 2 ** 32;
@@ -141,15 +143,15 @@ export function parseAudioTrack(moov: Uint8Array): Mp4AudioTrack {
     if (findChild(moov, ["mvex"])) throw unsupported("fragmented file");
 
     let trak: Uint8Array | null = null;
+    let trackCount = 0;
     for (const { header, box } of children(moov)) {
         if (header.type !== "trak") continue;
+        trackCount++;
+        if (trak) continue;
         const hdlr = findChild(box, ["mdia", "hdlr"]);
         if (!hdlr) continue;
         const p = payload(hdlr);
-        if (p.length >= 12 && fourcc(p, 8) === "soun") {
-            trak = box;
-            break;
-        }
+        if (p.length >= 12 && fourcc(p, 8) === "soun") trak = box;
     }
     if (!trak) throw unsupported("no audio track");
 
@@ -284,7 +286,20 @@ export function parseAudioTrack(moov: Uint8Array): Mp4AudioTrack {
         durations,
         totalPayloadBytes,
         durationSeconds: totalDuration / timescale,
+        trackCount,
     };
+}
+
+/**
+ * File offset just past the furthest sample's bytes: the smallest file size
+ * that holds every sample the table describes.
+ */
+export function sampleDataEnd(track: Pick<Mp4AudioTrack, "offsets" | "sizes">): number {
+    let end = 0;
+    for (let i = 0; i < track.sizes.length; i++) {
+        if (track.sizes[i] > 0) end = Math.max(end, track.offsets[i] + track.sizes[i]);
+    }
+    return end;
 }
 
 // ============================================================================

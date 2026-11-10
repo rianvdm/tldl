@@ -19,14 +19,15 @@ import {
     CHUNK_OVERLAP_BYTES,
     CHUNK_OVERLAP_SECONDS,
     CONTAINER_PROBE_BYTES,
+    MAX_CHUNK_FETCH_FACTOR,
     RUN_COALESCE_GAP_BYTES,
     calculateChunkRanges,
     id3Length,
 } from "../lib/audio";
 import { ERROR_CODES } from "../lib/constants";
 import { AppError } from "../lib/errors";
-import { coalesceRuns, parseAudioTrack, planSampleChunks } from "../lib/mp4";
-import { loadMp4Chunk, locateMoov, type FetchRange } from "./audio-containers";
+import { coalesceRuns, parseAudioTrack, planSampleChunks, sampleDataEnd } from "../lib/mp4";
+import { fetchExact, loadMp4Chunk, locateMoov, type FetchRange } from "./audio-containers";
 
 /**
  * Size of the file header prepended to byte-range chunks after the first,
@@ -258,13 +259,18 @@ function planAdtsChunks(
             overlapBytes: range.overlapBytes,
             newBytes: sizeBytes - range.overlapBytes,
             logFields: { startByte, endByte, sizeMB: Math.round(sizeBytes / 1024 / 1024) },
-            load: async () => exactBuffer(adtsToM4a(new Uint8Array(await fetchRange(startByte, endByte)))),
+            load: async () => exactBuffer(adtsToM4a(await fetchExact(fetchRange, startByte, endByte))),
         };
     });
     return { container: "adts", totalBytes: audioBytes, chunks };
 }
 
-/** MP4: cut on sample boundaries and rebuild each chunk as a standalone M4A. */
+/**
+ * MP4: cut on sample boundaries and rebuild each chunk as a standalone M4A.
+ * Fails with AUDIO_UNSUPPORTED before any upload when the file can't be
+ * chunked safely: a truncated file, or audio interleaved with so much other
+ * data (video) that a chunk's fetches would not fit in the Worker's memory.
+ */
 async function planMp4Chunks({ probe, fileSize, limits, fetchRange }: PlanChunksInput): Promise<ChunkPlan> {
     const { moov, layout, moovAtEnd } = await locateMoov(probe, fileSize, fetchRange);
     const track = parseAudioTrack(moov);
@@ -273,6 +279,7 @@ async function planMp4Chunks({ probe, fileSize, limits, fetchRange }: PlanChunks
             event: "mp4_layout",
             layout: layout.map(({ type, offset, size }) => ({ type, offset, size })),
             moovAtEnd,
+            trackCount: track.trackCount,
             codec: track.codec,
             timescale: track.timescale,
             sampleCount: track.sampleCount,
@@ -281,6 +288,15 @@ async function planMp4Chunks({ probe, fileSize, limits, fetchRange }: PlanChunks
     );
     if (track.sampleCount === 0) {
         throw new AppError(ERROR_CODES.AUDIO_UNSUPPORTED, "Unsupported MP4: audio track has no samples");
+    }
+    // A moov-first file cut short still describes every sample; without this
+    // the first chunk past the end would fail only after earlier chunks were paid for.
+    const dataEnd = sampleDataEnd(track);
+    if (dataEnd > fileSize) {
+        throw new AppError(
+            ERROR_CODES.AUDIO_UNSUPPORTED,
+            `Unsupported MP4: file is truncated (sample table needs ${dataEnd} bytes, file has ${fileSize})`,
+        );
     }
 
     const sampleChunks = planSampleChunks(track, {
@@ -296,23 +312,31 @@ async function planMp4Chunks({ probe, fileSize, limits, fetchRange }: PlanChunks
         startSeconds: roundSeconds(chunk.startSeconds),
         endSeconds: roundSeconds(chunk.endSeconds),
     }));
+    // The ranges each chunk's load will fetch: its samples plus any gaps under RUN_COALESCE_GAP_BYTES.
+    const fetches = sampleChunks.map((chunk) => {
+        const runs = coalesceRuns(track.offsets, track.sizes, chunk.firstSample, chunk.endSample, RUN_COALESCE_GAP_BYTES);
+        return { rangeRequests: runs.length, fetchBytes: runs.reduce((n, run) => n + run.end - run.start + 1, 0) };
+    });
     console.log(
         JSON.stringify({
             event: "mp4_chunk_plan",
             totalChunks: sampleChunks.length,
             totalPayloadBytes: track.totalPayloadBytes,
-            chunks: chunkSummaries.map((summary, i) => ({
-                ...summary,
-                rangeRequests: coalesceRuns(
-                    track.offsets,
-                    track.sizes,
-                    sampleChunks[i].firstSample,
-                    sampleChunks[i].endSample,
-                    RUN_COALESCE_GAP_BYTES,
-                ).length,
-            })),
+            chunks: chunkSummaries.map((summary, i) => ({ ...summary, ...fetches[i] })),
         }),
     );
+
+    // Gap bytes are fetched alongside the audio, so audio interleaved with video
+    // (an octet-stream file, or one sent through the admin override) can make a
+    // chunk's fetches many times its payload.
+    const worst = fetches.reduce((w, { fetchBytes }, i) => (fetchBytes > fetches[w].fetchBytes ? i : w), 0);
+    if (fetches[worst].fetchBytes > MAX_CHUNK_FETCH_FACTOR * limits.maxBytes) {
+        const otherMB = Math.round((fetches[worst].fetchBytes - sampleChunks[worst].payloadBytes) / 1024 / 1024);
+        throw new AppError(
+            ERROR_CODES.AUDIO_UNSUPPORTED,
+            `Unsupported MP4: audio is interleaved with ${otherMB} MB of other data per chunk (video file?)`,
+        );
+    }
 
     const chunks = sampleChunks.map(
         (chunk, index): PlannedChunk => ({

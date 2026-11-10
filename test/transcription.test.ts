@@ -15,8 +15,17 @@ import {
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
 import { ERROR_CODES } from "../src/lib/constants";
-import { CHUNK_OVERLAP_SECONDS, MAX_TOTAL_SIZE_BYTES } from "../src/lib/audio";
-import { parseAudioTrack, planSampleChunks, type Mp4AudioTrack, type SampleChunk } from "../src/lib/mp4";
+import { CHUNK_OVERLAP_SECONDS, CONTAINER_PROBE_BYTES, MAX_TOTAL_SIZE_BYTES } from "../src/lib/audio";
+import {
+    box,
+    fullBox,
+    parseAudioTrack,
+    planSampleChunks,
+    u16,
+    u32,
+    type Mp4AudioTrack,
+    type SampleChunk,
+} from "../src/lib/mp4";
 import { parseAdtsFrames, type AdtsFrame } from "../src/lib/adts";
 import { locateMoov } from "../src/services/audio-containers";
 import { detectContainer } from "../src/services/chunk-planning";
@@ -1161,6 +1170,8 @@ interface ServeOptions {
     respond?: (upload: Upload, n: number) => Response | undefined;
     /** Serve a GET without a Range header (the small-file path) instead of failing it. */
     allowWholeFileGet?: boolean;
+    /** Answer the range fetch for `[start, end]` with the whole file and a 200, like a CDN that ignores Range. */
+    ignoreRange?: (start: number, end: number) => boolean;
 }
 
 /**
@@ -1207,6 +1218,7 @@ function serveAudio(file: Uint8Array, options: ServeOptions = {}) {
         const end = Math.min(Number(match[2]), file.length - 1);
         const failure = options.failRange?.(start, end);
         if (failure) throw failure;
+        if (options.ignoreRange?.(start, end)) return new Response(file.slice(), { status: 200 });
         return new Response(file.slice(start, end + 1), { status: 206 });
     });
     return { uploads, ranges };
@@ -1234,6 +1246,43 @@ async function expectedPlan(file: Uint8Array, maxSeconds: number) {
 }
 
 const tailPercent = (newBytes: number, totalBytes: number) => Math.round((newBytes / totalBytes) * 1000) / 10;
+
+/**
+ * A moov-first MP4 with a video track and an audio track whose samples
+ * (one per second) each sit `gapBytes` apart, the way a video track's frames
+ * are interleaved with the audio. The audio sample entry is borrowed from a
+ * fixture; the sample bytes are filler, which the mocked API never decodes.
+ */
+async function interleavedMp4({ samples, sampleBytes, gapBytes }: { samples: number; sampleBytes: number; gapBytes: number }) {
+    const { stsd } = await readTrack(fixtureBytes(MOOV_FIRST_M4A));
+    const ascii = (s: string) => new TextEncoder().encode(s);
+    const handler = (type: string) => fullBox("hdlr", 0, 0, u32(0), ascii(type), new Uint8Array(13));
+    const ftyp = box("ftyp", ascii("M4A "), u32(0), ascii("M4A "), ascii("isom"));
+    const moov = (firstOffset: number) => {
+        const offsets = Array.from({ length: samples }, (_, i) => firstOffset + i * (sampleBytes + gapBytes));
+        const stbl = box(
+            "stbl",
+            stsd,
+            fullBox("stts", 0, 0, u32(1, samples, 1000)),
+            fullBox("stsc", 0, 0, u32(1, 1, 1, 1)),
+            fullBox("stsz", 0, 0, u32(sampleBytes, samples)),
+            fullBox("stco", 0, 0, u32(samples, ...offsets)),
+        );
+        const mdhd = fullBox("mdhd", 0, 0, u32(0, 0, 1000, samples * 1000), u16(0x55c4, 0));
+        const video = box("trak", box("mdia", handler("vide")));
+        const audio = box("trak", box("mdia", mdhd, handler("soun"), box("minf", stbl)));
+        return box("moov", video, audio);
+    };
+    // The stco values don't change moov's size, so size it with a placeholder.
+    const mdatStart = ftyp.length + moov(0).length;
+    const mdatPayload = new Uint8Array(samples * (sampleBytes + gapBytes));
+    for (let i = 0; i < mdatPayload.length; i++) mdatPayload[i] = i % 251;
+    const file = new Uint8Array(mdatStart + 8 + mdatPayload.length);
+    file.set(ftyp, 0);
+    file.set(moov(mdatStart + 8), ftyp.length);
+    file.set(box("mdat", mdatPayload), mdatStart);
+    return file;
+}
 
 describe("detectContainer", () => {
     /** A 10-byte ID3v2.4 header with a `bodySize`-byte (zeroed) body. */
@@ -1360,12 +1409,20 @@ describe("chunked MP4 transcription", () => {
             { event: "container_detected", container: "mp4", contentType: "audio/mp4", id3Bytes: 0 },
         ]);
         const [layout] = find("mp4_layout");
-        expect(layout).toMatchObject({ moovAtEnd: true, codec: "mp4a", timescale: 44100, sampleCount: 217 });
+        expect(layout).toMatchObject({
+            moovAtEnd: true,
+            trackCount: 1,
+            codec: "mp4a",
+            timescale: 44100,
+            sampleCount: 217,
+        });
         expect((layout.layout as Array<{ type: string }>).map((b) => b.type)).toEqual(["ftyp", "free", "mdat", "moov"]);
         const [plan] = find("mp4_chunk_plan");
         expect(plan.totalChunks).toBe(3);
         expect(plan.chunks).toHaveLength(3);
-        expect((plan.chunks as Array<Record<string, unknown>>)[0]).toMatchObject({ rangeRequests: 1, startSeconds: 0 });
+        const [first] = plan.chunks as Array<Record<string, unknown>>;
+        // An audio-only file fetches exactly its samples.
+        expect(first).toMatchObject({ rangeRequests: 1, fetchBytes: first.payloadBytes, startSeconds: 0 });
         const processing = find("chunk_processing");
         expect(processing.map((e) => [e.chunkIndex, e.totalChunks])).toEqual([[1, 3], [2, 3], [3, 3]]);
         expect(processing[0]).toHaveProperty("firstSample", 0);
@@ -1381,6 +1438,56 @@ describe("chunked MP4 transcription", () => {
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toMatch(/^Audio file too large: \d+MB exceeds 300MB limit$/);
         expect(ranges).toEqual([]);
+        expect(uploads).toHaveLength(0);
+    });
+
+    it("fails fast with AUDIO_UNSUPPORTED when a chunk's fetches would far exceed the chunk size (video)", async () => {
+        // 1 KB of audio every 20 KB: a 10 KB chunk of audio spans ~200 KB of file.
+        const file = await interleavedMp4({ samples: 40, sampleBytes: 1000, gapBytes: 20_000 });
+        expect(file.length).toBeGreaterThan(CONTAINER_PROBE_BYTES);
+        const { uploads, ranges } = serveAudio(file, { contentType: "application/octet-stream" });
+
+        const error = await transcribeAudio(AUDIO_URL, {
+            apiKey: "k",
+            chunkLimits: { maxBytes: 10_000, maxSeconds: 900, uploadLimitBytes: 1024 },
+        }).catch((e) => e);
+
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNSUPPORTED);
+        expect((error as AppError).message).toMatch(
+            /^Unsupported MP4: audio is interleaved with \d+ MB of other data per chunk \(video file\?\)$/,
+        );
+        // moov is inside the probe, so the probe is the only read.
+        expect(ranges).toEqual([`bytes=0-${CONTAINER_PROBE_BYTES - 1}`]);
+        expect(uploads).toHaveLength(0);
+    });
+
+    it("chunks a file whose audio is interleaved with a little other data", async () => {
+        const file = await interleavedMp4({ samples: 40, sampleBytes: 1000, gapBytes: 100 });
+        const { uploads } = serveAudio(file, { contentType: "application/octet-stream" });
+
+        const result = await transcribeAudio(AUDIO_URL, {
+            apiKey: "k",
+            chunkLimits: { maxBytes: 10_000, maxSeconds: 900, uploadLimitBytes: 1024 },
+        });
+
+        expect(result.partial).toBeUndefined();
+        expect(uploads.length).toBeGreaterThan(1);
+        for (const upload of uploads) expect((await readTrack(upload.bytes)).totalPayloadBytes).toBeLessThanOrEqual(10_000);
+    });
+
+    it("fails fast with AUDIO_UNSUPPORTED for a truncated moov-first file, before any upload", async () => {
+        const whole = fixtureBytes(MOOV_FIRST_M4A);
+        const file = whole.slice(0, whole.length - 500);
+        const { uploads } = serveAudio(file);
+
+        const error = await transcribeAudio(AUDIO_URL, chunkedOptions(THREE_CHUNKS_SECONDS)).catch((e) => e);
+
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNSUPPORTED);
+        expect((error as AppError).message).toBe(
+            `Unsupported MP4: file is truncated (sample table needs ${whole.length} bytes, file has ${file.length})`,
+        );
         expect(uploads).toHaveLength(0);
     });
 
@@ -1638,6 +1745,26 @@ describe("ADTS transcription", () => {
         const tracks = await expectM4aUploads(uploads);
         for (const upload of uploads) expect(upload.bytes.length).toBeLessThanOrEqual(16_000 + 1024);
         expectFullCoverage(uploads, tracks, file);
+    });
+
+    it("fails a chunk with AUDIO_UNAVAILABLE when the CDN ignores its Range", async () => {
+        const file = fixtureBytes(ADTS_AAC);
+        expect(file.length).toBeLessThan(CONTAINER_PROBE_BYTES);
+        const { uploads } = serveAudio(file, {
+            contentType: "audio/aac",
+            // The probe already asks for the whole file; the first chunk asks for less.
+            ignoreRange: (start, end) => start === 0 && end < file.length - 1,
+        });
+
+        const error = await transcribeAudio(ADTS_URL, {
+            apiKey: "k",
+            chunkLimits: { maxBytes: 16_000, maxSeconds: 900, uploadLimitBytes: 1024 },
+        }).catch((e) => e);
+
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNAVAILABLE);
+        expect((error as AppError).message).toBe(`Range request returned ${file.length} bytes, expected 16000`);
+        expect(uploads).toHaveLength(0);
     });
 
     it("shrinks ADTS byte chunks to the duration cap", async () => {

@@ -50,6 +50,13 @@ export const MAX_MOOV_BYTES = 32 * 1024 * 1024;
 /** Samples separated by less than this many bytes are fetched as one range. */
 export const RUN_COALESCE_GAP_BYTES = 1024 * 1024;
 
+/**
+ * Most an MP4 chunk's range fetches may total, as a multiple of the chunk
+ * byte cap. Gaps between audio samples are fetched with them, so audio
+ * interleaved with video would pull the video bytes into a 128 MB Worker.
+ */
+export const MAX_CHUNK_FETCH_FACTOR = 2;
+
 // ============================================================================
 // Types
 // ============================================================================

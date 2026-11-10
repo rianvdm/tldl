@@ -27,8 +27,11 @@ function unsupported(detail: string): AppError {
     return new AppError(ERROR_CODES.AUDIO_UNSUPPORTED, `Unsupported MP4: ${detail}`);
 }
 
-/** Fetch a range and verify the server honored it exactly. */
-async function fetchExact(fetchRange: FetchRange, start: number, end: number): Promise<Uint8Array> {
+/**
+ * Fetch bytes `[start, end]` and verify the server honored the range exactly,
+ * so a server that ignores Range (returning the whole file) fails loudly.
+ */
+export async function fetchExact(fetchRange: FetchRange, start: number, end: number): Promise<Uint8Array> {
     const body = new Uint8Array(await fetchRange(start, end));
     const expected = end - start + 1;
     if (body.length !== expected) {

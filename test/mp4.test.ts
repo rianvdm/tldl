@@ -11,6 +11,7 @@ import {
     parseAudioTrack,
     planSampleChunks,
     readBoxHeader,
+    sampleDataEnd,
     writeM4a,
 } from "../src/lib/mp4";
 import { AppError } from "../src/lib/errors";
@@ -156,6 +157,7 @@ describe("parseAudioTrack", () => {
         expect(trakCount).toBe(2);
         const t = parseAudioTrack(boxes.moov);
         expect(t.codec).toBe("mp4a");
+        expect(t.trackCount).toBe(2);
         for (let i = 0; i < t.sampleCount; i++) {
             expect(t.offsets[i]).toBeGreaterThanOrEqual(mdat.start);
             expect(t.offsets[i] + t.sizes[i]).toBeLessThanOrEqual(mdat.end);
@@ -241,6 +243,22 @@ describe("parseAudioTrack", () => {
             stts: stts([1, 1024]),
         });
         expect(() => parseAudioTrack(box("moov", trak))).toThrow(/no audio track/);
+    });
+});
+
+describe("sampleDataEnd", () => {
+    it("is the end of the furthest sample, whatever the sample order", () => {
+        const offsets = Float64Array.from([500, 100, 900, 300]);
+        const sizes = Uint32Array.from([50, 50, 0, 120]);
+        // The empty sample at 900 holds no bytes, so it doesn't count.
+        expect(sampleDataEnd({ offsets, sizes })).toBe(550);
+    });
+
+    it("is the mdat end for a fixture whose samples fill mdat", () => {
+        const { boxes, mdat } = topLevel(fixtureBytes(MOOV_FIRST_M4A));
+        const t = parseAudioTrack(boxes.moov);
+        expect(t.trackCount).toBe(1);
+        expect(sampleDataEnd(t)).toBe(mdat.end);
     });
 });
 
