@@ -11,6 +11,7 @@ import { withRetry, isTransientError, isRateLimitError, sleep } from "../lib/ret
 import {
     CONTAINER_PROBE_BYTES,
     MAX_CHUNK_SECONDS,
+    assertWithinTotalSizeLimit,
     TARGET_CHUNK_SIZE_BYTES,
     estimateTranscriptionTime,
     id3Length,
@@ -977,6 +978,9 @@ async function transcribeWithChunking(
     contentType: string,
     limits: ChunkSizeLimits,
 ): Promise<TranscriptionResult> {
+    // Before the probe, so an oversized file costs no audio fetch.
+    assertWithinTotalSizeLimit(contentLength);
+
     const probeBytes = Math.min(CONTAINER_PROBE_BYTES, contentLength);
     console.log(JSON.stringify({ event: "fetching_container_probe", probeBytes }));
     const probe = new Uint8Array(await fetchAudioChunk(audioUrl, 0, probeBytes - 1));

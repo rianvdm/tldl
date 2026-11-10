@@ -14,7 +14,7 @@ import {
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
 import { ERROR_CODES } from "../src/lib/constants";
-import { CHUNK_OVERLAP_SECONDS } from "../src/lib/audio";
+import { CHUNK_OVERLAP_SECONDS, MAX_TOTAL_SIZE_BYTES } from "../src/lib/audio";
 import { parseAudioTrack, planSampleChunks, type SampleChunk } from "../src/lib/mp4";
 import { locateMoov } from "../src/services/audio-containers";
 import { detectContainer } from "../src/services/chunk-planning";
@@ -1151,6 +1151,8 @@ interface Upload {
 
 interface ServeOptions {
     contentType?: string;
+    /** content-length the HEAD reports. Default: the file's real length. */
+    contentLength?: number;
     /** Return an error to throw from the range fetch for `[start, end]`. */
     failRange?: (start: number, end: number) => Error | undefined;
     /** Response for the nth upload (1-based, counting fallbacks). Default: `{"text": "chunk n."}`. */
@@ -1185,7 +1187,7 @@ function serveAudio(file: Uint8Array, options: ServeOptions = {}) {
             return new Response(null, {
                 status: 200,
                 headers: {
-                    "content-length": String(file.length),
+                    "content-length": String(options.contentLength ?? file.length),
                     "content-type": options.contentType ?? "audio/mp4",
                 },
             });
@@ -1360,6 +1362,19 @@ describe("chunked MP4 transcription", () => {
         const processing = find("chunk_processing");
         expect(processing.map((e) => [e.chunkIndex, e.totalChunks])).toEqual([[1, 3], [2, 3], [3, 3]]);
         expect(processing[0]).toHaveProperty("firstSample", 0);
+    });
+
+    it("rejects a file over MAX_TOTAL_SIZE_BYTES before fetching any audio", async () => {
+        const { uploads, ranges } = serveAudio(fixtureBytes(MOOV_FIRST_M4A), {
+            contentLength: MAX_TOTAL_SIZE_BYTES + 1,
+        });
+
+        const error = await transcribeAudio(AUDIO_URL, { apiKey: "k" }).catch((e) => e);
+
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toMatch(/^Audio file too large: \d+MB exceeds 300MB limit$/);
+        expect(ranges).toEqual([]);
+        expect(uploads).toHaveLength(0);
     });
 
     it("fails fast with AUDIO_UNSUPPORTED for a fragmented file and never calls OpenAI", async () => {

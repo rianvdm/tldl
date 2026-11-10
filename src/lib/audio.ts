@@ -168,6 +168,20 @@ export function findMp3FrameBoundaryReverse(
 // ============================================================================
 
 /**
+ * Safety check: refuse absurdly large files before fetching any of them.
+ * Every chunked transcription calls this, whatever the container.
+ *
+ * @throws Error when `totalBytes` exceeds MAX_TOTAL_SIZE_BYTES
+ */
+export function assertWithinTotalSizeLimit(totalBytes: number): void {
+    if (totalBytes > MAX_TOTAL_SIZE_BYTES) {
+        throw new Error(
+            `Audio file too large: ${Math.round(totalBytes / 1024 / 1024)}MB exceeds ${Math.round(MAX_TOTAL_SIZE_BYTES / 1024 / 1024)}MB limit`
+        );
+    }
+}
+
+/**
  * Calculate byte ranges for splitting a large audio file into chunks.
  * 
  * Each chunk except the first overlaps with the previous chunk by overlapBytes.
@@ -193,12 +207,7 @@ export function calculateChunkRanges(
     maxChunkBytes: number = TARGET_CHUNK_SIZE_BYTES,
     overlapBytes: number = CHUNK_OVERLAP_BYTES
 ): AudioChunk[] {
-    // Safety check: don't process absurdly large files
-    if (totalBytes > MAX_TOTAL_SIZE_BYTES) {
-        throw new Error(
-            `Audio file too large: ${Math.round(totalBytes / 1024 / 1024)}MB exceeds ${Math.round(MAX_TOTAL_SIZE_BYTES / 1024 / 1024)}MB limit`
-        );
-    }
+    assertWithinTotalSizeLimit(totalBytes);
 
     // If file fits in one chunk, return single chunk
     if (totalBytes <= maxChunkBytes) {
