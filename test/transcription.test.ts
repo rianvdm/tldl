@@ -959,11 +959,16 @@ describe("error predicates", () => {
     });
 
     it("never retries AUDIO_REJECTED, even when its message contains a 5xx-like number", () => {
-        expect(isTransientError(new AppError(ERROR_CODES.AUDIO_REJECTED, "gpt-transcribe rejected chunk 2/7 (bytes 15695872-31424511)"))).toBe(false);
+        const error = new AppError(ERROR_CODES.AUDIO_REJECTED, "gpt-transcribe rejected chunk 2/7 (bytes 15695872-31424511)");
+        expect(isServerError(error)).toBe(true);
+        expect(isTransientError(error)).toBe(false);
     });
 
     it("never retries AUDIO_UNSUPPORTED, even when its message contains a 5xx-like number", () => {
-        expect(isTransientError(new AppError(ERROR_CODES.AUDIO_UNSUPPORTED, "Unsupported MP4: chunk would fetch 52 MB"))).toBe(false);
+        const error = new AppError(ERROR_CODES.AUDIO_UNSUPPORTED, "Unsupported MP4: chunk 2 needs bytes 15695872-31424511");
+        // Without the guard the 5xx-like digits would make it transient.
+        expect(isServerError(error)).toBe(true);
+        expect(isTransientError(error)).toBe(false);
     });
 });
 
