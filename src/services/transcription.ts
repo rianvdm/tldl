@@ -226,6 +226,20 @@ export interface TranscriptionResult {
 export interface AudioValidation {
     contentLength: number;
     contentType: string;
+    /** The response's content identity (see `contentVersion`), or null without one. */
+    contentVersion: string | null;
+}
+
+/**
+ * Which version of a file a response carries, for the chunk cache key: its
+ * strong ETag, else its Last-Modified, else null. A weak (`W/`) ETag is
+ * ignored: it promises equivalent content, not the same bytes.
+ */
+export function contentVersion(headers: Headers): string | null {
+    const etag = headers.get("etag");
+    if (etag && !etag.startsWith("W/")) return `etag:${etag}`;
+    const lastModified = headers.get("last-modified");
+    return lastModified ? `lm:${lastModified}` : null;
 }
 
 /**
@@ -409,7 +423,7 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
             );
         }
 
-        return { contentLength, contentType };
+        return { contentLength, contentType, contentVersion: contentVersion(response.headers) };
     } catch (error) {
         clearTimeout(timeoutId);
 
@@ -434,13 +448,13 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
 }
 
 /**
- * Fetch audio file as ArrayBuffer.
- * 
+ * Fetch a whole audio file.
+ *
  * @param audioUrl - URL of the audio file
- * @returns Audio data as ArrayBuffer
+ * @returns The file's bytes and the content version of the response that carried them
  * @throws AppError with AUDIO_UNAVAILABLE on failure
  */
-async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
+async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.AUDIO_FETCH_MS);
 
@@ -490,7 +504,7 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
                             resolvedUrl,
                             status: retryResponse.status,
                         }));
-                        return await retryResponse.arrayBuffer();
+                        return await wholeAudio(retryResponse);
                     }
                 } catch {
                     clearTimeout(retryTimeoutId);
@@ -540,7 +554,7 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
             );
         }
 
-        return await response.arrayBuffer();
+        return await wholeAudio(response);
     } catch (error) {
         clearTimeout(timeoutId);
 
@@ -561,6 +575,10 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
             error instanceof Error ? error : undefined,
         );
     }
+}
+
+async function wholeAudio(response: Response): Promise<WholeAudio> {
+    return { bytes: await response.arrayBuffer(), contentVersion: contentVersion(response.headers) };
 }
 
 /**
@@ -786,23 +804,34 @@ export interface AudioSource {
     size: number;
     /** Content-type header of the audio file. */
     contentType: string;
+    /** The file's content version from the HEAD that reported `size` (see `contentVersion`), or null. */
+    contentVersion: string | null;
     /** Hostname of the audio URL, for logs. Never the full URL: CDN URLs can be signed. */
     audioHost: string;
     /** Read an inclusive byte range, as an HTTP Range request does. */
     fetchRange: FetchRange;
     /** Read the whole file (for a file that fits one upload). */
-    fetchWhole(): Promise<ArrayBuffer>;
+    fetchWhole(): Promise<WholeAudio>;
+}
+
+/** A whole file and the content version of the response that carried it. */
+export interface WholeAudio {
+    bytes: ArrayBuffer;
+    contentVersion: string | null;
 }
 
 /**
  * How a file goes to the model: the whole file, sent as exactly `uploads`
  * (one upload, or an MP3 split by measured duration; see `uploadParts`), or
  * a chunk plan. A whole-file `plan` is null when the planner couldn't plan
- * the file.
+ * the file. `contentVersion` identifies the bytes planned, for the chunk
+ * cache key: the whole-file GET's when the file was read whole, else the
+ * HEAD's.
  */
-export type UploadRoute =
+export type UploadRoute = (
     | { kind: "chunked"; plan: ChunkPlan }
-    | { kind: "whole"; uploads: ArrayBuffer[]; plan: ChunkPlan | null; container: AudioContainer };
+    | { kind: "whole"; uploads: ArrayBuffer[]; plan: ChunkPlan | null; container: AudioContainer }
+) & { contentVersion: string | null };
 
 /**
  * Decide how the Worker uploads a file. `transcribeAudio` and the
@@ -830,10 +859,16 @@ export async function planUploads(source: AudioSource, limits: UploadLimits): Pr
                 contentLengthMB: Math.round(source.size / 1024 / 1024),
             })
         );
-        return { kind: "chunked", plan: await planRemote(fetchRange, source.size, contentType, chunkLimits) };
+        return {
+            kind: "chunked",
+            plan: await planRemote(fetchRange, source.size, contentType, chunkLimits),
+            contentVersion: source.contentVersion,
+        };
     }
 
-    const buffer = await source.fetchWhole();
+    const whole = await source.fetchWhole();
+    const buffer = whole.bytes;
+    const version = whole.contentVersion ?? source.contentVersion;
 
     // Double-check actual size (in case Content-Length was inaccurate)
     if (buffer.byteLength > limits.uploadLimitBytes) {
@@ -844,7 +879,11 @@ export async function planUploads(source: AudioSource, limits: UploadLimits): Pr
                 actual: buffer.byteLength,
             })
         );
-        return { kind: "chunked", plan: await planRemote(fetchRange, buffer.byteLength, contentType, chunkLimits) };
+        return {
+            kind: "chunked",
+            plan: await planRemote(fetchRange, buffer.byteLength, contentType, chunkLimits),
+            contentVersion: version,
+        };
     }
 
     // It fits one upload, but a low-bitrate file can still run past the
@@ -853,7 +892,7 @@ export async function planUploads(source: AudioSource, limits: UploadLimits): Pr
     const smallFileLimits: ChunkSizeLimits = { maxBytes: limits.uploadLimitBytes, maxSeconds: limits.maxSeconds };
     const plan = await planSmallFile(buffer, contentType, smallFileLimits, source.audioHost);
     if (plan && plan.chunks.length > 1) {
-        return { kind: "chunked", plan };
+        return { kind: "chunked", plan, contentVersion: version };
     }
 
     // MP3 uploads the plan's only chunk, which drops the ID3 tag and any
@@ -869,6 +908,7 @@ export async function planUploads(source: AudioSource, limits: UploadLimits): Pr
         uploads,
         plan,
         container: plan?.container ?? detectContainer(probeOf(buffer)),
+        contentVersion: version,
     };
 }
 
@@ -960,7 +1000,7 @@ export async function transcribeAudio(
     let validation: AudioValidation;
     if (opts.skipValidation) {
         // Caller has already resolved the URL — skip validation and redirect resolution
-        validation = { contentLength: 0, contentType: "audio/mpeg" };
+        validation = { contentLength: 0, contentType: "audio/mpeg", contentVersion: null };
     } else {
         audioUrl = await resolveAudioUrl(audioUrl);
 
@@ -993,6 +1033,7 @@ export async function transcribeAudio(
         {
             size: validation.contentLength,
             contentType: validation.contentType,
+            contentVersion: validation.contentVersion,
             // A getter: read only once the URL has been validated or fetched, so it parses.
             get audioHost() {
                 return new URL(audioUrl).hostname;
@@ -1010,6 +1051,7 @@ export async function transcribeAudio(
         maxChunkSeconds: limits.maxSeconds,
         onProgress: progressCallback,
         chunkCache: opts.chunkCache,
+        contentVersion: route.contentVersion,
     };
     if (route.kind === "chunked") {
         return await transcribePlan(route.plan, ctx);
@@ -1142,16 +1184,21 @@ interface TranscribePlanContext {
     maxChunkSeconds: number;
     onProgress?: (currentChunk: number, totalChunks: number) => void;
     chunkCache?: ChunkTranscriptCache;
+    /** The planned bytes' content version, for the chunk cache key (see `UploadRoute`). */
+    contentVersion: string | null;
 }
 
 /**
  * The cache key for one planned chunk. It holds everything that decides the
  * chunk's audio, so a planner change (a `CHUNK_PLAN_VERSION` bump), a
  * re-encoded file or a different cut misses instead of stitching text from
- * different audio.
+ * different audio. `contentVersion` (the source's strong ETag or
+ * Last-Modified) tells apart two files of the same size, such as a CDN
+ * replacing the audio between attempts; without one ("-"), the file size is
+ * the only identity.
  */
-export function chunkCacheKey(plan: ChunkPlan, chunk: PlannedChunk): string {
-    return `${CHUNK_PLAN_VERSION}:${plan.container}:${plan.fileSize}:${chunk.index}:${chunk.cacheId}`;
+export function chunkCacheKey(plan: ChunkPlan, chunk: PlannedChunk, contentVersion: string | null): string {
+    return `${CHUNK_PLAN_VERSION}:${plan.container}:${plan.fileSize}:${contentVersion ?? "-"}:${chunk.index}:${chunk.cacheId}`;
 }
 
 /** A cached chunk transcript, or null on a miss or a cache error (logged, never thrown). */
@@ -1312,7 +1359,7 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             })
         );
 
-        const cacheKey = chunkCacheKey(plan, chunk);
+        const cacheKey = chunkCacheKey(plan, chunk, ctx.contentVersion);
         const cachedText = chunkCache ? await readCachedChunk(chunkCache, cacheKey, chunkNumber) : null;
         if (cachedText !== null) {
             transcriptions.push({

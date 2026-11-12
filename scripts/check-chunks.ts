@@ -46,6 +46,7 @@ import { parseAudioTrack, type Mp4AudioTrack } from "../src/lib/mp4";
 import { locateMoov, type FetchRange } from "../src/services/audio-containers";
 import { isMp3FramePlan, type ChunkPlan, type PlannedChunk } from "../src/services/chunk-planning";
 import {
+    contentVersion,
     detectAudioFormat,
     getProviderConfig,
     mimeFromExtension,
@@ -106,7 +107,9 @@ function readApiKey(): string {
 const UNKNOWN_CONTENT_TYPE = "unknown";
 
 /** Range reader over a URL (HTTP Range) or a local file. */
-async function openSource(source: string): Promise<{ size: number; contentType: string; fetchRange: FetchRange }> {
+async function openSource(
+    source: string,
+): Promise<{ size: number; contentType: string; contentVersion: string | null; fetchRange: FetchRange }> {
     if (!/^https?:\/\//.test(source)) {
         const size = statSync(source).size;
         const fetchRange: FetchRange = async (start, end) => {
@@ -119,7 +122,7 @@ async function openSource(source: string): Promise<{ size: number; contentType: 
                 closeSync(fd);
             }
         };
-        return { size, contentType: UNKNOWN_CONTENT_TYPE, fetchRange };
+        return { size, contentType: UNKNOWN_CONTENT_TYPE, contentVersion: null, fetchRange };
     }
 
     // Resolve redirects once so range requests hit the final host.
@@ -136,7 +139,7 @@ async function openSource(source: string): Promise<{ size: number; contentType: 
         if (res.status !== 206) throw new Error(`Range ${start}-${end}: HTTP ${res.status}`);
         return res.arrayBuffer();
     };
-    return { size, contentType, fetchRange };
+    return { size, contentType, contentVersion: contentVersion(head.headers), fetchRange };
 }
 
 /** Filename extension and MIME type a chunk is uploaded with. */
@@ -305,14 +308,16 @@ async function main(): Promise<void> {
 
     const outDir = resultsDir(args.source);
     console.log(`output: ${outDir}`);
-    const { size, contentType, fetchRange } = await openSource(args.source);
+    const source = await openSource(args.source);
+    const { size, contentType, fetchRange } = source;
     const route = await planUploads(
         {
             size,
             contentType,
             audioHost: /^https?:\/\//.test(args.source) ? new URL(args.source).hostname : "local file",
             fetchRange,
-            fetchWhole: () => fetchRange(0, size - 1),
+            contentVersion: source.contentVersion,
+            fetchWhole: async () => ({ bytes: await fetchRange(0, size - 1), contentVersion: source.contentVersion }),
         },
         // --max-mb is the per-chunk cap for files over the upload limit only, as
         // production's 15 MB is. Whole bytes: a fractional value would plan fractional offsets.

@@ -12,6 +12,7 @@ import {
     detectAudioFormat,
     prepareForUpload,
     chunkCacheKey,
+    contentVersion,
     planUploads,
     uploadLimits,
     type AudioSource,
@@ -72,6 +73,7 @@ describe("validateAudioUrl", () => {
                 headers: {
                     "content-length": "1048576",
                     "content-type": "audio/mpeg",
+                    etag: '"v1"',
                 },
             })
         );
@@ -81,6 +83,7 @@ describe("validateAudioUrl", () => {
         expect(result).toEqual({
             contentLength: 1048576,
             contentType: "audio/mpeg",
+            contentVersion: 'etag:"v1"',
         });
     });
 
@@ -1099,6 +1102,8 @@ interface ServeOptions {
     allowWholeFileGet?: boolean;
     /** Answer the range fetch for `[start, end]` with the whole file and a 200, like a CDN that ignores Range. */
     ignoreRange?: (start: number, end: number) => boolean;
+    /** Extra headers on every audio response (HEAD, whole-file GET and range reads), such as an ETag. */
+    headers?: Record<string, string>;
 }
 
 /**
@@ -1131,12 +1136,13 @@ function serveAudio(file: Uint8Array, options: ServeOptions = {}) {
                 headers: {
                     "content-length": String(options.contentLength ?? file.length),
                     "content-type": options.contentType ?? "audio/mp4",
+                    ...options.headers,
                 },
             });
         }
         const range = new Headers(init?.headers).get("Range") ?? "";
         if (!range && options.allowWholeFileGet) {
-            return new Response(file.slice(), { status: 200 });
+            return new Response(file.slice(), { status: 200, headers: options.headers });
         }
         ranges.push(range);
         const match = /^bytes=(\d+)-(\d+)$/.exec(range);
@@ -1145,8 +1151,8 @@ function serveAudio(file: Uint8Array, options: ServeOptions = {}) {
         const end = Math.min(Number(match[2]), file.length - 1);
         const failure = options.failRange?.(start, end);
         if (failure) throw failure;
-        if (options.ignoreRange?.(start, end)) return new Response(file.slice(), { status: 200 });
-        return new Response(file.slice(start, end + 1), { status: 206 });
+        if (options.ignoreRange?.(start, end)) return new Response(file.slice(), { status: 200, headers: options.headers });
+        return new Response(file.slice(start, end + 1), { status: 206, headers: options.headers });
     });
     return { uploads, ranges };
 }
@@ -2001,9 +2007,10 @@ describe("planUploads (the Worker's routing, shared with check:chunks)", () => {
             size: file.length,
             contentType,
             audioHost: "cdn.example.com",
+            contentVersion: null,
             fetchWhole: async () => {
                 reads.push("whole");
-                return file.slice().buffer;
+                return { bytes: file.slice().buffer, contentVersion: null };
             },
             fetchRange: async (start, end) => {
                 reads.push(`${start}-${end}`);
@@ -2540,13 +2547,91 @@ describe("per-chunk transcript cache (#48)", () => {
         return { ...chunkedOptions(maxSeconds), chunkCache: cache };
     }
 
-    it("builds the key from the plan version, container, file size, chunk index and chunk range", async () => {
+    it("builds the key from the plan version, container, file size, content version, chunk index and chunk range", async () => {
         const { plan } = await mp3Plan();
         const chunk = plan.chunks[1];
 
-        expect(chunkCacheKey(plan, chunk)).toBe(
-            `${CHUNK_PLAN_VERSION}:mp3:${plan.fileSize}:1:${chunk.cacheId}`,
+        expect(chunkCacheKey(plan, chunk, 'etag:"abc"')).toBe(
+            `${CHUNK_PLAN_VERSION}:mp3:${plan.fileSize}:etag:"abc":1:${chunk.cacheId}`,
         );
+        // No ETag or Last-Modified: the file size is the only identity.
+        expect(chunkCacheKey(plan, chunk, null)).toBe(`${CHUNK_PLAN_VERSION}:mp3:${plan.fileSize}:-:1:${chunk.cacheId}`);
+    });
+
+    it("contentVersion prefers a strong ETag, then Last-Modified, and ignores a weak ETag", () => {
+        const LAST_MODIFIED = "Wed, 12 Nov 2026 10:00:00 GMT";
+        expect(contentVersion(new Headers({ etag: '"abc"', "last-modified": LAST_MODIFIED }))).toBe('etag:"abc"');
+        expect(contentVersion(new Headers({ etag: 'W/"abc"', "last-modified": LAST_MODIFIED }))).toBe(`lm:${LAST_MODIFIED}`);
+        expect(contentVersion(new Headers({ etag: 'W/"abc"' }))).toBeNull();
+        expect(contentVersion(new Headers())).toBeNull();
+    });
+
+    /** A cache seeded with a text for every chunk of `plan`, keyed under `version`. */
+    function seededCache(plan: Awaited<ReturnType<typeof mp3Plan>>["plan"], version: string | null) {
+        return fakeCache(
+            new Map(plan.chunks.map((chunk, i) => [chunkCacheKey(plan, chunk, version), { text: `cached ${i + 1}.` }])),
+        );
+    }
+
+    it("same size, different ETag: every chunk misses (the CDN replaced the audio)", async () => {
+        const { file, plan } = await mp3Plan();
+        const { cache } = seededCache(plan, 'etag:"old"');
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg", headers: { etag: '"new"' } });
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(uploads).toHaveLength(3);
+        expect(result.text).toBe("chunk 1. chunk 2. chunk 3.");
+    });
+
+    it("same ETag: every chunk hits", async () => {
+        const { file, plan } = await mp3Plan();
+        const { cache } = seededCache(plan, 'etag:"v1"');
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg", headers: { etag: '"v1"' } });
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(uploads).toHaveLength(0);
+        expect(result.text).toBe("cached 1. cached 2. cached 3.");
+    });
+
+    it("a weak ETag is ignored in favour of Last-Modified", async () => {
+        const { file, plan } = await mp3Plan();
+        const lastModified = "Wed, 12 Nov 2026 10:00:00 GMT";
+        const { cache, entries } = fakeCache();
+        serveAudio(file, { contentType: "audio/mpeg", headers: { etag: 'W/"weak"', "last-modified": lastModified } });
+
+        await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect([...entries.keys()]).toEqual(plan.chunks.map((chunk) => chunkCacheKey(plan, chunk, `lm:${lastModified}`)));
+    });
+
+    it("no ETag or Last-Modified: the size-only key, which a retry still hits", async () => {
+        const { file, plan } = await mp3Plan();
+        const { cache } = seededCache(plan, null);
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(uploads).toHaveLength(0);
+        expect(result.text).toBe("cached 1. cached 2. cached 3.");
+    });
+
+    it("the small-file path keys chunks by the whole-file GET's ETag", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        // skipValidation: no HEAD, so the GET is the only place the ETag can come from.
+        serveAudio(file, { contentType: "audio/mpeg", allowWholeFileGet: true, headers: { etag: '"from-get"' } });
+        const { cache, entries } = fakeCache();
+
+        await transcribeAudio("https://example.com/episode.mp3", {
+            apiKey: "k",
+            skipValidation: true,
+            chunkLimits: { maxBytes: TARGET_CHUNK_SIZE_BYTES, maxSeconds: 2 },
+            chunkCache: cache,
+        });
+
+        expect(entries.size).toBeGreaterThan(1);
+        for (const key of entries.keys()) expect(key).toContain(':etag:"from-get":');
     });
 
     it("writes each successful chunk to the cache", async () => {
@@ -2559,7 +2644,7 @@ describe("per-chunk transcript cache (#48)", () => {
 
         expect(result.text).toBe("chunk 1. chunk 2. chunk 3.");
         expect([...entries]).toEqual(
-            plan.chunks.map((chunk, i) => [chunkCacheKey(plan, chunk), { text: `chunk ${i + 1}.` }]),
+            plan.chunks.map((chunk, i) => [chunkCacheKey(plan, chunk, null), { text: `chunk ${i + 1}.` }]),
         );
     });
 
@@ -2573,7 +2658,7 @@ describe("per-chunk transcript cache (#48)", () => {
 
         await transcribeAudio(MP3_URL, cachedOptions(cache));
 
-        expect(entries.get(chunkCacheKey(plan, plan.chunks[0]))).toEqual({ text: "padded 1." });
+        expect(entries.get(chunkCacheKey(plan, plan.chunks[0], null))).toEqual({ text: "padded 1." });
     });
 
     it("writes chunks on the small-file path when a short file is chunked for duration", async () => {
@@ -2596,8 +2681,8 @@ describe("per-chunk transcript cache (#48)", () => {
         const [first, second, third] = plan.chunks;
         const { cache } = fakeCache(
             new Map([
-                [chunkCacheKey(plan, first), { text: "cached one." }],
-                [chunkCacheKey(plan, second), { text: "cached two." }],
+                [chunkCacheKey(plan, first, null), { text: "cached one." }],
+                [chunkCacheKey(plan, second, null), { text: "cached two." }],
             ]),
         );
         const { uploads, ranges } = serveAudio(file, { contentType: "audio/mpeg" });
@@ -2616,7 +2701,7 @@ describe("per-chunk transcript cache (#48)", () => {
 
     it("a cached middle chunk skips its sleep; the next fetched chunk still waits", async () => {
         const { file, plan } = await mp3Plan();
-        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[1]), { text: "cached two." }]]));
+        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[1], null), { text: "cached two." }]]));
         const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
         const timeouts = vi.spyOn(globalThis, "setTimeout");
 
@@ -2629,7 +2714,7 @@ describe("per-chunk transcript cache (#48)", () => {
 
     it("a cached empty transcript is a hit", async () => {
         const { file, plan } = await mp3Plan();
-        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[0]), { text: "" }]]));
+        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[0], null), { text: "" }]]));
         const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
 
         await transcribeAudio(MP3_URL, cachedOptions(cache));
@@ -2642,9 +2727,9 @@ describe("per-chunk transcript cache (#48)", () => {
         const [first, second, third] = plan.chunks;
         const { cache, entries } = fakeCache(
             new Map([
-                [chunkCacheKey({ ...plan, fileSize: plan.fileSize + 1 }, first), { text: "stale size." }],
+                [chunkCacheKey({ ...plan, fileSize: plan.fileSize + 1 }, first, null), { text: "stale size." }],
                 [`${CHUNK_PLAN_VERSION - 1}:${plan.container}:${plan.fileSize}:${second.index}:${second.cacheId}`, { text: "stale version." }],
-                [chunkCacheKey(plan, { ...third, cacheId: "0-1" }), { text: "stale range." }],
+                [chunkCacheKey(plan, { ...third, cacheId: "0-1" }, null), { text: "stale range." }],
             ]),
         );
         const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
@@ -2689,7 +2774,7 @@ describe("per-chunk transcript cache (#48)", () => {
 
     it("logs chunk_cache_hit", async () => {
         const { file, plan } = await mp3Plan();
-        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[0]), { text: "cached one." }]]));
+        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[0], null), { text: "cached one." }]]));
         serveAudio(file, { contentType: "audio/mpeg" });
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -2711,6 +2796,6 @@ describe("per-chunk transcript cache (#48)", () => {
         const error = await transcribeAudio(MP3_URL, cachedOptions(cache)).catch((e) => e);
 
         expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_REJECTED);
-        expect([...entries.keys()]).toEqual([chunkCacheKey(plan, plan.chunks[0])]);
+        expect([...entries.keys()]).toEqual([chunkCacheKey(plan, plan.chunks[0], null)]);
     });
 });

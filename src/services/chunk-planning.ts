@@ -45,11 +45,12 @@ import { coalesceRuns, parseAudioTrack, planSampleChunks, sampleDataEnd } from "
 import { fetchExact, loadMp4Chunk, locateMoov, type FetchRange } from "./audio-containers";
 
 /**
- * Version of the planner's output. A cached chunk transcript is reused only
- * under the same version, so bump this whenever the chunks planned for the
- * same file and limits change (boundaries or the bytes a chunk uploads).
+ * Version of the planner's output and the chunk cache key's format. A cached
+ * chunk transcript is reused only under the same version, so bump this
+ * whenever the chunks planned for the same file and limits change
+ * (boundaries or the bytes a chunk uploads) or `chunkCacheKey` changes.
  */
-export const CHUNK_PLAN_VERSION = 2;
+export const CHUNK_PLAN_VERSION = 3;
 
 /**
  * Size of the file header prepended to byte-range chunks after the first on
