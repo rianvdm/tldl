@@ -18,22 +18,24 @@
  * file's duration.
  *
  * Chunks land in scripts/chunk-check-results/<name>/ (gitignored).
- * `--transcribe` sends each chunk with its real MIME type, using the
- * production model with no fallback, and reads OPENAI_API_KEY from .dev.vars.
+ * `--transcribe` sends each chunk with the filename and MIME type the Worker
+ * would send (from the chunk's magic bytes, then the source's content type),
+ * using the production model with no fallback, and reads OPENAI_API_KEY from
+ * .dev.vars.
  * Exits non-zero on any failed check or any non-200.
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONTAINER_PROBE_BYTES, MAX_CHUNK_SECONDS, TARGET_CHUNK_SIZE_BYTES, hexBytes } from "../src/lib/audio";
 import { AUDIO_USER_AGENT } from "../src/lib/constants";
 import { findMp3Frame, parseMp3FrameHeader, readVbrHeader } from "../src/lib/mp3";
 import { parseAudioTrack, type Mp4AudioTrack } from "../src/lib/mp4";
 import { locateMoov, type FetchRange } from "../src/services/audio-containers";
-import { planChunks, type AudioContainer, type ChunkPlan, type PlannedChunk } from "../src/services/chunk-planning";
-import { detectAudioFormat, getProviderConfig } from "../src/services/transcription";
+import { planChunks, type ChunkPlan, type PlannedChunk } from "../src/services/chunk-planning";
+import { detectAudioFormat, getProviderConfig, mimeFromExtension } from "../src/services/transcription";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..");
@@ -83,8 +85,11 @@ function readApiKey(): string {
     return match[1].trim();
 }
 
+/** Production's content type for audio served without one; a local file has none either. */
+const UNKNOWN_CONTENT_TYPE = "unknown";
+
 /** Range reader over a URL (HTTP Range) or a local file. */
-async function openSource(source: string): Promise<{ size: number; fetchRange: FetchRange }> {
+async function openSource(source: string): Promise<{ size: number; contentType: string; fetchRange: FetchRange }> {
     if (!/^https?:\/\//.test(source)) {
         const size = statSync(source).size;
         const fetchRange: FetchRange = async (start, end) => {
@@ -97,7 +102,7 @@ async function openSource(source: string): Promise<{ size: number; fetchRange: F
                 closeSync(fd);
             }
         };
-        return { size, fetchRange };
+        return { size, contentType: UNKNOWN_CONTENT_TYPE, fetchRange };
     }
 
     // Resolve redirects once so range requests hit the final host.
@@ -106,6 +111,7 @@ async function openSource(source: string): Promise<{ size: number; fetchRange: F
     const url = head.url;
     const size = Number(head.headers.get("content-length"));
     if (!size) throw new Error("No content-length from HEAD");
+    const contentType = head.headers.get("content-type") || UNKNOWN_CONTENT_TYPE;
     const fetchRange: FetchRange = async (start, end) => {
         const res = await fetch(url, {
             headers: { "User-Agent": AUDIO_USER_AGENT, Range: `bytes=${start}-${end}` },
@@ -113,7 +119,7 @@ async function openSource(source: string): Promise<{ size: number; fetchRange: F
         if (res.status !== 206) throw new Error(`Range ${start}-${end}: HTTP ${res.status}`);
         return res.arrayBuffer();
     };
-    return { size, fetchRange };
+    return { size, contentType, fetchRange };
 }
 
 /** Filename extension and MIME type a chunk is uploaded with. */
@@ -122,26 +128,30 @@ interface UploadFormat {
     mime: string;
 }
 
-/** MIME types for the formats production's `detectAudioFormat` recognises on the byte path. */
-const OTHER_FORMAT_MIME: Record<string, string> = {
-    wav: "audio/wav",
-    ogg: "audio/ogg",
-    webm: "audio/webm",
-};
+/**
+ * The upload's filename extension and MIME type, built as production's
+ * `callWhisperApi` builds them: from the chunk's magic bytes, then the
+ * source's content type, then MP3.
+ */
+function uploadFormat(bytes: Uint8Array, contentType: string): UploadFormat {
+    const ext = detectAudioFormat(bytes.slice().buffer, contentType);
+    return { ext, mime: mimeFromExtension(ext) };
+}
 
 /**
- * MP3 chunks go up as `audio/mpeg`, MP4 and ADTS chunks as M4A. On the byte
- * path, the format comes from the file's magic bytes, which every chunk
- * carries (chunk 1 starts with them; later chunks get them prepended).
- * Production labels an unrecognised format MP3; here it is `.bin`, so a
- * rejection isn't blamed on the label.
+ * Where a source's chunks go: its file name as a slug, always a strict child
+ * of OUT_DIR, because the folder is deleted before each run. Leading dots are
+ * stripped, so names like `..mp3` can't resolve to OUT_DIR or its parent.
  */
-function uploadFormat(container: AudioContainer, probe: Uint8Array): UploadFormat {
-    if (container === "mp3") return { ext: "mp3", mime: "audio/mpeg" };
-    if (container === "mp4" || container === "adts") return { ext: "m4a", mime: "audio/mp4" };
-    const ext = detectAudioFormat(probe.slice().buffer, "");
-    const mime = OTHER_FORMAT_MIME[ext];
-    return mime ? { ext, mime } : { ext: "bin", mime: "application/octet-stream" };
+function resultsDir(source: string): string {
+    // A URL's query (Substack signs its CDN URLs) and fragment are not part of the name.
+    const sourcePath = /^https?:\/\//.test(source) ? new URL(source).pathname : source;
+    const slug = basename(sourcePath, extname(sourcePath))
+        .replace(/[^A-Za-z0-9._-]+/g, "_")
+        .replace(/^\.+/, "");
+    const dir = resolve(OUT_DIR, slug || "audio");
+    if (!dir.startsWith(resolve(OUT_DIR) + sep)) throw new Error(`Refusing to use results folder outside ${OUT_DIR}: ${dir}`);
+    return dir;
 }
 
 /** Decode the whole file, discarding the audio; returns ffmpeg's errors (empty when clean). */
@@ -265,20 +275,21 @@ async function main(): Promise<void> {
     const args = parseArgs(process.argv.slice(2));
     const apiKey = args.transcribe ? readApiKey() : "";
 
-    const { size, fetchRange } = await openSource(args.source);
+    const outDir = resultsDir(args.source);
+    console.log(`output: ${outDir}`);
+    const { size, contentType, fetchRange } = await openSource(args.source);
     const probe = new Uint8Array(await fetchRange(0, Math.min(CONTAINER_PROBE_BYTES, size) - 1));
     const plan = await planChunks({
         probe,
         fileSize: size,
-        contentType: "",
+        contentType,
         // Whole bytes: a fractional --max-mb would plan fractional byte offsets.
         limits: { maxBytes: Math.floor(args.maxMb * 1024 * 1024), maxSeconds: args.maxSeconds },
         fetchRange,
     });
-    const format = uploadFormat(plan.container, probe);
     console.log(
-        `\nfile: ${size} bytes, container ${plan.container}, ${plan.totalBytes} audio bytes, ` +
-        `${plan.chunks.length} chunks, uploaded as ${format.mime} (.${format.ext})`,
+        `\nfile: ${size} bytes, content type ${contentType}, container ${plan.container}, ` +
+        `${plan.totalBytes} audio bytes, ${plan.chunks.length} chunks`,
     );
     console.log(`audio: ${describeAudio(plan)}`);
 
@@ -288,23 +299,21 @@ async function main(): Promise<void> {
     // The plan keeps only sample ranges; the sizes say which samples carry a packet.
     const track = plan.container === "mp4" ? parseAudioTrack((await locateMoov(probe, size, fetchRange)).moov) : null;
 
-    const sourcePath = args.source.split("?")[0];
-    const name = basename(sourcePath, extname(sourcePath)) || "audio";
-    const outDir = join(OUT_DIR, name);
     rmSync(outDir, { recursive: true, force: true });
     mkdirSync(outDir, { recursive: true });
-    console.log(`output: ${outDir}\n`);
+    console.log("");
 
     let failed = false;
     const count = Math.min(plan.chunks.length, args.limit);
     for (const chunk of plan.chunks.slice(0, count)) {
         const label = `chunk ${chunk.index + 1}/${plan.chunks.length}`;
         const bytes = new Uint8Array(await chunk.load());
+        const format = uploadFormat(bytes, contentType);
         const path = join(outDir, `chunk-${String(chunk.index + 1).padStart(2, "0")}.${format.ext}`);
         writeFileSync(path, bytes);
 
         const problems: string[] = [];
-        const notes: string[] = [`${(bytes.length / 1024 / 1024).toFixed(2)} MB`];
+        const notes: string[] = [`${(bytes.length / 1024 / 1024).toFixed(2)} MB`, `audio.${format.ext} ${format.mime}`];
 
         const duration = ffprobeDuration(path);
         if (chunk.plannedSeconds !== undefined) notes.push(`planned ${chunk.plannedSeconds.toFixed(1)}s`);

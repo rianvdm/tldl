@@ -78,7 +78,7 @@ export function extensionFromMime(contentType: string): string {
  * Get the correct MIME type for a file extension.
  * Used when constructing the Blob sent to the API.
  */
-function mimeFromExtension(ext: string): string {
+export function mimeFromExtension(ext: string): string {
     return EXTENSION_TO_MIME[ext] ?? "audio/mpeg";
 }
 
