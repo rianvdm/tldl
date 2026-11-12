@@ -4,8 +4,6 @@
 
 import { describe, it, expect } from "vitest";
 import {
-    findMp3FrameBoundary,
-    findMp3FrameBoundaryReverse,
     calculateChunkRanges,
     requiresChunking,
     estimateTranscriptionTime,
@@ -13,87 +11,6 @@ import {
     CHUNK_OVERLAP_BYTES,
     MAX_TOTAL_SIZE_BYTES,
 } from "../src/lib/audio";
-
-describe("findMp3FrameBoundary", () => {
-    it("should find MP3 sync word at the given offset", () => {
-        // Create buffer with MP3 frame header at position 10
-        // 0xFF 0xFB = valid MPEG Audio Layer 3 sync
-        const buffer = new Uint8Array(100);
-        buffer[10] = 0xff;
-        buffer[11] = 0xfb; // MPEG1 Layer 3
-
-        const boundary = findMp3FrameBoundary(buffer, 0);
-        expect(boundary).toBe(10);
-    });
-
-    it("should find MP3 sync word starting from offset", () => {
-        const buffer = new Uint8Array(100);
-        // First frame at position 5
-        buffer[5] = 0xff;
-        buffer[6] = 0xfb;
-        // Second frame at position 50
-        buffer[50] = 0xff;
-        buffer[51] = 0xfb;
-
-        // Starting from 10 should find the one at 50
-        const boundary = findMp3FrameBoundary(buffer, 10);
-        expect(boundary).toBe(50);
-    });
-
-    it("should return startOffset if no frame found", () => {
-        const buffer = new Uint8Array(100);
-        // No valid MP3 headers
-
-        const boundary = findMp3FrameBoundary(buffer, 20);
-        expect(boundary).toBe(20);
-    });
-
-    it("should reject invalid MPEG version bits", () => {
-        const buffer = new Uint8Array(100);
-        // 0xFF 0xE8 has version bits = 01 (reserved/invalid)
-        buffer[10] = 0xff;
-        buffer[11] = 0xe8;
-
-        // Valid frame at 50
-        buffer[50] = 0xff;
-        buffer[51] = 0xfb;
-
-        const boundary = findMp3FrameBoundary(buffer, 0);
-        expect(boundary).toBe(50);
-    });
-
-    it("should handle various valid MPEG versions", () => {
-        // Test MPEG1 Layer 3 (0xFB)
-        const buffer1 = new Uint8Array([0xff, 0xfb]);
-        expect(findMp3FrameBoundary(buffer1, 0)).toBe(0);
-
-        // Test MPEG2 Layer 3 (0xF3)
-        const buffer2 = new Uint8Array([0xff, 0xf3]);
-        expect(findMp3FrameBoundary(buffer2, 0)).toBe(0);
-
-        // Test MPEG2.5 Layer 3 (0xE3)
-        const buffer3 = new Uint8Array([0xff, 0xe3]);
-        expect(findMp3FrameBoundary(buffer3, 0)).toBe(0);
-    });
-});
-
-describe("findMp3FrameBoundaryReverse", () => {
-    it("should search backwards for frame boundary", () => {
-        const buffer = new Uint8Array(100);
-        buffer[30] = 0xff;
-        buffer[31] = 0xfb;
-
-        const boundary = findMp3FrameBoundaryReverse(buffer, 50);
-        expect(boundary).toBe(30);
-    });
-
-    it("should return startOffset if no frame found backwards", () => {
-        const buffer = new Uint8Array(100);
-
-        const boundary = findMp3FrameBoundaryReverse(buffer, 50);
-        expect(boundary).toBe(50);
-    });
-});
 
 describe("calculateChunkRanges", () => {
     const MB = 1024 * 1024;

@@ -1,19 +1,12 @@
 /**
  * Audio utilities for handling large audio files
- * Provides MP3 frame detection and chunk range calculation for
- * splitting large files for transcription
+ * Provides ID3 tag measurement and chunk range calculation for
+ * splitting large files for transcription (MP3 frames: see mp3.ts)
  */
 
 // ============================================================================
 // Constants
 // ============================================================================
-
-/**
- * MP3 frame sync word - first 11 bits are all 1s
- * Frame header starts with 0xFF followed by 0xE0-0xFF
- */
-const MP3_SYNC_BYTE_1 = 0xff;
-const MP3_SYNC_MASK = 0xe0; // First 3 bits of second byte must be 111
 
 /**
  * Target chunk size for transcription (under 25MB Whisper limit)
@@ -95,79 +88,6 @@ export function id3Length(bytes: Uint8Array): number {
         ((bytes[8] & 0x7f) << 7) |
         (bytes[9] & 0x7f);
     return 10 + bodySize;
-}
-
-// ============================================================================
-// MP3 Frame Detection
-// ============================================================================
-
-/**
- * Find the nearest MP3 frame boundary at or after the given offset.
- * MP3 frames start with a sync word: 11 bits of 1s (0xFF followed by 0xE0+)
- * 
- * This ensures we don't cut audio mid-frame, which would cause decoding errors.
- * 
- * @param buffer - Audio data to search
- * @param startOffset - Position to start searching from
- * @param maxSearch - Maximum bytes to search (default 4KB, covers ~10 frames)
- * @returns Byte offset of the frame boundary, or startOffset if not found
- */
-export function findMp3FrameBoundary(
-    buffer: Uint8Array,
-    startOffset: number,
-    maxSearch: number = 4096
-): number {
-    const endSearch = Math.min(startOffset + maxSearch, buffer.length - 1);
-
-    for (let i = startOffset; i < endSearch; i++) {
-        // Check for MP3 sync word
-        if (buffer[i] === MP3_SYNC_BYTE_1 && i + 1 < buffer.length) {
-            const secondByte = buffer[i + 1];
-            // Verify it's a valid frame header (top 3 bits must be 111)
-            if ((secondByte & MP3_SYNC_MASK) === MP3_SYNC_MASK) {
-                // Additional validation: MPEG version bits (bits 4-3) shouldn't be 01
-                const versionBits = (secondByte >> 3) & 0x03;
-                if (versionBits !== 0x01) {
-                    return i;
-                }
-            }
-        }
-    }
-
-    // If no frame found, return the original offset
-    // The decoder should still handle this reasonably
-    return startOffset;
-}
-
-/**
- * Search backwards from a position to find an MP3 frame boundary.
- * Used when we need to ensure overlap starts at a clean frame.
- * 
- * @param buffer - Audio data to search
- * @param startOffset - Position to start searching backwards from
- * @param maxSearch - Maximum bytes to search backwards
- * @returns Byte offset of the frame boundary
- */
-export function findMp3FrameBoundaryReverse(
-    buffer: Uint8Array,
-    startOffset: number,
-    maxSearch: number = 4096
-): number {
-    const endSearch = Math.max(startOffset - maxSearch, 0);
-
-    for (let i = startOffset; i >= endSearch; i--) {
-        if (buffer[i] === MP3_SYNC_BYTE_1 && i + 1 < buffer.length) {
-            const secondByte = buffer[i + 1];
-            if ((secondByte & MP3_SYNC_MASK) === MP3_SYNC_MASK) {
-                const versionBits = (secondByte >> 3) & 0x03;
-                if (versionBits !== 0x01) {
-                    return i;
-                }
-            }
-        }
-    }
-
-    return startOffset;
 }
 
 // ============================================================================
