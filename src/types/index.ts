@@ -101,6 +101,17 @@ export interface Transcript {
 }
 
 /**
+ * Where chunked transcription keeps each chunk's transcript, so a retried
+ * queue attempt resumes instead of re-transcribing finished chunks (#48).
+ * Keys come from `chunkCacheKey()` in the transcription service. Both calls
+ * are best effort: the transcription service logs and ignores their errors.
+ */
+export interface ChunkTranscriptCache {
+    get(chunkKey: string): Promise<{ text: string } | null>;
+    put(chunkKey: string, value: { text: string }): Promise<void>;
+}
+
+/**
  * Summary record - AI-generated summary using a specific template
  * Stored in KV with key: summary:{episode_id}:{template_id}
  * TTL: 365 days

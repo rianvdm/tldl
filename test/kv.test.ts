@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import {
     KV_KEYS,
@@ -19,6 +19,7 @@ import {
     addToEpisodeIndex,
     addTemplateToEpisodeIndex,
     getEpisodeIndex,
+    makeChunkTranscriptCache,
 } from "../src/lib/kv";
 import type { Job, Episode, Transcript, Summary } from "../src/types";
 
@@ -294,6 +295,52 @@ describe("Transcript Operations", () => {
     it("returns null for non-existent transcript", async () => {
         const retrieved = await getTranscript(env.TLDL_DATA, "non-existent-id");
         expect(retrieved).toBeNull();
+    });
+});
+
+describe("Chunk transcript cache", () => {
+    beforeEach(async () => {
+        const keys = await env.TLDL_DATA.list({ prefix: "chunkcache:" });
+        await Promise.all(keys.keys.map((k) => env.TLDL_DATA.delete(k.name)));
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("generates the chunk cache key", () => {
+        expect(KV_KEYS.chunkCache("123_456", "2:mp3:1000:0:0-499")).toBe("chunkcache:123_456:2:mp3:1000:0:0-499");
+    });
+
+    it("makeChunkTranscriptCache round-trips under chunkcache:{episodeId}:{key} with TTL.JOB", async () => {
+        const put = vi.spyOn(env.TLDL_DATA, "put");
+        const cache = makeChunkTranscriptCache(env.TLDL_DATA, "123_456");
+
+        await cache.put("2:mp3:1000:0:0-499", { text: "chunk one." });
+
+        expect(put).toHaveBeenCalledWith(
+            "chunkcache:123_456:2:mp3:1000:0:0-499",
+            JSON.stringify({ text: "chunk one." }),
+            { expirationTtl: TTL.JOB },
+        );
+        expect(await cache.get("2:mp3:1000:0:0-499")).toEqual({ text: "chunk one." });
+        // Bound to its episode: another episode's cache doesn't see the entry.
+        expect(await makeChunkTranscriptCache(env.TLDL_DATA, "123_789").get("2:mp3:1000:0:0-499")).toBeNull();
+    });
+
+    it("returns null for a missing key", async () => {
+        expect(await makeChunkTranscriptCache(env.TLDL_DATA, "123_456").get("nope")).toBeNull();
+    });
+
+    it.each([
+        ["not JSON", "chunk one."],
+        ["JSON without text", JSON.stringify({ transcript: "chunk one." })],
+        ["a non-string text", JSON.stringify({ text: 42 })],
+        ["JSON null", "null"],
+    ])("treats a stored value that is %s as a miss", async (_label, raw) => {
+        await env.TLDL_DATA.put("chunkcache:123_456:k", raw);
+
+        expect(await makeChunkTranscriptCache(env.TLDL_DATA, "123_456").get("k")).toBeNull();
     });
 });
 

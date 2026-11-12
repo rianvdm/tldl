@@ -11,10 +11,11 @@ import {
     extensionFromMime,
     detectAudioFormat,
     prepareForUpload,
+    chunkCacheKey,
 } from "../src/services/transcription";
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
-import { AUDIO_LIMITS, ERROR_CODES } from "../src/lib/constants";
+import { AUDIO_LIMITS, ERROR_CODES, TIMEOUTS } from "../src/lib/constants";
 import {
     CHUNK_OVERLAP_SECONDS,
     CONTAINER_PROBE_BYTES,
@@ -36,7 +37,8 @@ import {
 } from "../src/lib/mp4";
 import { parseAdtsFrames, type AdtsFrame } from "../src/lib/adts";
 import { locateMoov } from "../src/services/audio-containers";
-import { detectContainer, planChunks } from "../src/services/chunk-planning";
+import { CHUNK_PLAN_VERSION, detectContainer, planChunks } from "../src/services/chunk-planning";
+import type { ChunkTranscriptCache } from "../src/types";
 import {
     ADTS_AAC,
     ADTS_AAC_ID3,
@@ -2232,5 +2234,228 @@ describe("model rejections (AUDIO_REJECTED)", () => {
         expect([whole.model, chunked.model, partial.model]).toEqual(["gpt-transcribe", "gpt-transcribe", "gpt-transcribe"]);
         expect(partial.partial).toBe(true);
         expect(uploads.every((u) => u.model === "gpt-transcribe")).toBe(true);
+    });
+});
+
+describe("per-chunk transcript cache (#48)", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const MP3_URL = "https://cdn.example.com/episode.mp3";
+    /** Splits the 5 s MP3_CBR_INFO fixture into three chunks. */
+    const THREE_MP3_CHUNKS_SECONDS = 2.5;
+
+    /** A Map-backed cache; `entries` is the backing store, so tests can seed and inspect it. */
+    function fakeCache(entries = new Map<string, { text: string }>()) {
+        const cache: ChunkTranscriptCache = {
+            get: async (key) => entries.get(key) ?? null,
+            put: async (key, value) => {
+                entries.set(key, value);
+            },
+        };
+        return { cache, entries };
+    }
+
+    /** The plan the remote chunked path makes for MP3_CBR_INFO at `maxSeconds`. */
+    async function mp3Plan(maxSeconds = THREE_MP3_CHUNKS_SECONDS) {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        const plan = await planChunks({
+            probe: file,
+            fileSize: file.length,
+            contentType: "audio/mpeg",
+            limits: { maxBytes: 1e9, maxSeconds },
+            fetchRange: async (start, end) => file.slice(start, end + 1).buffer,
+        });
+        return { file, plan };
+    }
+
+    const rangeOf = (chunk: { logFields: Record<string, unknown> }) =>
+        `bytes=${chunk.logFields.startByte}-${chunk.logFields.endByte}`;
+
+    /** How many inter-chunk sleeps a `setTimeout` spy saw. */
+    const chunkSleeps = (timeouts: { mock: { calls: unknown[][] } }) =>
+        timeouts.mock.calls.filter(([, ms]) => ms === TIMEOUTS.CHUNK_FETCH_DELAY_MS).length;
+
+    function cachedOptions(cache: ChunkTranscriptCache, maxSeconds = THREE_MP3_CHUNKS_SECONDS) {
+        return { ...chunkedOptions(maxSeconds), chunkCache: cache };
+    }
+
+    it("builds the key from the plan version, container, file size, chunk index and chunk range", async () => {
+        const { plan } = await mp3Plan();
+        const chunk = plan.chunks[1];
+
+        expect(chunkCacheKey(plan, chunk)).toBe(
+            `${CHUNK_PLAN_VERSION}:mp3:${plan.fileSize}:1:${chunk.cacheId}`,
+        );
+    });
+
+    it("writes each successful chunk to the cache", async () => {
+        const { file, plan } = await mp3Plan();
+        expect(plan.chunks).toHaveLength(3);
+        serveAudio(file, { contentType: "audio/mpeg" });
+        const { cache, entries } = fakeCache();
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(result.text).toBe("chunk 1. chunk 2. chunk 3.");
+        expect([...entries]).toEqual(
+            plan.chunks.map((chunk, i) => [chunkCacheKey(plan, chunk), { text: `chunk ${i + 1}.` }]),
+        );
+    });
+
+    it("writes the trimmed text the transcript is stitched from", async () => {
+        const { file, plan } = await mp3Plan();
+        serveAudio(file, {
+            contentType: "audio/mpeg",
+            respond: (_upload, n) => new Response(JSON.stringify({ text: `  padded ${n}.\n` }), { status: 200 }),
+        });
+        const { cache, entries } = fakeCache();
+
+        await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(entries.get(chunkCacheKey(plan, plan.chunks[0]))).toEqual({ text: "padded 1." });
+    });
+
+    it("writes chunks on the small-file path when a short file is chunked for duration", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        serveAudio(file, { contentType: "audio/mpeg", allowWholeFileGet: true });
+        const { cache, entries } = fakeCache();
+
+        const result = await transcribeAudio("https://example.com/episode.mp3", {
+            apiKey: "k",
+            chunkLimits: { maxBytes: TARGET_CHUNK_SIZE_BYTES, maxSeconds: 2 },
+            chunkCache: cache,
+        });
+
+        expect(entries.size).toBeGreaterThan(1);
+        expect([...entries.values()].map((v) => v.text).join(" ")).toBe(result.text);
+    });
+
+    it("resumes: cached chunks 1–2 skip their range fetch and OpenAI call; chunk 3 runs; text stitched in order", async () => {
+        const { file, plan } = await mp3Plan();
+        const [first, second, third] = plan.chunks;
+        const { cache } = fakeCache(
+            new Map([
+                [chunkCacheKey(plan, first), { text: "cached one." }],
+                [chunkCacheKey(plan, second), { text: "cached two." }],
+            ]),
+        );
+        const { uploads, ranges } = serveAudio(file, { contentType: "audio/mpeg" });
+        const timeouts = vi.spyOn(globalThis, "setTimeout");
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(result.text).toBe("cached one. cached two. chunk 1.");
+        expect(result.partial).toBeUndefined();
+        expect(uploads).toHaveLength(1);
+        // The probe, then chunk 3's range only.
+        expect(ranges).toEqual([`bytes=0-${file.length - 1}`, rangeOf(third)]);
+        // Chunk 3 is the first network fetch, so nothing waits.
+        expect(chunkSleeps(timeouts)).toBe(0);
+    });
+
+    it("a cached middle chunk skips its sleep; the next fetched chunk still waits", async () => {
+        const { file, plan } = await mp3Plan();
+        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[1]), { text: "cached two." }]]));
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
+        const timeouts = vi.spyOn(globalThis, "setTimeout");
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(result.text).toBe("chunk 1. cached two. chunk 2.");
+        expect(uploads).toHaveLength(2);
+        expect(chunkSleeps(timeouts)).toBe(1);
+    });
+
+    it("a cached empty transcript is a hit", async () => {
+        const { file, plan } = await mp3Plan();
+        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[0]), { text: "" }]]));
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
+
+        await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(uploads).toHaveLength(2);
+    });
+
+    it("a cache entry from a different file size, plan version or range is a miss", async () => {
+        const { file, plan } = await mp3Plan();
+        const [first, second, third] = plan.chunks;
+        const { cache, entries } = fakeCache(
+            new Map([
+                [chunkCacheKey({ ...plan, fileSize: plan.fileSize + 1 }, first), { text: "stale size." }],
+                [`${CHUNK_PLAN_VERSION - 1}:${plan.container}:${plan.fileSize}:${second.index}:${second.cacheId}`, { text: "stale version." }],
+                [chunkCacheKey(plan, { ...third, cacheId: "0-1" }), { text: "stale range." }],
+            ]),
+        );
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(result.text).toBe("chunk 1. chunk 2. chunk 3.");
+        expect(uploads).toHaveLength(3);
+        // The fresh chunks are written alongside the stale entries.
+        expect(entries.size).toBe(6);
+    });
+
+    it("cache get/put errors are logged and ignored", async () => {
+        const { file } = await mp3Plan();
+        serveAudio(file, { contentType: "audio/mpeg" });
+        const uncached = await transcribeAudio(MP3_URL, chunkedOptions(THREE_MP3_CHUNKS_SECONDS));
+        vi.restoreAllMocks();
+
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const broken: ChunkTranscriptCache = {
+            get: async () => {
+                throw new Error("KV get exploded");
+            },
+            put: async () => {
+                throw new Error("KV put exploded");
+            },
+        };
+
+        const result = await transcribeAudio(MP3_URL, cachedOptions(broken));
+
+        expect(result).toEqual(uncached);
+        expect(uploads).toHaveLength(3);
+        const events = loggedEvents(warn);
+        expect(events.filter((e) => e.event === "chunk_cache_read_failed")).toEqual(
+            [1, 2, 3].map((chunkIndex) => ({ event: "chunk_cache_read_failed", chunkIndex, error: "KV get exploded" })),
+        );
+        expect(events.filter((e) => e.event === "chunk_cache_write_failed")).toEqual(
+            [1, 2, 3].map((chunkIndex) => ({ event: "chunk_cache_write_failed", chunkIndex, error: "KV put exploded" })),
+        );
+    });
+
+    it("logs chunk_cache_hit", async () => {
+        const { file, plan } = await mp3Plan();
+        const { cache } = fakeCache(new Map([[chunkCacheKey(plan, plan.chunks[0]), { text: "cached one." }]]));
+        serveAudio(file, { contentType: "audio/mpeg" });
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await transcribeAudio(MP3_URL, cachedOptions(cache));
+
+        expect(loggedEvents(log).filter((e) => e.event === "chunk_cache_hit")).toEqual([
+            { event: "chunk_cache_hit", chunkIndex: 1, totalChunks: 3 },
+        ]);
+    });
+
+    it("a rejected chunk is not cached", async () => {
+        const { file, plan } = await mp3Plan();
+        serveAudio(file, {
+            contentType: "audio/mpeg",
+            respond: (_upload, n) => (n === 2 ? new Response(CORRUPTED_ERROR, { status: 400 }) : undefined),
+        });
+        const { cache, entries } = fakeCache();
+
+        const error = await transcribeAudio(MP3_URL, cachedOptions(cache)).catch((e) => e);
+
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_REJECTED);
+        expect([...entries.keys()]).toEqual([chunkCacheKey(plan, plan.chunks[0])]);
     });
 });

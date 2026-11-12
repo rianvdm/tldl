@@ -29,6 +29,7 @@ import {
     addToEpisodeIndex,
     appendActivityEvent,
     getMonitoredPodcast,
+    makeChunkTranscriptCache,
 } from "../lib/kv";
 import {
     updateJobStatusDO,
@@ -634,7 +635,12 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         try {
             transcriptionResult = await transcribeAudio(
                 audioUrl,
-                { apiKey: env.OPENAI_API_KEY, skipValidation },
+                {
+                    apiKey: env.OPENAI_API_KEY,
+                    skipValidation,
+                    // A retried attempt resumes from the chunks this one finishes (#48).
+                    chunkCache: makeChunkTranscriptCache(kv, episodeId),
+                },
             );
         } catch (error) {
             throw withCheckChunksCommand(error, audioUrl);

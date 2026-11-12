@@ -3,13 +3,14 @@
  * Provides typed helpers for all KV operations with consistent key schemas and TTLs.
  */
 
-import type { Job, JobStatus, Episode, Transcript, Summary, EpisodeIndexEntry, MonitoredPodcast, MonitorSettings, ActivityEvent } from "../types";
+import type { Job, JobStatus, Episode, Transcript, Summary, EpisodeIndexEntry, MonitoredPodcast, MonitorSettings, ActivityEvent, ChunkTranscriptCache } from "../types";
 
 // Key generation functions for consistent naming
 export const KV_KEYS = {
     job: (jobId: string) => `job:${jobId}`,
     episode: (episodeId: string) => `episode:${episodeId}`,
     transcript: (episodeId: string) => `transcript:${episodeId}`,
+    chunkCache: (episodeId: string, chunkKey: string) => `chunkcache:${episodeId}:${chunkKey}`,
     summary: (episodeId: string, templateId: string) =>
         `summary:${episodeId}:${templateId}`,
     episodeIndex: "episodes:index",
@@ -576,6 +577,39 @@ export async function getTranscript(
     const data = await kv.get(KV_KEYS.transcript(episodeId));
     if (!data) return null;
     return JSON.parse(data) as Transcript;
+}
+
+// ============================================================================
+// Chunk Transcript Cache
+// ============================================================================
+
+/**
+ * A KV-backed cache of one episode's chunk transcripts, so a queue retry
+ * resumes chunked transcription where the last attempt stopped (#48).
+ * Entries live for a day (`TTL.JOB`): once `transcript:{episodeId}` exists
+ * the consumer never transcribes again, so nothing cleans them up.
+ * A stored value that isn't `{ text: string }` reads as a miss.
+ */
+export function makeChunkTranscriptCache(kv: KVNamespace, episodeId: string): ChunkTranscriptCache {
+    return {
+        async get(chunkKey) {
+            const raw = await kv.get(KV_KEYS.chunkCache(episodeId, chunkKey));
+            if (raw === null) return null;
+            let value: unknown;
+            try {
+                value = JSON.parse(raw);
+            } catch {
+                return null;
+            }
+            const text = (value as { text?: unknown } | null)?.text;
+            return typeof text === "string" ? { text } : null;
+        },
+        async put(chunkKey, value) {
+            await kv.put(KV_KEYS.chunkCache(episodeId, chunkKey), JSON.stringify({ text: value.text }), {
+                expirationTtl: TTL.JOB,
+            });
+        },
+    };
 }
 
 // ============================================================================

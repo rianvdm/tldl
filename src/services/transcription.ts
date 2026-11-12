@@ -3,7 +3,8 @@
  * Handles audio validation and transcription for podcast episodes.
  * Supports chunked transcription for files over 25MB.
  * An upload the model rejects fails as AUDIO_REJECTED (there is no fallback
- * model), except a small final chunk, which is skipped (#54).
+ * model), except a small final chunk, which is skipped (#54). An optional
+ * chunk cache lets a retried job resume chunked transcription (#48).
  */
 
 import { AppError } from "../lib/errors";
@@ -20,8 +21,10 @@ import {
     requiresChunking,
 } from "../lib/audio";
 import { adtsToM4a } from "../lib/adts";
+import type { ChunkTranscriptCache } from "../types";
 import type { FetchRange } from "./audio-containers";
 import {
+    CHUNK_PLAN_VERSION,
     detectContainer,
     exactBuffer,
     planChunks,
@@ -739,6 +742,12 @@ export interface TranscribeOptions {
     skipValidation?: boolean;
     /** Override chunk sizing. Production uses the defaults; tests and scripts shrink them. */
     chunkLimits?: TranscribeChunkLimits;
+    /**
+     * Where chunked transcription keeps each finished chunk's text, so a
+     * retried attempt skips chunks an earlier one already paid for (#48).
+     * Best effort: read and write errors are logged and ignored.
+     */
+    chunkCache?: ChunkTranscriptCache;
 }
 
 export interface TranscribeChunkLimits extends ChunkSizeLimits {
@@ -843,6 +852,7 @@ export async function transcribeAudio(
         audioHost: new URL(audioUrl).hostname,
         maxChunkSeconds: chunkLimits.maxSeconds,
         onProgress: progressCallback,
+        chunkCache: opts.chunkCache,
     });
 
     // Step 3: Route based on file size
@@ -987,6 +997,48 @@ interface TranscribePlanContext {
     /** The per-chunk duration cap the plan was made with, for logs. */
     maxChunkSeconds: number;
     onProgress?: (currentChunk: number, totalChunks: number) => void;
+    chunkCache?: ChunkTranscriptCache;
+}
+
+/**
+ * The cache key for one planned chunk. It holds everything that decides the
+ * chunk's audio, so a planner change (a `CHUNK_PLAN_VERSION` bump), a
+ * re-encoded file or a different cut misses instead of stitching text from
+ * different audio.
+ */
+export function chunkCacheKey(plan: ChunkPlan, chunk: PlannedChunk): string {
+    return `${CHUNK_PLAN_VERSION}:${plan.container}:${plan.fileSize}:${chunk.index}:${chunk.cacheId}`;
+}
+
+/** A cached chunk transcript, or null on a miss or a cache error (logged, never thrown). */
+async function readCachedChunk(cache: ChunkTranscriptCache, key: string, chunkNumber: number): Promise<string | null> {
+    try {
+        return (await cache.get(key))?.text ?? null;
+    } catch (error) {
+        console.warn(
+            JSON.stringify({
+                event: "chunk_cache_read_failed",
+                chunkIndex: chunkNumber,
+                error: error instanceof Error ? error.message : String(error),
+            })
+        );
+        return null;
+    }
+}
+
+/** Cache a chunk transcript; a cache error is logged, never thrown. */
+async function writeCachedChunk(cache: ChunkTranscriptCache, key: string, text: string, chunkNumber: number): Promise<void> {
+    try {
+        await cache.put(key, { text });
+    } catch (error) {
+        console.warn(
+            JSON.stringify({
+                event: "chunk_cache_write_failed",
+                chunkIndex: chunkNumber,
+                error: error instanceof Error ? error.message : String(error),
+            })
+        );
+    }
 }
 
 /**
@@ -1076,12 +1128,14 @@ async function planRemote(
 
 /**
  * Transcribe a chunk plan: load, transcribe and stitch the chunks one at a
- * time so only one is in memory at once.
+ * time so only one is in memory at once. With a chunk cache, a cached chunk
+ * is neither fetched nor sent to OpenAI, and each new chunk is cached once
+ * transcribed.
  *
  * @returns Combined transcription result
  */
 async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Promise<TranscriptionResult> {
-    const { apiKey, provider, contentType, audioHost, onProgress } = ctx;
+    const { apiKey, provider, contentType, audioHost, onProgress, chunkCache } = ctx;
     const { totalBytes, chunks } = plan;
     const totalChunks = chunks.length;
 
@@ -1098,6 +1152,9 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
     let tailChunkSkipped: { chunkIndex: number; error: string; sharePercent: number } | null = null;
+    // The inter-chunk sleep spaces out CDN fetches, so it's owed only once a
+    // chunk has been fetched: a resumed job's first uncached chunk goes at once.
+    let fetchedAChunk = false;
 
     for (const chunk of chunks) {
         const chunkNumber = chunk.index + 1;
@@ -1114,13 +1171,27 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             })
         );
 
+        const cacheKey = chunkCacheKey(plan, chunk);
+        const cachedText = chunkCache ? await readCachedChunk(chunkCache, cacheKey, chunkNumber) : null;
+        if (cachedText !== null) {
+            transcriptions.push({
+                text: cachedText,
+                isFirst: chunk.isFirst,
+                isLast: chunk.isLast,
+                overlapBytes: chunk.overlapBytes,
+            });
+            console.log(JSON.stringify({ event: "chunk_cache_hit", chunkIndex: chunkNumber, totalChunks }));
+            continue;
+        }
+
         // Kept outside the try so a rejection can log the bytes it sent.
         let upload: ArrayBuffer | undefined;
         try {
-            // Add delay between chunks to avoid CDN rate limits (skip first chunk)
-            if (chunk.index > 0) {
+            // Add delay between chunk fetches to avoid CDN rate limits
+            if (fetchedAChunk) {
                 await sleep(TIMEOUTS.CHUNK_FETCH_DELAY_MS);
             }
+            fetchedAChunk = true;
 
             const bufferToTranscribe = await chunk.load();
             upload = bufferToTranscribe;
@@ -1135,12 +1206,16 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
                 },
             );
 
+            const text = chunkText.trim();
             transcriptions.push({
-                text: chunkText.trim(),
+                text,
                 isFirst: chunk.isFirst,
                 isLast: chunk.isLast,
                 overlapBytes: chunk.overlapBytes,
             });
+            if (chunkCache) {
+                await writeCachedChunk(chunkCache, cacheKey, text, chunkNumber);
+            }
 
             console.log(
                 JSON.stringify({

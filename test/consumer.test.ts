@@ -54,6 +54,7 @@ import { fetchTranscript } from "../src/services/rss";
 import { transcribeAudio } from "../src/services/transcription";
 import { generateSummary } from "../src/services/summarization";
 import { generateEpisodeTags } from "../src/services/tag-generation";
+import type { TranscribeOptions } from "../src/services/transcription";
 import queueConsumer from "../src/queue/consumer";
 
 // ============================================================================
@@ -233,6 +234,32 @@ describe("Queue Consumer - process_episode", () => {
         const summary = await getSummary(env.TLDL_DATA, "123_456", "key-takeaways");
         expect(summary).not.toBeNull();
         expect(summary?.text).toContain("Summary");
+    });
+
+    it("passes a chunk cache bound to the episode to transcribeAudio", async () => {
+        vi.mocked(getEpisodeMetadata).mockResolvedValue({
+            podcastName: "Test Podcast",
+            episodeTitle: "Test Episode",
+            episodeDuration: 1800,
+            episodeDate: "2024-01-15T00:00:00.000Z",
+            audioUrl: "https://example.com/audio.mp3",
+            feedUrl: "https://example.com/feed.xml",
+        });
+        vi.mocked(transcribeAudio).mockResolvedValue({
+            text: "Transcribed.",
+            source: "openai",
+            model: "gpt-transcribe",
+        });
+        vi.mocked(generateSummary).mockResolvedValue({ text: "# Summary", model: "claude-opus-5-5" });
+        await createJob(env.TLDL_DATA, createSampleJob());
+
+        await queueConsumer.queue(createMockBatch([createQueueMessage()]), getTestEnv());
+
+        const options = vi.mocked(transcribeAudio).mock.calls[0][1] as TranscribeOptions;
+        expect(options.chunkCache).toBeDefined();
+        await options.chunkCache!.put("2:mp3:1000:0:0-499", { text: "chunk one." });
+        expect(await env.TLDL_DATA.get("chunkcache:123_456:2:mp3:1000:0:0-499", "json")).toEqual({ text: "chunk one." });
+        await env.TLDL_DATA.delete("chunkcache:123_456:2:mp3:1000:0:0-499");
     });
 
     it("uses RSS transcript when available (skips Whisper)", async () => {
