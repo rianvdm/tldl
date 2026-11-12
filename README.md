@@ -13,7 +13,7 @@ A curated archive of AI-powered podcast summaries. New podcasts and episodes are
 | Background Jobs | Cloudflare Queues |
 | Storage | Cloudflare KV + Durable Objects |
 | Podcast Data | [Podcast Index API](https://podcastindex.org) |
-| Transcription | OpenAI gpt-transcribe (whisper-1 fallback) |
+| Transcription | OpenAI gpt-transcribe |
 | Summarization | Anthropic claude-opus-5-5 (tags + editorial meta: OpenAI gpt-5.6) |
 | Authentication | Cloudflare Access (admin-only) |
 | Spam Protection | Cloudflare Turnstile |
@@ -83,7 +83,8 @@ src/
 │   ├── constants.ts         # Tags, templates, error codes, timeouts
 │   ├── kv.ts                # KV CRUD + activity log helpers
 │   ├── url-parser.ts        # Apple Podcasts URL parsing
-│   ├── audio.ts             # MP3 frame-aware chunking for large files
+│   ├── audio.ts             # Chunk limits and byte-range chunking
+│   ├── mp3.ts               # MP3 frame and Xing/Info/VBRI header parsing
 │   ├── styles.ts            # All CSS (embedded, Workers can't read files)
 │   ├── job-status-do.ts     # Durable Object helpers + timeout detection
 │   ├── monitor.ts           # Podcast monitoring logic
@@ -94,7 +95,8 @@ src/
 │   ├── apple-podcasts.ts    # Episode metadata lookup
 │   ├── podcast-index.ts     # Podcast Index API client
 │   ├── rss.ts               # RSS parsing + episode matching
-│   ├── transcription.ts     # OpenAI gpt-transcribe (whisper-1 fallback)
+│   ├── transcription.ts     # OpenAI gpt-transcribe, chunked for large or long files
+│   ├── chunk-planning.ts    # Container detection + chunk plans (MP3, MP4, ADTS)
 │   ├── summarization.ts     # claude-opus-5-5 summary generation
 │   ├── tag-generation.ts    # gpt-5.6-luna tag generation
 │   └── postmark.ts          # Postmark email for request form
@@ -116,7 +118,7 @@ src/
 2. **Queue Consumer** (`src/queue/consumer.ts`): Background processing
    - Fetch episode metadata via Podcast Index + RSS
    - Check for existing transcript in RSS feed
-   - Transcribe with OpenAI gpt-transcribe (chunking for >25MB)
+   - Transcribe with OpenAI gpt-transcribe (chunked for files over 25MB or 15 minutes)
    - Generate summary with claude-opus-5-5
    - Generate 2-3 tags with gpt-5.6-luna (non-critical)
    - Store in KV with 365-day TTL
@@ -140,6 +142,7 @@ src/
 | `job:{jobId}` | 1 day | Job state and progress |
 | `episode:{episodeId}` | 365 days | Episode metadata |
 | `transcript:{episodeId}` | 365 days | Full transcript |
+| `chunkcache:{episodeId}:{chunkKey}` | 1 day | One chunk's transcript, so a retried job resumes |
 | `summary:{episodeId}:{templateId}` | 365 days | Generated summary |
 | `episodes:index` | 365 days | Lightweight list for home page |
 | `activity:log` | 30 days | Admin activity feed (last 50 events) |

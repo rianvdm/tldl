@@ -68,7 +68,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 2. **Queue Consumer** (`src/queue/consumer.ts`): Processes jobs in background:
    - Fetches episode metadata via Podcast Index API + RSS feed parsing
    - Checks for existing transcript (RSS `<podcast:transcript>` tag)
-   - Falls back to OpenAI gpt-transcribe for transcription (with chunking for >25MB files; whisper-1 fallback for rejected files)
+   - Falls back to OpenAI gpt-transcribe for transcription (chunked when the file is over 25MB or its audio runs past 15 minutes; an upload the model rejects fails the job as `AUDIO_REJECTED`)
    - Generates summary via Anthropic claude-opus-5-5 (Messages API, effort `medium`)
    - Generates 2-3 AI tags using gpt-5.6-luna (non-critical: continues if fails)
    - Stores results in KV with 365-day TTL
@@ -83,13 +83,18 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 - **Podcast Index API**: Primary metadata source (`src/services/podcast-index.ts`) — replaces iTunes API due to 403 errors in Workers
 - **Apple Podcasts page scraping**: `getEpisodeTitleFromApplePage()` in `src/services/apple-podcasts.ts` extracts episode titles from HTML `<title>` tags when URL slugs are unreliable
 - **Episode matching**: Multi-strategy in `src/services/rss.ts` (GUID, title similarity, date proximity)
-- **Audio chunking**: container-aware, for files over the 25MB upload limit (up to 300MB). `src/services/chunk-planning.ts` sniffs the container from the first 64KB and picks a strategy:
-  - **MP3 and other (OGG, WAV)**: plain byte ranges, with the file's first 512 bytes prepended to every chunk after the first (`calculateChunkRanges` in `src/lib/audio.ts`). Chunks are not cut on MP3 frame boundaries; MP3 frames resync on their own.
+- **Audio chunking**: container-aware, for files over the 25MB upload limit (up to 300MB) and for any MP3, MP4 or ADTS file whose audio runs past 15 minutes. `src/services/chunk-planning.ts` sniffs the container from the first 64KB and picks a strategy:
+  - **MP3**: byte ranges sized to the duration cap and cut on frame boundaries (`src/lib/mp3.ts`). The planner finds the first audio frame after the ID3 tag (fetching a second probe when the tag outgrows the first) and drops it when it is a Xing, Info or VBRI frame: that frame declares the whole file's duration, and gpt-transcribe rejects any upload that carries it. Every chunk is bare MPEG frames, with no ID3 tag and no prepended header. A chunk after the first starts at its first confirmed frame, skipping that frame too when it is a VBR header (a stitched file's second piece can start with one). Duration is the longer of what the VBR header declares and the byte estimate at the first frame's bitrate, so an Info frame that describes only a pre-roll can't shrink the estimate. When no frame can be parsed, the file keeps the `other` byte path and logs `mp3_frame_parse_failed`.
   - **MP4/M4A**: cut on sample boundaries using the sample table (`src/lib/mp4.ts`). Each chunk is rebuilt as a self-contained M4A, since MP4 audio can't be decoded without its `moov`. `moov` can sit at either end of the file; chapter and other non-audio tracks are ignored. Ranges are fetched per chunk (`src/services/audio-containers.ts`).
   - **ADTS (raw AAC)**: wrapped in an M4A at any size, because OpenAI rejects raw ADTS (`src/lib/adts.ts`).
-  - **Limits**: every chunk is capped at 15MB (`TARGET_CHUNK_SIZE_BYTES`). MP4 and ADTS chunks are also capped at 15 minutes (`MAX_CHUNK_SECONDS`), because the model's audio token budget scales with duration, so a low-bitrate file can fit in 15MB and still be rejected. The MP3/other byte path uses bytes only.
+  - **Other (OGG, WAV, anything unrecognised)**: plain byte ranges, with the file's first 512 bytes prepended to every chunk after the first (`calculateChunkRanges` in `src/lib/audio.ts`).
+  - **Limits**: every chunk is capped at 15MB (`TARGET_CHUNK_SIZE_BYTES`). On every container except `other`, every upload, chunk or whole file, is also capped at 15 minutes (`MAX_CHUNK_SECONDS`): gpt-transcribe rejects audio whose real or declared duration is too long (the limit sits between 45 and 70 minutes) with the same "corrupted or unsupported" 400 it uses for broken files. Chunks overlap by about 2 seconds (`CHUNK_OVERLAP_SECONDS`, at most `CHUNK_OVERLAP_BYTES`) for stitching.
+  - **Small files**: a file under 25MB is planned from the bytes already fetched, with the 25MB upload limit as its byte cap, so one that runs past 15 minutes is chunked by duration. An MP3 that fits one upload still goes up as bare frames, without its ID3 tag or VBR header frame. When the planner can't handle a small file (it throws `AUDIO_UNSUPPORTED`), the file uploads whole, as before, and logs `upload_plan_unavailable`.
+  - **WAV/OGG limitation**: the `other` path can't measure duration, so it stays byte-capped only. A WAV chunk carries a header declaring the whole file's length and probably gets rejected the same way an MP3 Info frame did. Podcasts almost never ship WAV over 25MB; fix it if one turns up.
   - **Unsupported formats**: fragmented MP4, non-AAC codecs, truncated MP4 (the sample table runs past the end of the file), and MP4 whose audio is interleaved with video (a chunk's range fetches would exceed `MAX_CHUNK_FETCH_FACTOR` × the chunk cap) throw `AUDIO_UNSUPPORTED` before any upload, which fails on the first queue attempt (no retries). To debug a format failure, run `npm run check:chunks -- <url-or-path> --transcribe` (see Helpful Commands).
-- **Partial transcripts**: if only the final chunk fails (both models reject it), the episode completes without it, but only when that chunk holds ≤10% of the file (`AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE`); a bigger tail fails the job (#54). An accepted partial writes an `episode_partial` activity-log entry and a yellow Discord alert with the missing share.
+  - **Plan logs**: `chunking_plan` (chunked) and `upload_plan` (one upload) carry `container`, `maxChunkSeconds`, `audioHost` (hostname only, never the URL: Substack CDN URLs are signed) and what the planner learnt about the audio. MP3 plans add `bitrateKbps`, `sampleRate`, `channels`, `vbrHeader` (`xing` / `info` / `vbri` / `none`), `vbrHeaderDropped`, `declaredSeconds`, `estimatedSeconds` and `usedSeconds` (the duration the cap was applied to); MP4 and ADTS plans carry `usedSeconds` only; the `other` path carries none. `mp3_frame_parse_failed` logs `scanFrom` and the first 32 bytes after the ID3 tag (hex). `mp3_resync_failed` means a chunk after the first had no confirmed frame in its first 16KB (`MP3_RESYNC_WINDOW_BYTES`) and went up untrimmed.
+- **Chunk transcript cache (#48)**: each chunk's transcript is written to `chunkcache:{episodeId}:{chunkKey}` (TTL 1 day) as soon as it finishes, so a queue retry after a killed or crashed attempt resumes at the first uncached chunk instead of restarting and re-paying OpenAI. `chunkKey` is `{CHUNK_PLAN_VERSION}:{container}:{fileSize}:{index}:{cacheId}` (`chunkCacheKey` in `src/services/transcription.ts`), where `cacheId` is the chunk's byte range (`b{start}-{end}`) or, on MP4, its sample range (`s{first}-{end}`). Bump `CHUNK_PLAN_VERSION` in `chunk-planning.ts` whenever the planner's output changes, so a deploy between attempts misses cleanly instead of stitching text from different cuts. The consumer builds the KV cache (`makeChunkTranscriptCache` in `src/lib/kv.ts`); the rescue script runs without one. Both directions are best effort: `chunk_cache_hit` on a hit, `chunk_cache_read_failed` / `chunk_cache_write_failed` on a KV error, which never fails the chunk.
+- **Partial transcripts**: if only the final chunk fails (gpt-transcribe rejects it), the episode completes without it, but only when that chunk holds ≤10% of the file (`AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE`); a bigger tail fails the job (#54). An accepted partial writes an `episode_partial` activity-log entry and a yellow Discord alert with the missing share.
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
   - Home page uses `listActiveJobsWithDO()` to fetch active jobs from DO for real-time updates
   - `listActiveJobsWithDO()` also detects timed-out jobs (>35 min since `createdAt`, `TIMEOUTS.JOB_MS`) and marks them as failed + notifies Discord
@@ -139,6 +144,7 @@ Keys in `src/lib/kv.ts`:
 - `job:{jobId}` — Job state (TTL: 1 day)
 - `episode:{episodeId}` — Episode metadata with optional tags (TTL: 365 days)
 - `transcript:{episodeId}` — Full transcript (TTL: 365 days)
+- `chunkcache:{episodeId}:{chunkKey}` — One chunk's transcript, `{ text }`, so a retried job resumes chunked transcription (TTL: 1 day; see [Chunk transcript cache](#key-components))
 - `summary:{episodeId}:{templateId}` — Generated summary (TTL: 365 days)
 - `episodes:index` — Lightweight episode list with tags for home page (TTL: 365 days)
 - `activity:log` — Admin dashboard activity log, last 50 events (TTL: 30 days)
@@ -205,7 +211,7 @@ All debug routes return 403 in production (`ENVIRONMENT !== "development"`).
 Automatically monitors podcasts for new episodes and queues them for processing:
 - **Core logic**: `src/lib/monitor.ts` — Functions for adding podcasts, checking for new episodes
 - **Cron trigger**: Runs every 2 hours (`0 */2 * * *`, configured in `wrangler.toml`)
-- **Stale job sweep**: Runs at the start of each cron cycle, marks jobs >20 min as failed
+- **Stale job sweep**: Runs at the start of each cron cycle, marks jobs >35 min (from `createdAt`) as failed
 - **Admin UI**: `/admin/podcasts` — Add/remove podcasts, configure settings, manual check
 - **Episode deduplication**: Tracks processed episode GUIDs per podcast to avoid re-processing
 - **Backlog guard**: Unseen GUIDs published >7 days before the previous check are marked processed, not queued (`dropBacklog`). Stops a publisher's GUID regeneration from replaying the back catalogue one episode per cron. Logs `monitor_backlog_skipped`.
@@ -301,7 +307,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 
 ## Testing
 
-Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 702 tests (as of 2026-11-09) covering:
+Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 768 tests (as of 2026-11-12) covering:
 - Unit tests for all services and admin routes (`test/admin.test.ts`, `test/discord.test.ts`, etc.)
 - Integration tests in `test/integration/full-flow.test.ts` (CRUD lifecycle, access control, request form)
 - Note: Tests involving Durable Objects may show "Isolated storage" warnings (infrastructure issue in vitest-pool-workers, not failures)
@@ -317,7 +323,8 @@ src/
 │   ├── constants.ts      # Templates, error codes, TTLs, tags
 │   ├── kv.ts             # KV storage helpers + activity log
 │   ├── url-parser.ts     # Apple Podcasts URL parsing
-│   ├── audio.ts          # Chunk limits, byte-range chunking, ID3 helper (MP3 frame-boundary helpers are currently unused)
+│   ├── audio.ts          # Chunk limits, byte-range chunking, ID3 helper
+│   ├── mp3.ts            # MP3 frame parser, Xing/Info/VBRI headers, duration estimate
 │   ├── mp4.ts            # MP4 sample-table reader, chunk planner, M4A writer
 │   ├── adts.ts           # ADTS (raw AAC) parser, wraps frames in M4A
 │   ├── errors.ts         # Error handling
@@ -334,8 +341,8 @@ src/
 │   ├── apple-podcasts.ts # iTunes API + page scraping
 │   ├── podcast-index.ts  # Podcast Index API
 │   ├── rss.ts            # RSS feed parsing + episode matching
-│   ├── transcription.ts  # OpenAI gpt-transcribe (whisper-1 fallback)
-│   ├── chunk-planning.ts # Container sniffing + chunk plan (MP3/other, MP4, ADTS)
+│   ├── transcription.ts  # OpenAI gpt-transcribe, chunk loop, chunk cache
+│   ├── chunk-planning.ts # Container sniffing + chunk plan (MP3, MP4, ADTS, other)
 │   ├── audio-containers.ts # Range-fetch glue: find moov, build one M4A chunk
 │   ├── summarization.ts  # Anthropic claude-opus-5-5
 │   ├── tag-generation.ts # OpenAI gpt-5.6-luna for episode tags
@@ -354,10 +361,10 @@ src/
 
 - **iTunes 403 errors**: Use Podcast Index API instead (already configured). For Apple episode URLs, use the show-page scraper (`src/services/apple-show-page.ts`), not iTunes Lookup.
 - **Episode title extraction**: URL slugs sometimes contain podcast name instead of episode title; `getEpisodeTitleFromApplePage()` scrapes the actual page to get reliable titles
-- **Large audio files**: Automatically chunked (>25MB): MP3 and other formats by byte range (first 512 bytes prepended to every chunk after the first), MP4/M4A on sample boundaries, ADTS wrapped in M4A. Chunks are capped at 15MB; MP4 and ADTS chunks are also capped at 15 minutes. Fragmented, truncated or video-interleaved MP4 and non-AAC codecs fail immediately with `AUDIO_UNSUPPORTED`; reproduce with `npm run check:chunks -- <url> --transcribe`.
+- **Large or long audio files**: Chunked when over 25MB, or when an MP3, MP4 or ADTS file runs past 15 minutes: MP3 on frame boundaries as bare MPEG frames (no ID3 tag, no Xing/Info/VBRI frame), MP4/M4A on sample boundaries, ADTS wrapped in M4A, anything else by byte range (first 512 bytes prepended to every chunk after the first). Chunks are capped at 15MB, and on every container except `other` at 15 minutes. Fragmented, truncated or video-interleaved MP4 and non-AAC codecs fail immediately with `AUDIO_UNSUPPORTED`; reproduce with `npm run check:chunks -- '<url>' --transcribe`.
 - **Job status inconsistency**: Durable Object provides strong consistency, KV is fallback for reads
-- **Stuck jobs**: Jobs running >20 minutes are auto-detected and marked as failed by `listActiveJobsWithDO()` (runs on home page render and in cron handler). Discord notification is sent.
-- **Job fails with `exceededWallTime` — check for a 429 first.** `exceededWallTime` is a *symptom* shared by two unrelated causes, and the rate-limit one is more common. Read the Workers logs before assuming the wall clock is the problem; filter for `validation_rate_limited_throw` and `audio_url_redirect_resolved`. See the two entries below.
+- **Stuck jobs**: Jobs older than 35 minutes (`TIMEOUTS.JOB_MS`, from `createdAt`) are auto-detected and marked as failed by `listActiveJobsWithDO()` (runs on home page render and in cron handler). Discord notification is sent.
+- **Job fails with `exceededWallTime` — check for a 429 first.** `exceededWallTime` means the invocation hit the queue consumer's hard 15-minute wall clock (Cloudflare platform limit). It is a *symptom*, and the audio CDN rate-limit in the entry below is the cause seen most. Read the Workers logs before assuming transcription itself ran long; filter for `validation_rate_limited_throw` and `audio_url_redirect_resolved`. Killed invocations do NOT persist their console logs, so the killed attempt's own timeline is gone. A chunked episode killed mid-transcription no longer restarts from chunk 1: its finished chunks are in the chunk cache, so the next attempt logs `chunk_cache_hit` for each of them and carries on from the first uncached chunk, and the 35-minute stale-job sweep leaves room for that resumed attempt.
 - **Audio CDN rate limiting (`validation_rate_limited_throw`)**: Log line reads `Audio host rate-limited after redirect resolution; bubbling to queue retry` (older builds: `HEAD request rate-limited` / `Both origin and resolved URL rate-limited`). The podcast host is 429ing Cloudflare's egress on the audio HEAD, so every one of the 5 queue retries fails and the episode never transcribes. Broke Lenny's on 2026-08-16 and The Pragmatic Engineer on 2026-08-12 — both Substack, and 9 of 12 monitored podcasts are Substack-hosted. Root cause was that `resolveAudioUrl()` followed only **one** redirect hop: the real chain is `pscrb.fm` → `api.substack.com` → `substackcdn.com`, so one hop landed back on the rate-limited origin. Partially fixed 2026-08-17 — `resolveAudioUrl()` now follows the chain to the end (`AUDIO_LIMITS.MAX_REDIRECT_HOPS`), and `transcribeAudio()` resolves **before** validating so the throttled hosts see one cheap HEAD while validation and range reads hit the CDN.
 
   **Recurred 2026-08-23 on the same two podcasts**, because following the chain isn't enough when a hop *itself* 429s. `resolveAudioUrl()` treats any non-3xx status as "chain finished" (`if (response.status < 300 || response.status >= 400) return currentUrl`), and 429 is ≥400 — so a throttled hop is silently accepted as the final URL. The Worker resolved `pscrb.fm` → `prefix-v4.pscrb.fm` → `api.substack.com`, got 429 on the next HEAD, and returned `api.substack.com` — the rate-limited origin, one hop short of `substackcdn.com`. `validateAudioUrl()` then HEADs that same throttled host, correctly throws `RATE_LIMITED`, and all 5 queue retries repeat it. `MAX_REDIRECT_HOPS` (5) is **not** the constraint; don't raise it. Tracked in #52.
@@ -376,7 +383,31 @@ src/
   Mitigated 2026-08-24: `resolveAudioUrl()` retries a 429'd hop (`AUDIO_LIMITS.HOP_RATE_LIMIT_*`, 7 attempts over ~9s) rather than accepting the throttled origin as final. Measured live, that lifts per-attempt resolution from ~20% to ~33%; across the queue's 5 rate-limit retries the modelled per-episode failure rate drops from ~37% to ~13%. **That is a mitigation, not a fix** — roughly one Substack episode a week should still fail, and #52 stays open. The candidate real fix is to clear the two dedup signals on a final rate-limit failure so the next 2h cron tick retries the episode with fresh draws (`episodeGuid` is already on the queue message, so no feed re-hashing is needed). Note the tension before retrying harder still: `consumer.ts` warns that short retries extend the ban, and while the evidence says this is a probabilistic limiter rather than a hardening one, that was not measured over hours.
 
   Workaround when it recurs: use the **Audio URL (override)** field under Advanced options on `/admin/submit` with the resolved CDN URL — but note substackcdn.com URLs are signed with a short `Expires` (~1 day), so resolve and submit promptly. Otherwise do the manual rescue below, which sidesteps the audio path entirely.
-- **Job "transcribing" forever / `updatedAt` jumping by exactly +15:00**: Queue consumer invocations have a hard 15-minute wall clock (Cloudflare platform limit). A long episode whose every chunk falls back to whisper-1 (~90–150s/chunk — happens when the primary model 400s the file as "corrupted or unsupported"; whisper-1 usually decodes it fine) gets killed (`exceededWallTime`) and the retry restarts from chunk 1, so it never converges (#48 tracks the fix: per-chunk KV cache). Killed invocations do NOT persist their console logs. Manual rescue: run `transcribeAudio` locally via `npx tsx` (no wall clock), write the `transcript:{episodeId}` record to KV, then requeue via the runbook below — the consumer finds the transcript and skips straight to summarizing. Because Step 3 of the consumer is guarded by `if (!transcript)`, a pre-seeded transcript also skips the audio fetch entirely, which is what makes this the right rescue for rate-limit failures too.
+- **`AUDIO_REJECTED` / `transcription_rejected`**: gpt-transcribe refused a chunk or a whole-file upload with a 400 the same bytes would get again (`corrupted or unsupported`, `input_too_large` or `too large for this model`). There is no fallback model. Don't read "corrupted" literally: the API reports audio whose real or **declared** duration is too long with the same message. Every case so far was an upload declaring or holding too much audio: an MP3 Info frame declaring the whole 96-minute file on every chunk (Supra Insider #135 on 2026-11-09; the August Lenny's rejections fit the same pattern), or an MP4 `moov` declaring 68 minutes over 15MB of data. The planner now prevents both (see Audio chunking above, and `docs/audio-format-debugging.md`), so a new rejection means a file shape it doesn't handle yet. The job fails on its first queue attempt, with no queue or `withRetry` retries, unless the rejected chunk is a final chunk holding ≤10% of the audio, which the #54 tail-skip rule drops instead. The Discord alert and the activity-log entry name the chunk (`gpt-transcribe rejected chunk 3/7 of the audio`, or `gpt-transcribe rejected the audio` for a one-upload file) and end with a copy-paste `Debug with: npm run check:chunks -- '<url>' --transcribe` command. The URL is shell-quoted because signed CDN URLs carry `?` and `&`; it appears only in that message, never in logs.
+
+  Pull the rejection from Workers Logs (kept about 7 days). Filter on the structured `event` field, and keep each query to **6 hours or less**: longer windows of the events view are ABR-sampled, and a rare event like this one can be sampled out (check that `statistics.abr_level` is `1`):
+
+  ```javascript
+  cloudflare.request({
+    method: "POST",
+    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
+    body: {
+      queryId: "tldl-rejections",
+      timeframe: { from: <epochMs>, to: <epochMs> },   // 6 hours at most
+      limit: 100,
+      parameters: {
+        datasets: ["cloudflare-workers"],
+        filters: [{ key: "event", operation: "eq", value: "transcription_rejected", type: "string" }],
+        calculations: [], groupBys: [], havings: [],
+      },
+      view: "events",
+    },
+  })
+  ```
+
+  The same call works as `cf o11y telemetry query` with `--parameters-filters` (verified 2026-11-12). Read the row's `source.*` fields: `container`, `chunkIndex` / `totalChunks` (or `wholeFile: true`), `uploadBytes`, `plannedSeconds`, the chunk's `startByte` / `endByte` (`firstSample` / `endSample` and `startSeconds` / `endSeconds` on MP4), `firstBytesHex` (the upload's first 32 bytes), `vbrHeaderDropped`, `openAiError` (the full OpenAI error body) and `audioHost`. The row carries no episode ID; it comes from the same invocation as `job_started`, so query `job_started` over the same window and match on `$metadata.requestId` to get `episodeId`. The `chunking_plan` or `upload_plan` line from that invocation has the planner's view of the file (bitrate, VBR header, declared and estimated seconds).
+
+  **Reproduce before changing code**: run the command from the alert, `npm run check:chunks -- '<url>' --transcribe` (see Helpful Commands). It plans with the production planner, writes each chunk exactly as the Worker uploads it, checks it with ffprobe and ffmpeg, and sends it to gpt-transcribe. A chunk that ffprobe reports as longer than its planned seconds points at a header declaring more audio than the chunk holds; a chunk that fails to decode points at a bad cut. Fix the planner for the shape you find (with a fixture via `scripts/make-audio-fixtures.sh`), bump `CHUNK_PLAN_VERSION`, and rerun the check until every chunk is accepted. Requeuing without a fix only fails again. To get the episode out before the fix deploys, use the rescue script below, which runs the working tree's `transcribeAudio()`.
 - **`OpenAI API returned empty or malformed response` / tags silently empty**: The Responses API does **not** put the assistant message at `output[0]` — reasoning-capable models (the gpt-5.6 tiers) emit a `reasoning` item first, so `output` is `["reasoning", "message"]`. Always extract via `extractOutputText()` in `src/lib/openai-response.ts` (searches `output` for the `message` item, then its content for `output_text`); never index `output[0]`. The behavior is **adaptive** — a short prompt returns `["message"]` but a real transcript returns `["reasoning", "message"]` — so a quick probe won't reproduce it. Broke every cron episode on 2026-08-03 after the gpt-5.4 → gpt-5.6 swap (fixed in `49bb738`); the same bug made tag generation return `[]` on every episode via its non-critical path. **Before adopting any new model, dump `data.output.map(o => o.type)` against a real production-sized transcript, and make sure the A/B harness and any test fixtures use the same extractor production does** (#50).
 - **Invalid tags showing**: After removing tags from EPISODE_TAGS, run "Cleanup Invalid Tags" from admin tools to remove them from existing episodes
 - **Admin endpoints 401/403**: Admin endpoints must be under `/admin` or `/admin/*` to work with Cloudflare Access. Both paths must be configured in the Access application.
@@ -395,7 +426,7 @@ The episode KV record (`episode:{episodeId}`) is **not** an issue when transcrip
 
 ### First: find out why it failed
 
-A failure notification gives you an episode ID and nothing else. Before requeuing, read the logs — a rate-limited episode and a wall-time-killed one look identical from KV, and requeuing a rate-limited one just burns another 5 retries. Workers Logs are retained a few days, so do this promptly. Query the observability API (`observability.enabled` is on at `head_sampling_rate: 1`):
+A failure notification gives you the episode and an error message, and little else. An `AUDIO_REJECTED` failure needs a fix before a requeue: follow the `transcription_rejected` entry in [Common Issues](#common-issues), whose check command the alert already carries. For anything else, read the logs before requeuing — a rate-limited episode and a wall-time-killed one look identical from KV, and requeuing a rate-limited one just burns another 5 retries. Workers Logs are retained a few days, so do this promptly. Query the observability API (`observability.enabled` is on at `head_sampling_rate: 1`):
 
 ```javascript
 // via the cloudflare MCP execute tool, or POST with a scoped API token
@@ -433,7 +464,7 @@ cloudflare.request({
 
 `$workers.outcome` is also absent (`undefined`) on most individual log rows — it is attached to the invocation summary row, not to every line. Don't treat a missing `outcome` as a missing failure.
 
-Read the events together as a timeline — `exceededWallTime` shows up in **both** failure modes, so it does not identify the cause on its own. `validation_rate_limited_throw` means the CDN 429'd you; its absence with repeated +15:00 gaps means the wall clock. But see the next caveat: **a chain that dies on a 429 inside `resolveAudioUrl()` logs nothing at all**, so "no rate-limit event" is not proof it wasn't a 429 — check the last `audio_url_redirect_resolved` line and ask whether its `toHost` is actually a CDN. Note the account ID is the Elezea one, `db8ef1f4b492e4727e7fab0e12907871`.
+Read the events together as a timeline — `exceededWallTime` does not identify the cause on its own. `validation_rate_limited_throw` means the CDN 429'd you; `transcription_rejected` means the model refused the audio; a run of `chunk_cache_hit` lines at the start of an attempt means an earlier attempt was killed mid-transcription and this one resumed. But see the next caveat: **a chain that dies on a 429 inside `resolveAudioUrl()` logs nothing at all**, so "no rate-limit event" is not proof it wasn't a 429 — check the last `audio_url_redirect_resolved` line and ask whether its `toHost` is actually a CDN. Note the account ID is the Elezea one, `db8ef1f4b492e4727e7fab0e12907871`.
 
 ### Steps
 
@@ -491,9 +522,9 @@ After both writes, the next cron tick will:
 2. See the GUID is no longer in the processed set → queue the episode.
 3. Worker processes it normally.
 
-### Variant: pre-seed the transcript (rescue for rate-limit or wall-time failures)
+### Variant: pre-seed the transcript (rescue for rate-limit or rejection failures)
 
-When the consumer can't get through the audio at all — the CDN is 429ing it, or every chunk falls back to whisper-1 and the 15-minute wall clock kills the invocation — transcribe locally and hand the result to the consumer. Step 3 of `processEpisode` is guarded by `if (!transcript)`, so a transcript already in KV makes the requeued job skip **the entire audio path** and go straight to summarizing. Your laptop has no wall clock and isn't the IP being throttled.
+When the consumer can't get through the audio — the CDN keeps 429ing Cloudflare's egress, or gpt-transcribe rejects a chunk and you've diagnosed why but the fix hasn't deployed — transcribe locally and hand the result to the consumer. Step 3 of `processEpisode` is guarded by `if (!transcript)`, so a transcript already in KV makes the requeued job skip **the entire audio path** and go straight to summarizing. Your laptop has no wall clock and isn't the IP being throttled.
 
 **Use `scripts/rescue-transcript.ts` — it does this entire runbook in one command.** It reverse-maps the episode ID to its feed GUID, transcribes locally with the repo's own `transcribeAudio()`, writes `transcript:{id}` to prod KV with the right TTL, and clears **both** dedup signals (processed-GUID list and etag). Run it from the repo root so `.dev.vars` loads:
 
@@ -513,7 +544,7 @@ Done for two episodes on 2026-08-17 (~$1 of OpenAI transcription for 158 minutes
 Two things worth knowing before you run it:
 
 * **Check `result.partial` and eyeball the tail of the text.** A partial transcript still writes a plausible-looking KV record and the summary will be generated from truncated content. A complete podcast transcript almost always ends on a sign-off ("see you in the next episode"); a mid-sentence ending means a chunk was dropped.
-* **The wall-clock difference is mostly whisper-1 fallback, not network.** On 2026-08-23 all 6 of Lenny's chunks were rejected by `gpt-transcribe` as "corrupted or unsupported" and fell back to whisper-1 (~50s/chunk vs ~15s), while The Pragmatic Engineer needed only one fallback. That episode was failing **two** ways at once — the 429 above *and* the #48 wall-clock pattern — so a fix for either alone would not have rescued it.
+* **A rejection reproduces on your laptop.** The script calls the same `transcribeAudio()` the Worker does, from your working tree, so it rescues a rejected episode only once the working tree holds the fix (or `--audio-url` points at a copy of the audio that transcribes). Diagnose with `npm run check:chunks -- '<url>' --transcribe` first; see the `transcription_rejected` entry in [Common Issues](#common-issues).
 
 ### Variant: re-process a SUCCESSFUL episode (not failed)
 

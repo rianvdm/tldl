@@ -9,7 +9,7 @@
 // ============================================================================
 
 /**
- * Target chunk size for transcription (under 25MB Whisper limit)
+ * Target chunk size for transcription (under the API's 25MB upload limit)
  */
 export const TARGET_CHUNK_SIZE_BYTES = 15 * 1024 * 1024; // 15MB
 
@@ -210,9 +210,9 @@ export function estimateTranscriptionTime(
     _totalBytes: number,
     chunkCount: number
 ): number {
-    // Rough estimates based on observed Whisper API performance:
-    // - ~30-60 seconds per 20MB chunk
-    // - Plus overhead for HTTP requests, processing
+    // Rough, conservative estimate, kept from an earlier model that took
+    // ~30-60 seconds per 20MB chunk (gpt-transcribe takes ~20s per 15MB),
+    // plus overhead for HTTP requests and processing.
     const baseSecondsPerChunk = 45;
     const overheadSeconds = 15;
 

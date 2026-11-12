@@ -1,15 +1,17 @@
 /**
  * Rescue an episode the queue consumer can't transcribe on its own.
  *
- * Two production failure modes leave an episode permanently stuck, and both have
- * the same fix — transcribe it somewhere without Cloudflare's constraints, then
- * hand the result to the consumer:
+ * Two production failure modes leave an episode stuck, and both have the same
+ * fix — transcribe it somewhere without Cloudflare's constraints, then hand the
+ * result to the consumer:
  *
  *   1. The audio host 429s Cloudflare's egress, so every queue retry fails on the
  *      HEAD and the episode never reaches the CDN (see #52).
- *   2. Every chunk falls back to whisper-1 (~50-150s each) and the invocation is
- *      killed by the 15-minute queue wall clock, restarting from chunk 1 forever
- *      (see #48).
+ *   2. gpt-transcribe rejects a chunk (AUDIO_REJECTED) and you have diagnosed why
+ *      with `npm run check:chunks -- '<url>' --transcribe`, but the fix hasn't
+ *      deployed. This script runs the working tree's `transcribeAudio()`, so it
+ *      rescues the episode only once the working tree holds the fix (or
+ *      `--audio-url` points at a copy of the audio that transcribes).
  *
  * Step 3 of `processEpisode` is guarded by `if (!transcript)`, so a transcript
  * already in KV makes the requeued job skip the entire audio path and go straight
