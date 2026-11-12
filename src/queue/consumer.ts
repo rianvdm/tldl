@@ -278,9 +278,10 @@ const queueHandler = {
 
                     // Surface retry state to the user. Keep `status` at its current
                     // step (so the UI's progress phrasing still works) but populate
-                    // the error field with a human-readable retry note. This also
-                    // bumps `updatedAt`, preventing the 119-min stale-job sweep from
-                    // firing while legitimate queue retries are still pending.
+                    // the error field with a human-readable retry note. This bumps
+                    // `updatedAt`, but it doesn't hold off the stale-job sweep: that
+                    // sweep (listActiveJobsWithDO) measures age from `createdAt` and
+                    // fails the job once it passes TIMEOUTS.JOB_MS.
                     const retryNote = isRateLimited
                         ? `Audio CDN rate-limited. Retrying in ${Math.round(delaySeconds / 60)} min (attempt ${message.attempts} of ${maxAttempts}).`
                         : `Transient error; retrying in ${delaySeconds}s (attempt ${message.attempts} of ${maxAttempts}).`;

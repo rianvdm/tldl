@@ -451,7 +451,7 @@ async function scheduledHandler(
         scheduledTime: new Date(controller.scheduledTime).toISOString(),
     }));
 
-    // Sweep for timed-out jobs (>20 min). listActiveJobsWithDO automatically
+    // Sweep for timed-out jobs (older than TIMEOUTS.JOB_MS, 35 min). listActiveJobsWithDO automatically
     // marks stale jobs as failed, logs to activity, and notifies Discord.
     try {
         await listActiveJobsWithDO(env, env.TLDL_DATA);

@@ -315,11 +315,13 @@ export const TIMEOUTS = {
     // Delay between audio chunk fetches (avoid CDN rate limits)
     CHUNK_FETCH_DELAY_MS: 500,          // 500ms between chunks
 
-    // OpenAI Whisper API call (per chunk)
+    // OpenAI transcription call (per chunk)
     WHISPER_API_MS: 10 * 60 * 1000,     // 10 minutes
 
-    // Overall job timeout (marks job as failed if exceeded)
-    JOB_MS: 20 * 60 * 1000,             // 20 minutes
+    // Overall job timeout, measured from createdAt (the stale-job sweep in
+    // listActiveJobsWithDO marks the job failed once it's exceeded). One killed
+    // 15-minute attempt, a resumed attempt and the summary fit inside 35 minutes.
+    JOB_MS: 35 * 60 * 1000,             // 35 minutes
 } as const;
 
 // ============================================================================

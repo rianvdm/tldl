@@ -92,7 +92,7 @@ Built with Hono framework, Cloudflare Queues for background processing, and Dura
 - **Partial transcripts**: if only the final chunk fails (both models reject it), the episode completes without it, but only when that chunk holds ≤10% of the file (`AUDIO_LIMITS.MAX_SKIPPABLE_TAIL_SHARE`); a bigger tail fails the job (#54). An accepted partial writes an `episode_partial` activity-log entry and a yellow Discord alert with the missing share.
 - **Job status**: Durable Object (`src/durable-objects/job-status.ts`) for strong consistency; KV as fallback
   - Home page uses `listActiveJobsWithDO()` to fetch active jobs from DO for real-time updates
-  - `listActiveJobsWithDO()` also detects timed-out jobs (>20 min) and marks them as failed + notifies Discord
+  - `listActiveJobsWithDO()` also detects timed-out jobs (>35 min since `createdAt`, `TIMEOUTS.JOB_MS`) and marks them as failed + notifies Discord
   - Home page auto-refreshes every 10s when jobs are active
 - **Activity log**: `activity:log` KV key stores last 50 events (completions, failures, monitoring checks). Written by queue consumer and scheduled handler. Displayed on admin dashboard.
 - **Discord notifications**: `src/lib/discord.ts` sends webhook notifications on job failures and monitoring errors. No-op when `DISCORD_WEBHOOK_URL` is not set.
