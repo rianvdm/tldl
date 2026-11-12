@@ -239,7 +239,8 @@ const queueHandler = {
                             JSON.stringify({
                                 event: "job_marked_failed",
                                 jobId: message.body.jobId,
-                                errorMessage,
+                                // An AppError's userMessage can carry a full audio URL; its message never does
+                                errorMessage: error instanceof AppError ? error.message : errorMessage,
                             })
                         );
 
@@ -998,8 +999,10 @@ async function updateJobEstimate(
 }
 
 /**
- * Append a copy-paste `check:chunks` command to a model rejection, so the
- * failure alert says how to reproduce it. Other errors pass through unchanged.
+ * Append a copy-paste `check:chunks` command to a model rejection's user-facing
+ * message, so the failure alert says how to reproduce it. The URL goes only into
+ * `userMessage`: `message` (and so the stack and logs) stays URL-free, because
+ * signed CDN URLs carry credentials. Other errors pass through unchanged.
  */
 function withCheckChunksCommand(error: unknown, audioUrl: string): unknown {
     if (!(error instanceof AppError) || error.code !== ERROR_CODES.AUDIO_REJECTED) {
@@ -1007,9 +1010,18 @@ function withCheckChunksCommand(error: unknown, audioUrl: string): unknown {
     }
     return new AppError(
         ERROR_CODES.AUDIO_REJECTED,
-        `${error.userMessage}. Debug with: npm run check:chunks -- ${audioUrl} --transcribe`,
-        error
+        error.message,
+        error,
+        `${error.userMessage}. Debug with: npm run check:chunks -- ${shellQuote(audioUrl)} --transcribe`
     );
+}
+
+/**
+ * Quote a string as one POSIX shell argument, so `?`, `&` and `'` in a signed
+ * URL survive being pasted into zsh or bash.
+ */
+function shellQuote(value: string): string {
+    return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**

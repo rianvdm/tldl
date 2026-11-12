@@ -75,15 +75,21 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
 
 export class AppError extends Error {
     public readonly code: ErrorCode;
+    /** Text shown to people (job status, activity log, Discord). Defaults to `message`. */
     public readonly userMessage: string;
     public readonly cause?: Error;
 
-    constructor(code: ErrorCode, userMessage?: string, cause?: Error) {
-        const message = userMessage || ERROR_MESSAGES[code] || ERROR_MESSAGES[ERROR_CODES.UNKNOWN_ERROR];
-        super(message);
+    /**
+     * @param message - Error message, also used for logs and the stack. Defaults to the code's ERROR_MESSAGES entry.
+     * @param userMessage - User-facing text when it must differ from `message`, e.g. when it carries
+     *   a full audio URL that logs must not see.
+     */
+    constructor(code: ErrorCode, message?: string, cause?: Error, userMessage?: string) {
+        const resolvedMessage = message || ERROR_MESSAGES[code] || ERROR_MESSAGES[ERROR_CODES.UNKNOWN_ERROR];
+        super(resolvedMessage);
         this.name = "AppError";
         this.code = code;
-        this.userMessage = message;
+        this.userMessage = userMessage || resolvedMessage;
         this.cause = cause;
 
         // Maintains proper stack trace for where error was thrown (V8 only)

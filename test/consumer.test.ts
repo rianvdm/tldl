@@ -498,12 +498,15 @@ describe("Queue Consumer - process_episode", () => {
     });
 
     it("fails rejected audio on the first attempt with a copy-paste debug command", async () => {
+        // A signed CDN URL: the query string is a credential and must stay out of logs,
+        // and `?`/`&` must survive the shell when the command is pasted.
+        const signedUrl = "https://cdn.example.com/it's/audio.mp3?Expires=1763000000&Signature=abc123";
         vi.mocked(getEpisodeMetadata).mockResolvedValue({
             podcastName: "Test Podcast",
             episodeTitle: "Test Episode",
             episodeDuration: 1800,
             episodeDate: "2024-01-15T00:00:00.000Z",
-            audioUrl: "https://example.com/audio.mp3",
+            audioUrl: signedUrl,
             feedUrl: "https://example.com/feed.xml",
         });
 
@@ -520,13 +523,24 @@ describe("Queue Consumer - process_episode", () => {
 
         const batch = createMockBatch([createQueueMessage()], { attempts: 1 });
 
-        await queueConsumer.queue(batch, getTestEnv());
+        const logSpy = vi.spyOn(console, "log");
+        const errorSpy = vi.spyOn(console, "error");
+        let lines: string[];
+        try {
+            await queueConsumer.queue(batch, getTestEnv());
+        } finally {
+            // Read the calls before mockRestore, which clears them
+            lines = [...logSpy.mock.calls, ...errorSpy.mock.calls].map((args) => args.map(String).join(" "));
+            logSpy.mockRestore();
+            errorSpy.mockRestore();
+        }
 
         expect(batch.messages[0].retry).not.toHaveBeenCalled();
         expect(batch.messages[0].ack).toHaveBeenCalled();
 
         const expected =
-            "gpt-transcribe rejected chunk 3/7 of the audio. Debug with: npm run check:chunks -- https://example.com/audio.mp3 --transcribe";
+            "gpt-transcribe rejected chunk 3/7 of the audio. Debug with: npm run check:chunks -- " +
+            "'https://cdn.example.com/it'\\''s/audio.mp3?Expires=1763000000&Signature=abc123' --transcribe";
         const updatedJob = await getJob(env.TLDL_DATA, job.id);
         expect(updatedJob?.status).toBe("failed");
         expect(updatedJob?.error).toBe(expected);
@@ -534,6 +548,19 @@ describe("Queue Consumer - process_episode", () => {
         const log = await getActivityLog(env.TLDL_DATA);
         const failure = log.find((e) => e.type === "episode_failed");
         expect(failure?.details).toBe(expected);
+
+        // Both failure log lines are written, and neither carries the URL or its signature.
+        const failureLines = lines.filter(
+            (line) => line.includes('"event":"job_error"') || line.includes('"event":"job_marked_failed"')
+        );
+        expect(failureLines.some((line) => line.includes('"event":"job_error"'))).toBe(true);
+        expect(failureLines.some((line) => line.includes('"event":"job_marked_failed"'))).toBe(true);
+        for (const line of failureLines) {
+            expect(line).toContain("gpt-transcribe rejected chunk 3/7 of the audio");
+            expect(line).not.toContain("Expires=");
+            expect(line).not.toContain("Signature=");
+            expect(line).not.toContain("cdn.example.com/it");
+        }
     });
 
     it("fails job on summarization error", async () => {
