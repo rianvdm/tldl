@@ -1810,6 +1810,108 @@ describe("ADTS transcription", () => {
     });
 });
 
+describe("audio URLs stay out of logs (#48)", () => {
+    // A Substack-style signed CDN URL: the query is the secret.
+    const QUERY = "Expires=1789000000&Signature=s3cr3tSIG&Key-Pair-Id=K2ABC";
+    const SIGNED = `https://cdn.example.com/ep.mp3?${QUERY}`;
+    const SIGNED_CDN = `https://media.cdn.example.net/final/ep.mp3?${QUERY}`;
+    const ALLOWED_HEADERS = ["content-type", "content-length", "content-range", "retry-after", "cf-ray", "server"];
+
+    let output: () => string;
+    let logged: () => Record<string, unknown>[];
+    let clearOutput: () => void;
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        const spies = (["log", "warn", "error", "info", "debug"] as const).map((level) =>
+            vi.spyOn(console, level).mockImplementation(() => {}),
+        );
+        output = () => spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join("\n");
+        logged = () => spies.flatMap((spy) => loggedEvents(spy));
+        clearOutput = () => spies.forEach((spy) => spy.mockClear());
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** A CDN response that leaks everything it can: the signed URL in its headers and its body. */
+    function leakyError(status: number): Response {
+        return new Response(`<Error><Message>Denied</Message><Url>${SIGNED}</Url><Final>${SIGNED_CDN}</Final></Error>`, {
+            status,
+            headers: {
+                "content-type": "application/xml",
+                "cf-ray": "8abc-LHR",
+                server: "AmazonS3",
+                "set-cookie": `session=${QUERY}`,
+                location: SIGNED_CDN,
+                "x-amz-request-id": "REQ123",
+            },
+        });
+    }
+
+    function expectNoQuery() {
+        const text = output();
+        expect(text).not.toContain("Signature=");
+        expect(text).not.toContain("s3cr3tSIG");
+        expect(text).not.toContain("Expires=");
+        expect(text.length).toBeGreaterThan(0);
+    }
+
+    it("a failed whole-file fetch logs hosts and allowlisted headers only, never the query", async () => {
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => leakyError(500));
+
+        const error = await transcribeAudio(SIGNED, { apiKey: "k", skipValidation: true }).catch((e) => e);
+
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNAVAILABLE);
+        expectNoQuery();
+        const details = logged().find((e) => e.event === "fetch_audio_error_details")!;
+        expect(details).toMatchObject({ status: 500, requestedHost: "cdn.example.com" });
+        expect(Object.keys(details.headers as object).sort()).toEqual(["cf-ray", "content-type", "server"]);
+        for (const key of Object.keys(details.headers as object)) expect(ALLOWED_HEADERS).toContain(key);
+    });
+
+    it("a 403 retried through redirect resolution logs hosts only, on failure and on success", async () => {
+        for (const retryStatus of [403, 200]) {
+            clearOutput();
+            const file = fixtureBytes(MP3_CBR_INFO);
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+                const url = input instanceof Request ? input.url : String(input);
+                if (url === OPENAI_URL) return new Response(JSON.stringify({ text: "ok." }), { status: 200 });
+                if (init?.method === "HEAD") {
+                    // The original URL redirects to the CDN; the CDN answers.
+                    return url === SIGNED
+                        ? new Response(null, { status: 302, headers: { Location: SIGNED_CDN } })
+                        : new Response(null, { status: 200 });
+                }
+                if (url === SIGNED) return leakyError(403);
+                return retryStatus === 200 ? new Response(file.slice(), { status: 200 }) : leakyError(403);
+            });
+
+            const result = await transcribeAudio(SIGNED, { apiKey: "k", skipValidation: true }).catch((e) => e);
+
+            if (retryStatus === 200) expect(result.text).toBe("ok.");
+            else expect((result as AppError).code).toBe(ERROR_CODES.AUDIO_UNAVAILABLE);
+            expectNoQuery();
+            const events = logged();
+            expect(events.find((e) => e.event === "fetch_audio_403_retry")).toMatchObject({ host: "cdn.example.com" });
+            expect(events.find((e) => e.event === "fetch_audio_403_resolved")).toMatchObject({
+                originalHost: "cdn.example.com",
+                resolvedHost: "media.cdn.example.net",
+            });
+            if (retryStatus === 200) {
+                expect(events.find((e) => e.event === "fetch_audio_403_resolved_success")).toMatchObject({
+                    resolvedHost: "media.cdn.example.net",
+                });
+            } else {
+                const details = events.find((e) => e.event === "fetch_audio_error_details")!;
+                expect(details).toMatchObject({ status: 403, requestedHost: "cdn.example.com" });
+                for (const key of Object.keys(details.headers as object)) expect(ALLOWED_HEADERS).toContain(key);
+            }
+            fetchSpy.mockRestore();
+        }
+    });
+});
+
 describe("duration-aware routing for small files", () => {
     beforeEach(() => {
         vi.restoreAllMocks();

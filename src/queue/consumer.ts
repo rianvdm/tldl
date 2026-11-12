@@ -17,6 +17,7 @@ import { generateEditorialMeta } from "../services/editorial-meta";
 import { parseApplePodcastsUrl, extractPodcastId } from "../lib/url-parser";
 import { resolveWebsiteUrl, showLevelAppleUrl, toEpisodePageUrl, toWebsiteUrl } from "../lib/podcast-links";
 import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
+import { urlHost, urlPath } from "../lib/log-urls";
 import {
     getJob,
     updateJobStatus,
@@ -542,7 +543,9 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         console.log(JSON.stringify({
             event: "consumer_rss_sourced_skip_pi",
             episodeId,
-            audioUrl: ctx.prefetchedAudioUrl,
+            // Host and path find the episode; the query can hold a CDN signature.
+            audioHost: urlHost(ctx.prefetchedAudioUrl),
+            audioPath: urlPath(ctx.prefetchedAudioUrl),
         }));
     } else {
         if (!appleUrl) {
@@ -621,13 +624,13 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         if (ctx.preResolvedAudioUrl) {
             console.log(JSON.stringify({
                 event: "using_preresolve_audio_url",
-                resolved: ctx.preResolvedAudioUrl,
-                original: ctx.audioUrlOverride || metadata.audioUrl,
+                resolvedHost: urlHost(ctx.preResolvedAudioUrl),
+                originalHost: urlHost(ctx.audioUrlOverride || metadata.audioUrl),
             }));
         } else if (ctx.audioUrlOverride) {
             console.log(JSON.stringify({
                 event: "using_audio_url_override",
-                override: ctx.audioUrlOverride,
+                overrideHost: urlHost(ctx.audioUrlOverride),
             }));
         }
 

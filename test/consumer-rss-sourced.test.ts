@@ -156,6 +156,95 @@ describe("consumer: rssSourced branch", () => {
         expect(getMetaSpy).not.toHaveBeenCalled();
     });
 
+    describe("audio URLs stay out of logs (#48)", () => {
+        const QUERY = "Expires=1789000000&Signature=s3cr3tSIG&Key-Pair-Id=K2ABC";
+        const signed = (host: string, path = "/ep.mp3") => `https://${host}${path}?${QUERY}`;
+
+        let output: () => string;
+        let events: () => Record<string, unknown>[];
+        beforeEach(() => {
+            vi.mocked(transcription.transcribeAudio).mockResolvedValue({
+                text: "transcript body here. ".repeat(20),
+                source: "openai",
+                model: "gpt-transcribe",
+            });
+            vi.mocked(summarization.generateSummary).mockResolvedValue({ text: "summary", model: "claude-opus-5-5" });
+            vi.mocked(tagGen.generateEpisodeTags).mockResolvedValue({ tags: ["ai"], model: "gpt-5.6-luna" });
+            const spies = (["log", "warn", "error", "info", "debug"] as const).map((level) =>
+                vi.spyOn(console, level).mockImplementation(() => {}),
+            );
+            const lines = () => spies.flatMap((spy) => spy.mock.calls.flat().map(String));
+            output = () => lines().join("\n");
+            events = () =>
+                lines().flatMap((line) => {
+                    try {
+                        return [JSON.parse(line) as Record<string, unknown>];
+                    } catch {
+                        return [];
+                    }
+                });
+        });
+
+        async function run(extra: Partial<QueueMessage>) {
+            for (const prefix of ["episode:", "transcript:", "summary:"]) {
+                const { keys } = await env.TLDL_DATA.list({ prefix });
+                await Promise.all(keys.map((k) => env.TLDL_DATA.delete(k.name)));
+            }
+            await queueConsumer.queue(
+                createMockBatch([
+                    {
+                        type: "process_episode",
+                        jobId: "job-1",
+                        episodeId: "1809663079_rss_deadbeef01",
+                        templateId: "key-takeaways",
+                        rssSourced: true,
+                        audioUrl: signed("substackcdn.example.com", "/feed/podcast/123/ep.mp3"),
+                        durationSeconds: 3000,
+                        podcastTitle: "How I AI",
+                        expectedTitle: "Test Episode",
+                        expectedDate: "2026-04-13T11:00:00Z",
+                        ...extra,
+                    },
+                ]),
+                getTestEnv(),
+            );
+            const text = output();
+            expect(text.length).toBeGreaterThan(0);
+            expect(text).not.toContain("Signature=");
+            expect(text).not.toContain("s3cr3tSIG");
+            expect(text).not.toContain("Expires=");
+        }
+
+        it("the RSS enclosure logs as host and path, without its query", async () => {
+            await run({});
+
+            expect(events().find((e) => e.event === "consumer_rss_sourced_skip_pi")).toMatchObject({
+                audioHost: "substackcdn.example.com",
+                audioPath: "/feed/podcast/123/ep.mp3",
+            });
+        });
+
+        it("a pre-resolved override logs hostnames only", async () => {
+            await run({
+                audioUrlOverride: signed("override.example.com"),
+                preResolvedAudioUrl: signed("resolved.example.net"),
+            });
+
+            expect(events().find((e) => e.event === "using_preresolve_audio_url")).toMatchObject({
+                resolvedHost: "resolved.example.net",
+                originalHost: "override.example.com",
+            });
+        });
+
+        it("an override logs its hostname only", async () => {
+            await run({ audioUrlOverride: signed("override.example.com") });
+
+            expect(events().find((e) => e.event === "using_audio_url_override")).toMatchObject({
+                overrideHost: "override.example.com",
+            });
+        });
+    });
+
     describe("outbound links on the saved episode", () => {
         const EPISODE_ID = "1809663079_rss_deadbeef01";
 

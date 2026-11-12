@@ -22,6 +22,7 @@ import {
     requiresChunking,
 } from "../lib/audio";
 import { adtsToM4a } from "../lib/adts";
+import { loggableHeaders, redactQueries, urlHost } from "../lib/log-urls";
 import { splitMp3ByDuration } from "../lib/mp3";
 import type { ChunkTranscriptCache } from "../types";
 import type { FetchRange } from "./audio-containers";
@@ -480,15 +481,15 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
         if (response.status === 403) {
             console.log(JSON.stringify({
                 event: "fetch_audio_403_retry",
-                url: audioUrl,
+                host: urlHost(audioUrl),
                 message: "Attempting redirect resolution fallback",
             }));
             const resolvedUrl = await resolveAudioUrl(audioUrl);
             if (resolvedUrl !== audioUrl) {
                 console.log(JSON.stringify({
                     event: "fetch_audio_403_resolved",
-                    original: audioUrl,
-                    resolved: resolvedUrl,
+                    originalHost: urlHost(audioUrl),
+                    resolvedHost: urlHost(resolvedUrl),
                 }));
                 const retryController = new AbortController();
                 const retryTimeoutId = setTimeout(() => retryController.abort(), TIMEOUTS.AUDIO_FETCH_MS);
@@ -501,7 +502,7 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
                     if (retryResponse.ok) {
                         console.log(JSON.stringify({
                             event: "fetch_audio_403_resolved_success",
-                            resolvedUrl,
+                            resolvedHost: urlHost(resolvedUrl),
                             status: retryResponse.status,
                         }));
                         return await wholeAudio(retryResponse);
@@ -512,15 +513,12 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
             }
 
             // Log details of the original 403 for diagnostics
-            const respHeaders: Record<string, string> = {};
-            response.headers.forEach((v, k) => { respHeaders[k] = v; });
             console.log(JSON.stringify({
                 event: "fetch_audio_error_details",
                 status: 403,
-                url: response.url,
-                requestedUrl: audioUrl,
+                ...fetchErrorHosts(audioUrl, response),
                 redirected: response.redirected,
-                headers: respHeaders,
+                headers: loggableHeaders(response.headers),
             }));
             throw new AppError(
                 ERROR_CODES.AUDIO_UNAVAILABLE,
@@ -530,21 +528,17 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
 
         if (!response.ok) {
             // Capture diagnostic details for non-200 responses
-            const respHeaders: Record<string, string> = {};
-            response.headers.forEach((v, k) => { respHeaders[k] = v; });
             let respBody: string | null = null;
             try {
-                respBody = await response.text();
-                if (respBody.length > 1000) respBody = respBody.slice(0, 1000);
+                respBody = redactQueries((await response.text()).slice(0, 1000));
             } catch { /* ignore */ }
             console.log(
                 JSON.stringify({
                     event: "fetch_audio_error_details",
                     status: response.status,
-                    url: response.url,
-                    requestedUrl: audioUrl,
+                    ...fetchErrorHosts(audioUrl, response),
                     redirected: response.redirected,
-                    headers: respHeaders,
+                    headers: loggableHeaders(response.headers),
                     body: respBody,
                 })
             );
@@ -575,6 +569,14 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
             error instanceof Error ? error : undefined,
         );
     }
+}
+
+/** Hosts of the requested URL and, when the fetch followed redirects, of the URL that answered. */
+function fetchErrorHosts(requestedUrl: string, response: Response): { requestedHost: string; finalHost?: string } {
+    return {
+        requestedHost: urlHost(requestedUrl),
+        ...(response.url && { finalHost: urlHost(response.url) }),
+    };
 }
 
 async function wholeAudio(response: Response): Promise<WholeAudio> {
