@@ -28,6 +28,7 @@ import {
     MAX_CHUNK_FETCH_FACTOR,
     RUN_COALESCE_GAP_BYTES,
     calculateChunkRanges,
+    hexBytes,
     id3Length,
 } from "../lib/audio";
 import { ERROR_CODES } from "../lib/constants";
@@ -391,11 +392,6 @@ function chunkOverlapBytes(bytesPerSecond: number, maxChunkBytes: number): numbe
         Math.round(bytesPerSecond * CHUNK_OVERLAP_SECONDS),
         Math.floor(maxChunkBytes / 4),
     );
-}
-
-/** Lowercase hex pairs separated by spaces, as `audio_format_detected` logs them. */
-function hexBytes(bytes: Uint8Array): string {
-    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
 }
 
 /**

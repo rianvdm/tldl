@@ -2,7 +2,8 @@
  * Transcription service using OpenAI gpt-transcribe.
  * Handles audio validation and transcription for podcast episodes.
  * Supports chunked transcription for files over 25MB.
- * Automatically falls back to whisper-1 for files gpt-transcribe rejects.
+ * An upload the model rejects fails as AUDIO_REJECTED (there is no fallback
+ * model), except a small final chunk, which is skipped (#54).
  */
 
 import { AppError } from "../lib/errors";
@@ -14,6 +15,7 @@ import {
     assertWithinTotalSizeLimit,
     TARGET_CHUNK_SIZE_BYTES,
     estimateTranscriptionTime,
+    hexBytes,
     id3Length,
     requiresChunking,
 } from "../lib/audio";
@@ -23,8 +25,10 @@ import {
     detectContainer,
     exactBuffer,
     planChunks,
+    type AudioContainer,
     type ChunkPlan,
     type ChunkSizeLimits,
+    type PlannedChunk,
 } from "./chunk-planning";
 
 
@@ -554,28 +558,26 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
 }
 
 /**
- * Call OpenAI transcription API.
- * Uses gpt-transcribe as primary model with automatic whisper-1 fallback.
+ * Call the OpenAI transcription API with gpt-transcribe.
  *
  * @param audioBuffer - Audio data as ArrayBuffer
  * @param apiKey - OpenAI API key
  * @param provider - Provider config
- * @returns Transcribed text and model used
- * @throws AppError with TRANSCRIPTION_FAILED or RATE_LIMITED
+ * @returns Transcribed text
+ * @throws AppError with AUDIO_REJECTED when the model refuses the audio (a
+ *   400 the same upload would get again: its `cause` carries the OpenAI
+ *   response body), TRANSCRIPTION_FAILED on any other 400 or a malformed
+ *   response, and a plain Error on 429 or 5xx for `withRetry` to retry
  */
 async function callWhisperApi(
     audioBuffer: ArrayBuffer,
     apiKey: string,
     provider: ProviderConfig = PROVIDER_CONFIGS.openai,
     contentType: string = "audio/mpeg",
-): Promise<{ text: string; model: string }> {
+): Promise<string> {
     // Detect format from actual bytes (magic bytes), falling back to content-type header
     const ext = detectAudioFormat(audioBuffer, contentType);
     const blobMime = mimeFromExtension(ext);
-
-    // Log first 16 bytes as hex for debugging format detection
-    const preview = new Uint8Array(audioBuffer, 0, Math.min(16, audioBuffer.byteLength));
-    const hexBytes = Array.from(preview).map(b => b.toString(16).padStart(2, "0")).join(" ");
 
     console.log(
         JSON.stringify({
@@ -584,7 +586,7 @@ async function callWhisperApi(
             blobMime,
             headerContentType: contentType,
             bufferSizeBytes: audioBuffer.byteLength,
-            firstBytesHex: hexBytes,
+            firstBytesHex: hexBytes(new Uint8Array(audioBuffer, 0, Math.min(16, audioBuffer.byteLength))),
         })
     );
 
@@ -673,112 +675,25 @@ async function callWhisperApi(
             })
         );
 
-        // Fallback: if gpt-transcribe rejects the file (corrupted/unsupported or input too large), retry with whisper-1.
-        // "corrupted or unsupported" verified live against gpt-transcribe (2026-08-02 pre-flight): the 400 wording is
-        // identical to the old model's. A missed fallback logs the full error in whisper_api_error with the string to add.
-        const isCorruptedError = errorText.includes("corrupted or unsupported");
-        const isInputTooLarge = errorText.includes("input_too_large") || errorText.includes("too large for this model");
-        const isPrimaryTranscribeModel = provider.model === "gpt-transcribe";
-        let fallbackErrorMessage: string | null = null;
-        if (status === 400 && (isCorruptedError || isInputTooLarge) && isPrimaryTranscribeModel) {
-            const reason = isInputTooLarge
-                ? `${provider.model} chunk too large, falling back to whisper-1`
-                : `${provider.model} rejected file, falling back to whisper-1`;
-            console.log(
-                JSON.stringify({
-                    event: "whisper_fallback_start",
-                    reason,
-                    originalModel: provider.model,
-                    fallbackModel: "whisper-1",
-                })
+        // The model refuses this audio, and would refuse the same upload again.
+        // "corrupted or unsupported" verified live against gpt-transcribe
+        // (2026-08-02 pre-flight). A rejection that slips past these checks
+        // fails as TRANSCRIPTION_FAILED, with its body in whisper_api_error.
+        const rejected =
+            errorText.includes("corrupted or unsupported") ||
+            errorText.includes("input_too_large") ||
+            errorText.includes("too large for this model");
+        if (status === 400 && rejected) {
+            throw new AppError(
+                ERROR_CODES.AUDIO_REJECTED,
+                `${provider.model} rejected the audio`,
+                new Error(errorText),
             );
-
-            // Fallback to whisper-1 with retry for transient errors (5xx, 429).
-            // Always uses the OpenAI base URL — whisper-1 is an OpenAI model.
-            const fallbackStart = Date.now();
-            const attemptWhisper1 = async (): Promise<string> => {
-                const fallbackFormData = new FormData();
-                fallbackFormData.append("file", new Blob([audioBuffer], { type: blobMime }), `audio.${ext}`);
-                fallbackFormData.append("model", "whisper-1");
-                fallbackFormData.append("response_format", "text");
-
-                const fallbackController = new AbortController();
-                const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), TIMEOUTS.WHISPER_API_MS);
-
-                let fallbackResponse: Response;
-                try {
-                    fallbackResponse = await fetch(PROVIDER_CONFIGS.openai.baseUrl, {
-                        method: "POST",
-                        headers: { Authorization: `Bearer ${apiKey}` },
-                        body: fallbackFormData,
-                        signal: fallbackController.signal,
-                    });
-                } catch (err) {
-                    clearTimeout(fallbackTimeoutId);
-                    throw err;
-                }
-                clearTimeout(fallbackTimeoutId);
-
-                if (fallbackResponse.status === 429) {
-                    throw new Error("Rate limited: HTTP 429");
-                }
-                if (fallbackResponse.status >= 500) {
-                    throw new Error(`Server error: HTTP ${fallbackResponse.status}`);
-                }
-
-                if (!fallbackResponse.ok) {
-                    const fallbackError = await fallbackResponse.text().catch(() => "Unknown");
-                    const fallbackElapsed = Date.now() - fallbackStart;
-                    console.error(
-                        JSON.stringify({
-                            event: "whisper_fallback_failed",
-                            fallbackModel: "whisper-1",
-                            status: fallbackResponse.status,
-                            elapsedMs: fallbackElapsed,
-                            error: fallbackError,
-                        })
-                    );
-                    // Non-retryable — throw a plain error so withRetry won't retry
-                    throw new Error(`whisper-1 error: ${fallbackError}`);
-                }
-
-                return fallbackResponse.text();
-            };
-
-            try {
-                const fallbackText = await withRetry(attemptWhisper1, {
-                    maxRetries: 3,
-                    baseDelayMs: 1000,
-                    shouldRetry: isTransientError,
-                });
-                const fallbackElapsed = Date.now() - fallbackStart;
-                console.log(
-                    JSON.stringify({
-                        event: "whisper_fallback_success",
-                        fallbackModel: "whisper-1",
-                        elapsedMs: fallbackElapsed,
-                        elapsedSeconds: Math.round(fallbackElapsed / 1000),
-                    })
-                );
-                return { text: fallbackText, model: "whisper-1" };
-            } catch (fallbackErr) {
-                fallbackErrorMessage = fallbackErr instanceof Error ? fallbackErr.message : "Unknown";
-                console.error(
-                    JSON.stringify({
-                        event: "whisper_fallback_error",
-                        fallbackModel: "whisper-1",
-                        error: fallbackErrorMessage,
-                    })
-                );
-            }
         }
 
-        const errorDetail = fallbackErrorMessage
-            ? `${provider.name} Whisper API error: ${errorText} | whisper-1 fallback also failed: ${fallbackErrorMessage}`
-            : `${provider.name} Whisper API error: ${errorText}`;
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
-            errorDetail,
+            `${provider.name} Whisper API error: ${errorText}`,
         );
     }
 
@@ -807,7 +722,7 @@ async function callWhisperApi(
             `Unexpected transcription response shape from ${provider.model}`,
         );
     }
-    return { text: body.text, model: provider.model };
+    return body.text;
 }
 
 /**
@@ -838,7 +753,6 @@ const DEFAULT_CHUNK_LIMITS: ChunkSizeLimits = {
 
 /**
  * Transcribe audio from URL using OpenAI gpt-transcribe.
- * Automatically falls back to whisper-1 for files the primary model rejects.
  * Chunks any file over the upload limit, or whose audio runs past the
  * per-chunk duration cap (`MAX_CHUNK_SECONDS`), which the model enforces
  * whatever the file size.
@@ -846,7 +760,9 @@ const DEFAULT_CHUNK_LIMITS: ChunkSizeLimits = {
  * @param audioUrl - URL of the audio file to transcribe
  * @param options - Transcription options (apiKey, onProgress)
  * @returns Transcription result with text and source
- * @throws AppError with AUDIO_UNAVAILABLE, TRANSCRIPTION_FAILED, or RATE_LIMITED
+ * @throws AppError with AUDIO_UNAVAILABLE, AUDIO_UNSUPPORTED, AUDIO_REJECTED
+ *   (the model refused an upload; logged as `transcription_rejected`),
+ *   TRANSCRIPTION_FAILED, or RATE_LIMITED
  * 
  * @example
  * ```typescript
@@ -984,20 +900,33 @@ export async function transcribeAudio(
             })
         );
     }
-    const result = await withRetry(
-        () => callWhisperApi(uploadBuffer, opts.apiKey, providerConfig, validation.contentType),
-        {
-            maxRetries: 3,
-            baseDelayMs: 1000,
-            shouldRetry: isTransientError,
-        },
-    );
-
-    return {
-        text: result.text.trim(),
-        source: providerConfig.name,
-        model: result.model,
-    };
+    try {
+        const text = await withRetry(
+            () => callWhisperApi(uploadBuffer, opts.apiKey, providerConfig, validation.contentType),
+            {
+                maxRetries: 3,
+                baseDelayMs: 1000,
+                shouldRetry: isTransientError,
+            },
+        );
+        return {
+            text: text.trim(),
+            source: providerConfig.name,
+            model: providerConfig.model,
+        };
+    } catch (error) {
+        if (isRejection(error)) {
+            logRejection(error, {
+                position: { wholeFile: true },
+                upload: uploadBuffer,
+                container: plan?.container ?? detectContainer(probeOf(audioBuffer)),
+                chunk: plan?.chunks[0],
+                vbrHeaderDropped: plan?.audio.vbrHeaderDropped ?? false,
+                audioHost: ctx.audioHost,
+            });
+        }
+        throw error;
+    }
 }
 
 /**
@@ -1013,7 +942,7 @@ async function planSmallFile(
 ): Promise<ChunkPlan | null> {
     try {
         return await planChunks({
-            probe: new Uint8Array(buffer, 0, Math.min(CONTAINER_PROBE_BYTES, buffer.byteLength)),
+            probe: probeOf(buffer),
             fileSize: buffer.byteLength,
             contentType,
             limits,
@@ -1031,6 +960,11 @@ async function planSmallFile(
         );
         return null;
     }
+}
+
+/** The first bytes of a file in memory, as much as container detection reads. */
+function probeOf(buffer: ArrayBuffer): Uint8Array {
+    return new Uint8Array(buffer, 0, Math.min(CONTAINER_PROBE_BYTES, buffer.byteLength));
 }
 
 /** Serve range reads from a buffer, clamping `end` to its length like an HTTP Range request. */
@@ -1066,6 +1000,46 @@ function planLogFields(plan: ChunkPlan, ctx: TranscribePlanContext): Record<stri
         maxChunkSeconds: ctx.maxChunkSeconds,
         audioHost: ctx.audioHost,
     };
+}
+
+/** An upload the model refused: `callWhisperApi` throws these, and nothing else does. */
+function isRejection(error: unknown): error is AppError {
+    return error instanceof AppError && error.code === ERROR_CODES.AUDIO_REJECTED;
+}
+
+interface RejectedUpload {
+    /** Which chunk of how many, or the whole file in one upload. */
+    position: { chunkIndex: number; totalChunks: number } | { wholeFile: true };
+    /** The bytes sent to the API. */
+    upload: ArrayBuffer;
+    container: AudioContainer;
+    /** The planned chunk the upload came from; absent when the file couldn't be planned. */
+    chunk?: PlannedChunk;
+    vbrHeaderDropped: boolean;
+    audioHost: string;
+}
+
+/**
+ * Log `transcription_rejected` with enough to reproduce the rejection from
+ * Workers Logs alone: where the upload sat in the file, its first bytes, and
+ * the full OpenAI error body. Host only, never the URL: CDN URLs can be signed.
+ */
+function logRejection(error: AppError, rejected: RejectedUpload): void {
+    const { position, upload, container, chunk, vbrHeaderDropped, audioHost } = rejected;
+    console.error(
+        JSON.stringify({
+            event: "transcription_rejected",
+            container,
+            ...position,
+            uploadBytes: upload.byteLength,
+            plannedSeconds: chunk?.plannedSeconds,
+            ...chunk?.logFields,
+            firstBytesHex: hexBytes(new Uint8Array(upload, 0, Math.min(32, upload.byteLength))),
+            vbrHeaderDropped,
+            openAiError: error.cause?.message,
+            audioHost,
+        })
+    );
 }
 
 /**
@@ -1107,7 +1081,7 @@ async function planRemote(
  * @returns Combined transcription result
  */
 async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Promise<TranscriptionResult> {
-    const { apiKey, provider, contentType, onProgress } = ctx;
+    const { apiKey, provider, contentType, audioHost, onProgress } = ctx;
     const { totalBytes, chunks } = plan;
     const totalChunks = chunks.length;
 
@@ -1123,9 +1097,6 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
 
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
-    // Distinct models actually used, in first-use order. A single chunk falling
-    // back must not relabel the whole transcript — mixed runs are the norm.
-    const modelsUsed: string[] = [];
     let tailChunkSkipped: { chunkIndex: number; error: string; sharePercent: number } | null = null;
 
     for (const chunk of chunks) {
@@ -1143,6 +1114,8 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             })
         );
 
+        // Kept outside the try so a rejection can log the bytes it sent.
+        let upload: ArrayBuffer | undefined;
         try {
             // Add delay between chunks to avoid CDN rate limits (skip first chunk)
             if (chunk.index > 0) {
@@ -1150,9 +1123,10 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             }
 
             const bufferToTranscribe = await chunk.load();
+            upload = bufferToTranscribe;
 
             // Transcribe the chunk
-            const chunkResult = await withRetry(
+            const chunkText = await withRetry(
                 () => callWhisperApi(bufferToTranscribe, apiKey, provider, contentType),
                 {
                     maxRetries: 3,
@@ -1162,23 +1136,18 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             );
 
             transcriptions.push({
-                text: chunkResult.text.trim(),
+                text: chunkText.trim(),
                 isFirst: chunk.isFirst,
                 isLast: chunk.isLast,
                 overlapBytes: chunk.overlapBytes,
             });
-
-            // Track actual model used (may differ from primary if fallback occurred)
-            if (!modelsUsed.includes(chunkResult.model)) {
-                modelsUsed.push(chunkResult.model);
-            }
 
             console.log(
                 JSON.stringify({
                     event: "chunk_completed",
                     chunkIndex: chunkNumber,
                     totalChunks,
-                    textLength: chunkResult.text.length,
+                    textLength: chunkText.length,
                 })
             );
         } catch (error) {
@@ -1199,11 +1168,22 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
                 throw error;
             }
 
+            if (isRejection(error) && upload) {
+                logRejection(error, {
+                    position: { chunkIndex: chunkNumber, totalChunks },
+                    upload,
+                    container: plan.container,
+                    chunk,
+                    vbrHeaderDropped: plan.audio.vbrHeaderDropped ?? false,
+                    audioHost,
+                });
+            }
+
             // Tolerate failure of a small trailing chunk: some podcast files end in
-            // a non-decodable trailer (ID3v1 footers, ad markers, etc.) that both the
-            // primary model and whisper-1 reject. Losing a few minutes of outro beats
-            // failing the episode. But the last chunk can hold up to a full chunk of
-            // audio (half of a two-chunk file), so a large tail fails like any other
+            // a non-decodable trailer (ID3v1 footers, ad markers, etc.) that the
+            // model rejects. Losing a few minutes of outro beats failing the
+            // episode. But the last chunk can hold up to a full chunk of audio
+            // (half of a two-chunk file), so a large tail fails like any other
             // chunk rather than silently dropping real content (#54).
             if (chunk.isLast && transcriptions.length > 0 && totalChunks > 1) {
                 // Overlap was already transcribed with the previous chunk, so only
@@ -1227,6 +1207,13 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             }
 
             // Re-throw with context
+            if (isRejection(error)) {
+                throw new AppError(
+                    ERROR_CODES.AUDIO_REJECTED,
+                    `${provider.model} rejected chunk ${chunkNumber}/${totalChunks} of the audio`,
+                    error.cause,
+                );
+            }
             if (error instanceof AppError) {
                 throw error;
             }
@@ -1252,11 +1239,10 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
     return {
         text: combinedText,
         source: provider.name,
-        // "gpt-transcribe+whisper-1" when chunks used different models.
-        model: modelsUsed.length > 0 ? modelsUsed.join("+") : provider.model,
+        model: provider.model,
         ...(tailChunkSkipped && {
             partial: true,
-            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both ${provider.model} and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the last ${tailChunkSkipped.sharePercent}% of the audio.`,
+            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} was rejected by ${provider.model} (${tailChunkSkipped.error}). The transcript is missing the last ${tailChunkSkipped.sharePercent}% of the audio.`,
         }),
     };
 }

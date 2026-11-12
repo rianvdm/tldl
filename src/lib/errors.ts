@@ -26,6 +26,8 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
         "The audio file is too large to process. Try a shorter episode.",
     [ERROR_CODES.AUDIO_UNSUPPORTED]:
         "This episode's audio format isn't supported.",
+    [ERROR_CODES.AUDIO_REJECTED]:
+        "The transcription model rejected this episode's audio.",
     [ERROR_CODES.TRANSCRIPTION_FAILED]:
         "Transcription failed. Please try again in a few minutes.",
     [ERROR_CODES.SUMMARIZATION_FAILED]:
@@ -56,6 +58,7 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
     [ERROR_CODES.AUDIO_UNAVAILABLE]: 502,
     [ERROR_CODES.AUDIO_TOO_LARGE]: 400,
     [ERROR_CODES.AUDIO_UNSUPPORTED]: 422,
+    [ERROR_CODES.AUDIO_REJECTED]: 422,
     [ERROR_CODES.TRANSCRIPTION_FAILED]: 502,
     [ERROR_CODES.SUMMARIZATION_FAILED]: 502,
     [ERROR_CODES.RATE_LIMITED]: 429,

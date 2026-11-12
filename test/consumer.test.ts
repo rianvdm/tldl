@@ -35,7 +35,7 @@ vi.mock("../src/services/transcription", () => ({
     transcribeAudio: vi.fn(),
     getProviderConfig: vi.fn().mockReturnValue({
         baseUrl: "https://api.openai.com/v1/audio/transcriptions",
-        model: "whisper-1",
+        model: "gpt-transcribe",
         name: "openai",
     }),
 }));

@@ -96,7 +96,7 @@ export interface Transcript {
     episodeId: string;
     text: string;                  // Full transcript text
     source: TranscriptSource;
-    model?: string;                // e.g., "gpt-transcribe", "whisper-1"
+    model?: string;                // e.g., "gpt-transcribe"
     createdAt: string;             // ISO timestamp
 }
 

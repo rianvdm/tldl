@@ -235,3 +235,12 @@ export function requiresChunking(
 ): boolean {
     return contentLength > whisperLimit;
 }
+
+// ============================================================================
+// Logging
+// ============================================================================
+
+/** Lowercase hex pairs separated by spaces, for logging the first bytes of audio. */
+export function hexBytes(bytes: Uint8Array): string {
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
+}
