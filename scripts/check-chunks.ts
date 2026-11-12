@@ -130,7 +130,7 @@ interface UploadFormat {
 
 /**
  * The upload's filename extension and MIME type, built as production's
- * `callWhisperApi` builds them: from the chunk's magic bytes, then the
+ * `callTranscriptionApi` builds them: from the chunk's magic bytes, then the
  * source's content type, then MP3.
  */
 function uploadFormat(bytes: Uint8Array, contentType: string): UploadFormat {

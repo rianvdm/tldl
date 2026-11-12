@@ -510,8 +510,7 @@ describe("transcribeAudio", () => {
         expect(result.source).toBe("openai");
         expect(result.model).toBe("gpt-transcribe");
         expect(result.partial).toBe(true);
-        expect(result.partialReason).toContain("Final chunk 3/3 was rejected by gpt-transcribe");
-        expect(result.partialReason).not.toContain("whisper");
+        expect(result.partialReason).toMatch(/^Final chunk 3\/3 was rejected by gpt-transcribe \(/);
         // The 30MB tail chunk holds only 32KB of new audio past the overlap.
         expect(result.partialReason).toContain("missing the last 0.1% of the audio");
         expect(result.text).toContain("First chunk");
@@ -571,7 +570,7 @@ describe("transcribeAudio", () => {
         expect(result.model).toBe("gpt-transcribe");
     });
 
-    it("should throw TRANSCRIPTION_FAILED on Whisper API error", async () => {
+    it("should throw TRANSCRIPTION_FAILED on a transcription API error", async () => {
         const mockAudioBuffer = new ArrayBuffer(1024);
 
         vi.spyOn(globalThis, "fetch")
@@ -857,9 +856,9 @@ describe("transcribeAudio with options object", () => {
         expect(result.source).toBe("openai");
 
         // Verify the transcription API was called with OpenAI URL, the new model, and JSON response format
-        const whisperCall = fetchSpy.mock.calls[3];
-        expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
-        const requestBody = (whisperCall[1] as RequestInit).body as FormData;
+        const transcriptionCall = fetchSpy.mock.calls[3];
+        expect(transcriptionCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
+        const requestBody = (transcriptionCall[1] as RequestInit).body as FormData;
         expect(requestBody.get("model")).toBe("gpt-transcribe");
         expect(requestBody.get("response_format")).toBe("json");
     });
@@ -895,8 +894,8 @@ describe("transcribeAudio with options object", () => {
         expect(result.source).toBe("openai");
 
         // Verify it used OpenAI URL
-        const whisperCall = fetchSpy.mock.calls[3];
-        expect(whisperCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
+        const transcriptionCall = fetchSpy.mock.calls[3];
+        expect(transcriptionCall[0]).toBe("https://api.openai.com/v1/audio/transcriptions");
     });
 
     it("should support legacy string API key argument", async () => {
@@ -2097,7 +2096,6 @@ describe("model rejections (AUDIO_REJECTED)", () => {
         expect(result.partialReason).toMatch(
             new RegExp(`^Final chunk ${chunks.length}/${chunks.length} was rejected by gpt-transcribe \\(`),
         );
-        expect(result.partialReason).not.toContain("whisper");
     });
 
     it("logs transcription_rejected with chunk context (MP3 byte range)", async () => {

@@ -223,7 +223,7 @@ export function estimateTranscriptionTime(
  * Check if a file size requires chunking.
  * 
  * @param contentLength - File size in bytes
- * @param whisperLimit - Upload limit (default 25MB, the API's). Production uses the default;
+ * @param uploadLimit - Upload limit (default 25MB, the API's). Production uses the default;
  *   tests lower it to force small fixtures onto the chunked path. The actual chunk size is
  *   controlled by TARGET_CHUNK_SIZE_BYTES (currently 15MB), which is intentionally smaller
  *   than this limit to stay clear of the transcription model's per-request audio budget.
@@ -231,9 +231,9 @@ export function estimateTranscriptionTime(
  */
 export function requiresChunking(
     contentLength: number,
-    whisperLimit: number = 25 * 1024 * 1024
+    uploadLimit: number = 25 * 1024 * 1024
 ): boolean {
-    return contentLength > whisperLimit;
+    return contentLength > uploadLimit;
 }
 
 // ============================================================================

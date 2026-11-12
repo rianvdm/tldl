@@ -35,7 +35,7 @@ import {
 } from "./chunk-planning";
 
 
-// Use centralized constant for Whisper size limit
+// Use centralized constant for the API's upload size limit
 const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
 
 // ============================================================================
@@ -572,7 +572,7 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
  *   response body), TRANSCRIPTION_FAILED on any other 400 or a malformed
  *   response, and a plain Error on 429 or 5xx for `withRetry` to retry
  */
-async function callWhisperApi(
+async function callTranscriptionApi(
     audioBuffer: ArrayBuffer,
     apiKey: string,
     provider: ProviderConfig = PROVIDER_CONFIGS.openai,
@@ -600,12 +600,12 @@ async function callWhisperApi(
     formData.append("response_format", "json");
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.WHISPER_API_MS);
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.TRANSCRIPTION_API_MS);
 
     const startTime = Date.now();
     console.log(
         JSON.stringify({
-            event: "whisper_api_call_start",
+            event: "transcription_api_call_start",
             provider: provider.name,
             model: provider.model,
             audioSizeMB: Math.round(audioBuffer.byteLength / 1024 / 1024 * 100) / 100,
@@ -629,21 +629,21 @@ async function callWhisperApi(
         if (error instanceof Error && error.name === "AbortError") {
             console.error(
                 JSON.stringify({
-                    event: "whisper_api_timeout",
+                    event: "transcription_api_timeout",
                     provider: provider.name,
                     elapsedMs: elapsed,
-                    timeoutMs: TIMEOUTS.WHISPER_API_MS,
+                    timeoutMs: TIMEOUTS.TRANSCRIPTION_API_MS,
                 })
             );
             throw new AppError(
                 ERROR_CODES.TRANSCRIPTION_FAILED,
-                `${provider.name} Whisper API timed out after ${Math.round(elapsed / 1000)}s`,
+                `${provider.name} transcription API timed out after ${Math.round(elapsed / 1000)}s`,
             );
         }
 
         console.error(
             JSON.stringify({
-                event: "whisper_api_network_error",
+                event: "transcription_api_network_error",
                 provider: provider.name,
                 elapsedMs: elapsed,
                 error: error instanceof Error ? error.message : "Unknown error",
@@ -670,7 +670,7 @@ async function callWhisperApi(
         const errorText = await response.text().catch(() => "Unknown error");
         console.error(
             JSON.stringify({
-                event: "whisper_api_error",
+                event: "transcription_api_error",
                 provider: provider.name,
                 status,
                 elapsedMs: elapsed,
@@ -681,7 +681,7 @@ async function callWhisperApi(
         // The model refuses this audio, and would refuse the same upload again.
         // "corrupted or unsupported" verified live against gpt-transcribe
         // (2026-08-02 pre-flight). A rejection that slips past these checks
-        // fails as TRANSCRIPTION_FAILED, with its body in whisper_api_error.
+        // fails as TRANSCRIPTION_FAILED, with its body in transcription_api_error.
         const rejected =
             errorText.includes("corrupted or unsupported") ||
             errorText.includes("input_too_large") ||
@@ -696,13 +696,13 @@ async function callWhisperApi(
 
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
-            `${provider.name} Whisper API error: ${errorText}`,
+            `${provider.name} transcription API error: ${errorText}`,
         );
     }
 
     console.log(
         JSON.stringify({
-            event: "whisper_api_call_complete",
+            event: "transcription_api_call_complete",
             provider: provider.name,
             elapsedMs: elapsed,
             elapsedSeconds: Math.round(elapsed / 1000),
@@ -912,7 +912,7 @@ export async function transcribeAudio(
     }
     try {
         const text = await withRetry(
-            () => callWhisperApi(uploadBuffer, opts.apiKey, providerConfig, validation.contentType),
+            () => callTranscriptionApi(uploadBuffer, opts.apiKey, providerConfig, validation.contentType),
             {
                 maxRetries: 3,
                 baseDelayMs: 1000,
@@ -1054,7 +1054,7 @@ function planLogFields(plan: ChunkPlan, ctx: TranscribePlanContext): Record<stri
     };
 }
 
-/** An upload the model refused: `callWhisperApi` throws these, and nothing else does. */
+/** An upload the model refused: `callTranscriptionApi` throws these, and nothing else does. */
 function isRejection(error: unknown): error is AppError {
     return error instanceof AppError && error.code === ERROR_CODES.AUDIO_REJECTED;
 }
@@ -1198,7 +1198,7 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
 
             // Transcribe the chunk
             const chunkText = await withRetry(
-                () => callWhisperApi(bufferToTranscribe, apiKey, provider, contentType),
+                () => callTranscriptionApi(bufferToTranscribe, apiKey, provider, contentType),
                 {
                     maxRetries: 3,
                     baseDelayMs: 1000,

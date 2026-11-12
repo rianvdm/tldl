@@ -177,7 +177,7 @@ describe("Queue Consumer - process_episode", () => {
         vi.clearAllMocks();
     });
 
-    it("processes new episode successfully with Whisper transcription", async () => {
+    it("processes new episode successfully with gpt-transcribe transcription", async () => {
         // Set up mocks
         vi.mocked(getEpisodeMetadata).mockResolvedValue({
             podcastName: "Test Podcast",
@@ -190,7 +190,7 @@ describe("Queue Consumer - process_episode", () => {
         });
 
         vi.mocked(transcribeAudio).mockResolvedValue({
-            text: "This is the transcribed text from Whisper.",
+            text: "This is the transcribed text from gpt-transcribe.",
             source: "openai",
             model: "gpt-transcribe",
         });
@@ -227,7 +227,7 @@ describe("Queue Consumer - process_episode", () => {
         // Verify transcript saved
         const transcript = await getTranscript(env.TLDL_DATA, "123_456");
         expect(transcript).not.toBeNull();
-        expect(transcript?.text).toBe("This is the transcribed text from Whisper.");
+        expect(transcript?.text).toBe("This is the transcribed text from gpt-transcribe.");
         expect(transcript?.source).toBe("openai");
 
         // Verify summary saved
@@ -262,7 +262,7 @@ describe("Queue Consumer - process_episode", () => {
         await env.TLDL_DATA.delete("chunkcache:123_456:2:mp3:1000:0:0-499");
     });
 
-    it("uses RSS transcript when available (skips Whisper)", async () => {
+    it("uses RSS transcript when available (skips gpt-transcribe)", async () => {
         vi.mocked(getEpisodeMetadata).mockResolvedValue({
             podcastName: "Test Podcast",
             episodeTitle: "Test Episode",
@@ -295,7 +295,7 @@ describe("Queue Consumer - process_episode", () => {
         // Verify message acknowledged
         expect(batch.messages[0].ack).toHaveBeenCalled();
 
-        // Verify Whisper was NOT called
+        // Verify gpt-transcribe was NOT called
         expect(transcribeAudio).not.toHaveBeenCalled();
 
         // Verify RSS transcript was used
@@ -304,7 +304,7 @@ describe("Queue Consumer - process_episode", () => {
         expect(transcript?.text).toContain("RSS transcript text from the podcast feed");
     });
 
-    it("uses cached transcript (skips both RSS and Whisper)", async () => {
+    it("uses cached transcript (skips both RSS and gpt-transcribe)", async () => {
         // Pre-save transcript
         const existingTranscript = createSampleTranscript({
             source: "openai",

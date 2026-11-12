@@ -316,7 +316,7 @@ export const TIMEOUTS = {
     CHUNK_FETCH_DELAY_MS: 500,          // 500ms between chunks
 
     // OpenAI transcription call (per chunk)
-    WHISPER_API_MS: 10 * 60 * 1000,     // 10 minutes
+    TRANSCRIPTION_API_MS: 10 * 60 * 1000,     // 10 minutes
 
     // Overall job timeout, measured from createdAt (the stale-job sweep in
     // listActiveJobsWithDO marks the job failed once it's exceeded). One killed
