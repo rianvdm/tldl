@@ -15,7 +15,8 @@ import {
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
 import { ERROR_CODES } from "../src/lib/constants";
-import { CHUNK_OVERLAP_SECONDS, CONTAINER_PROBE_BYTES, MAX_TOTAL_SIZE_BYTES } from "../src/lib/audio";
+import { CHUNK_OVERLAP_SECONDS, CONTAINER_PROBE_BYTES, MAX_TOTAL_SIZE_BYTES, id3Length } from "../src/lib/audio";
+import { parseMp3FrameHeader, readVbrHeader } from "../src/lib/mp3";
 import {
     box,
     fullBox,
@@ -37,6 +38,7 @@ import {
     FRAGMENTED_M4A,
     MOOV_FIRST_M4A,
     MOOV_LAST_M4A,
+    MP3_CBR_INFO,
     fixtureBytes,
 } from "./fixtures/audio";
 
@@ -1589,8 +1591,35 @@ describe("chunked transcription of non-MP4 containers", () => {
         vi.restoreAllMocks();
     });
 
-    it("keeps the byte-range path for MP3, prepending the first 512 bytes of the probe", async () => {
-        // ID3 tag + Layer III sync, then a recognisable byte pattern.
+    it("uploads MP3 chunks as bare MPEG frames: no ID3 tag, no Info frame, no 512-byte prepend", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        const id3 = id3Length(file);
+        const audioStart = id3 + parseMp3FrameHeader(file, id3)!.frameLength;
+        const { uploads, ranges } = serveAudio(file, { contentType: "audio/mpeg" });
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const result = await transcribeAudio("https://cdn.example.com/episode.mp3", chunkedOptions(2));
+
+        expect(result.text).toBe("chunk 1. chunk 2. chunk 3. chunk 4.");
+        const chunkRanges = ranges.slice(1).map((r) => r.slice("bytes=".length).split("-").map(Number));
+        expect(ranges[0]).toBe(`bytes=0-${file.length - 1}`);
+        expect(chunkRanges[0][0]).toBe(audioStart);
+        expect(uploads.map((u) => u.name)).toEqual(["audio.mp3", "audio.mp3", "audio.mp3", "audio.mp3"]);
+        expect(uploads[0].bytes).toEqual(file.slice(audioStart, chunkRanges[0][1] + 1));
+        for (const [i, upload] of uploads.entries()) {
+            // Each upload is its fetched range, trimmed to start on a plain audio frame.
+            const [start, end] = chunkRanges[i];
+            const fetched = file.slice(start, end + 1);
+            expect(fetched.subarray(fetched.length - upload.bytes.length)).toEqual(upload.bytes);
+            const header = parseMp3FrameHeader(upload.bytes, 0);
+            expect(header).not.toBeNull();
+            expect(readVbrHeader(upload.bytes, 0, header!)).toBeNull();
+        }
+        expect(log.mock.calls.some(([line]) => String(line).includes("header_prepended"))).toBe(false);
+    });
+
+    it("keeps the byte-range path, prepending the first 512 bytes, for an MP3 whose frames can't be parsed", async () => {
+        // ID3 tag + one Layer III sync with no second frame behind it, then a recognisable byte pattern.
         const file = new Uint8Array(60_000);
         for (let i = 0; i < file.length; i++) file[i] = i % 251;
         file.set([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0, 0, 0, 0, 0xff, 0xfb, 0x90, 0x00]);

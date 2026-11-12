@@ -26,12 +26,17 @@ export const CHUNK_OVERLAP_BYTES = 32 * 1024; // 32KB (~2 seconds at 128kbps)
 export const MAX_TOTAL_SIZE_BYTES = 300 * 1024 * 1024; // 300MB safety limit
 
 /**
- * Longest audio a single MP4/M4A transcription chunk may cover. The model's
- * audio token budget scales with duration, so bytes alone are not a safe cap.
+ * Longest audio a single MP3, MP4/M4A or ADTS transcription chunk may cover.
+ * The model's audio token budget scales with duration, so bytes alone are not
+ * a safe cap. The `other` byte path (OGG, WAV) can't measure duration and
+ * stays byte-capped.
  */
 export const MAX_CHUNK_SECONDS = 15 * 60;
 
-/** Overlap between MP4/M4A chunks, measured in time and cut on sample boundaries. */
+/**
+ * Overlap between chunks in seconds of audio: cut on sample boundaries for
+ * MP4/M4A, converted to bytes at the average byte rate for MP3 and ADTS.
+ */
 export const CHUNK_OVERLAP_SECONDS = 2;
 
 /** Bytes fetched up front to sniff the container and, usually, locate `moov`. */
