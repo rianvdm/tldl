@@ -4,7 +4,7 @@
  * Handles the full pipeline for podcast episode processing:
  * 1. Fetch episode metadata from Apple/RSS
  * 2. Check for existing transcript (RSS or previous processing)
- * 3. Transcribe via OpenAI Whisper if needed
+ * 3. Transcribe via OpenAI gpt-transcribe if needed
  * 4. Generate summary via GPT-5.2
  * 5. Store results in KV
  */
@@ -44,6 +44,7 @@ import {
     type RssEpisode,
 } from "../services/rss";
 import { transcribeAudio } from "../services/transcription";
+import type { TranscriptionResult } from "../services/transcription";
 import { generateSummary } from "../services/summarization";
 import { notifySubscribers } from "../notifications";
 
@@ -221,9 +222,12 @@ const queueHandler = {
 
                 // Rate-limited jobs get more attempts with longer backoff to let CDN cool down
                 const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
-                // Unsupported audio (e.g. fragmented MP4, non-AAC codec) is deterministic: retrying can't help
-                const isUnsupported = error instanceof AppError && error.code === ERROR_CODES.AUDIO_UNSUPPORTED;
-                const maxAttempts = isUnsupported ? 1 : isRateLimited ? 5 : 3;
+                // Unsupported audio (e.g. fragmented MP4, non-AAC codec) and audio the
+                // model rejected are deterministic: retrying can't help
+                const isDeterministicAudioFailure =
+                    error instanceof AppError &&
+                    (error.code === ERROR_CODES.AUDIO_UNSUPPORTED || error.code === ERROR_CODES.AUDIO_REJECTED);
+                const maxAttempts = isDeterministicAudioFailure ? 1 : isRateLimited ? 5 : 3;
                 if (message.attempts >= maxAttempts) {
                     // Final attempt failed - mark job as failed and acknowledge
                     try {
@@ -442,7 +446,7 @@ async function readFeedEpisode(
  * 1. Check for existing episode/transcript (fast path for regeneration)
  * 2. Fetch metadata if needed
  * 3. Check RSS for transcript if needed
- * 4. Transcribe via Whisper if needed
+ * 4. Transcribe via gpt-transcribe if needed
  * 5. Generate summary
  * 6. Store all data
  */
@@ -598,7 +602,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         transcriptSource = transcript.source;
     }
 
-    // Step 3: Transcribe via Whisper if no transcript found
+    // Step 3: Transcribe via gpt-transcribe if no transcript found
     if (!transcript) {
         await updateJobStatusBoth(env, kv, jobId, "transcribing");
 
@@ -624,10 +628,15 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
             }));
         }
 
-        const transcriptionResult = await transcribeAudio(
-            audioUrl,
-            { apiKey: env.OPENAI_API_KEY, skipValidation },
-        );
+        let transcriptionResult: TranscriptionResult;
+        try {
+            transcriptionResult = await transcribeAudio(
+                audioUrl,
+                { apiKey: env.OPENAI_API_KEY, skipValidation },
+            );
+        } catch (error) {
+            throw withCheckChunksCommand(error, audioUrl);
+        }
 
         if (transcriptionResult.partial) {
             await reportPartialTranscript(env, episodeId, metadata, transcriptionResult);
@@ -985,6 +994,21 @@ async function updateJobEstimate(
     } catch {
         // Non-critical - don't fail job if estimate update fails
     }
+}
+
+/**
+ * Append a copy-paste `check:chunks` command to a model rejection, so the
+ * failure alert says how to reproduce it. Other errors pass through unchanged.
+ */
+function withCheckChunksCommand(error: unknown, audioUrl: string): unknown {
+    if (!(error instanceof AppError) || error.code !== ERROR_CODES.AUDIO_REJECTED) {
+        return error;
+    }
+    return new AppError(
+        ERROR_CODES.AUDIO_REJECTED,
+        `${error.userMessage}. Debug with: npm run check:chunks -- ${audioUrl} --transcribe`,
+        error
+    );
 }
 
 /**

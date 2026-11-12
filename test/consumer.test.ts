@@ -497,6 +497,45 @@ describe("Queue Consumer - process_episode", () => {
         expect(log.some((e) => e.type === "episode_failed")).toBe(true);
     });
 
+    it("fails rejected audio on the first attempt with a copy-paste debug command", async () => {
+        vi.mocked(getEpisodeMetadata).mockResolvedValue({
+            podcastName: "Test Podcast",
+            episodeTitle: "Test Episode",
+            episodeDuration: 1800,
+            episodeDate: "2024-01-15T00:00:00.000Z",
+            audioUrl: "https://example.com/audio.mp3",
+            feedUrl: "https://example.com/feed.xml",
+        });
+
+        vi.mocked(transcribeAudio).mockRejectedValue(
+            new AppError(
+                ERROR_CODES.AUDIO_REJECTED,
+                "gpt-transcribe rejected chunk 3/7 of the audio",
+                new Error('{"error":{"message":"Audio file might be corrupted or unsupported"}}')
+            )
+        );
+
+        const job = createSampleJob();
+        await createJob(env.TLDL_DATA, job);
+
+        const batch = createMockBatch([createQueueMessage()], { attempts: 1 });
+
+        await queueConsumer.queue(batch, getTestEnv());
+
+        expect(batch.messages[0].retry).not.toHaveBeenCalled();
+        expect(batch.messages[0].ack).toHaveBeenCalled();
+
+        const expected =
+            "gpt-transcribe rejected chunk 3/7 of the audio. Debug with: npm run check:chunks -- https://example.com/audio.mp3 --transcribe";
+        const updatedJob = await getJob(env.TLDL_DATA, job.id);
+        expect(updatedJob?.status).toBe("failed");
+        expect(updatedJob?.error).toBe(expected);
+
+        const log = await getActivityLog(env.TLDL_DATA);
+        const failure = log.find((e) => e.type === "episode_failed");
+        expect(failure?.details).toBe(expected);
+    });
+
     it("fails job on summarization error", async () => {
         vi.mocked(getEpisodeMetadata).mockResolvedValue({
             podcastName: "Test Podcast",
