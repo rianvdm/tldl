@@ -40,14 +40,3 @@ export function loggableHeaders(headers: Headers): Record<string, string> {
     });
     return out;
 }
-
-/**
- * `text` with every URL's query string replaced by `?…`, and any loose
- * `Signature=` value blanked, so an error body that echoes the request
- * (S3 and CloudFront errors can) can be logged.
- */
-export function redactQueries(text: string): string {
-    return text
-        .replace(/(https?:\/\/[^\s"'<>?#]+)\?[^\s"'<>#]*/g, "$1?…")
-        .replace(/((?:x-amz-)?signature=)[^&\s"'<>]*/gi, "$1…");
-}

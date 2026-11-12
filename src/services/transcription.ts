@@ -22,7 +22,7 @@ import {
     requiresChunking,
 } from "../lib/audio";
 import { adtsToM4a } from "../lib/adts";
-import { loggableHeaders, redactQueries, urlHost } from "../lib/log-urls";
+import { loggableHeaders, urlHost } from "../lib/log-urls";
 import { splitMp3ByDuration } from "../lib/mp3";
 import type { ChunkTranscriptCache } from "../types";
 import type { FetchRange } from "./audio-containers";
@@ -519,6 +519,7 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
                 ...fetchErrorHosts(audioUrl, response),
                 redirected: response.redirected,
                 headers: loggableHeaders(response.headers),
+                ...(await errorBodyFields(response)),
             }));
             throw new AppError(
                 ERROR_CODES.AUDIO_UNAVAILABLE,
@@ -528,10 +529,6 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
 
         if (!response.ok) {
             // Capture diagnostic details for non-200 responses
-            let respBody: string | null = null;
-            try {
-                respBody = redactQueries((await response.text()).slice(0, 1000));
-            } catch { /* ignore */ }
             console.log(
                 JSON.stringify({
                     event: "fetch_audio_error_details",
@@ -539,7 +536,7 @@ async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
                     ...fetchErrorHosts(audioUrl, response),
                     redirected: response.redirected,
                     headers: loggableHeaders(response.headers),
-                    body: respBody,
+                    ...(await errorBodyFields(response)),
                 })
             );
             throw new AppError(
@@ -577,6 +574,19 @@ function fetchErrorHosts(requestedUrl: string, response: Response): { requestedH
         requestedHost: urlHost(requestedUrl),
         ...(response.url && { finalHost: urlHost(response.url) }),
     };
+}
+
+/**
+ * An audio host's error body described by its size and type, never its
+ * text: CDN and S3 error bodies can echo the signed URL, in forms (such as
+ * JSON-escaped slashes) no redaction reliably catches.
+ */
+async function errorBodyFields(response: Response): Promise<{ bodyBytes: number | null; bodyContentType: string | null }> {
+    let bodyBytes: number | null = null;
+    try {
+        bodyBytes = (await response.arrayBuffer()).byteLength;
+    } catch { /* unreadable: size unknown */ }
+    return { bodyBytes, bodyContentType: response.headers.get("content-type") };
 }
 
 async function wholeAudio(response: Response): Promise<WholeAudio> {

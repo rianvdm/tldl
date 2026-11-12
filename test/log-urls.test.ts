@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { loggableHeaders, redactQueries, urlHost, urlPath } from "../src/lib/log-urls";
+import { loggableHeaders, urlHost, urlPath } from "../src/lib/log-urls";
 
 const SIGNED = "https://substackcdn.example.com/feed/podcast/1/ep.mp3?Expires=1789000000&Signature=s3cr3t&Key-Pair-Id=K2";
 
@@ -41,22 +41,5 @@ describe("loggableHeaders", () => {
             "cf-ray": "8abc-LHR",
             server: "AmazonS3",
         });
-    });
-});
-
-describe("redactQueries", () => {
-    it("drops every URL's query and any loose signature value", () => {
-        const body = `<Error><Url>${SIGNED}</Url><Canonical>X-Amz-Signature=abc123&X-Amz-Date=1</Canonical></Error>`;
-
-        const redacted = redactQueries(body);
-
-        expect(redacted).toBe(
-            "<Error><Url>https://substackcdn.example.com/feed/podcast/1/ep.mp3?…</Url>" +
-                "<Canonical>X-Amz-Signature=…&X-Amz-Date=1</Canonical></Error>",
-        );
-    });
-
-    it("leaves text without a query alone", () => {
-        expect(redactQueries("403 Forbidden: https://example.com/ep.mp3")).toBe("403 Forbidden: https://example.com/ep.mp3");
     });
 });

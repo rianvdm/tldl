@@ -1875,6 +1875,32 @@ describe("audio URLs stay out of logs (#48)", () => {
         for (const key of Object.keys(details.headers as object)) expect(ALLOWED_HEADERS).toContain(key);
     });
 
+    it("a failed fetch logs the error body's size and type, never the body (plain or JSON-escaped URLs)", async () => {
+        const url = "https://cdn.example/a.mp3?Expires=1&token=private-token";
+        // A JSON body with escaped slashes (as PHP and others write it) and the plain URL.
+        const escaped = String.raw`https:\/\/cdn.example\/a.mp3?Expires=1&token=private-token`;
+        const body = `{"error":"denied","url":"${escaped}","detail":"see ${url}"}`;
+        vi.spyOn(globalThis, "fetch").mockImplementation(
+            async () => new Response(body, { status: 500, headers: { "content-type": "application/json" } }),
+        );
+
+        const error = await transcribeAudio(url, { apiKey: "k", skipValidation: true }).catch((e) => e);
+
+        expect((error as AppError).code).toBe(ERROR_CODES.AUDIO_UNAVAILABLE);
+        const text = output();
+        expect(text).not.toContain("private-token");
+        expect(text).not.toContain("Expires=");
+        expect(text).not.toContain("a.mp3");
+        const details = logged().find((e) => e.event === "fetch_audio_error_details")!;
+        expect(details).toMatchObject({
+            status: 500,
+            requestedHost: "cdn.example",
+            bodyBytes: new TextEncoder().encode(body).length,
+            bodyContentType: "application/json",
+        });
+        expect(details).not.toHaveProperty("body");
+    });
+
     it("a 403 retried through redirect resolution logs hosts only, on failure and on success", async () => {
         for (const retryStatus of [403, 200]) {
             clearOutput();
