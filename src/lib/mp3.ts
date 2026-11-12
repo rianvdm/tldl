@@ -124,22 +124,37 @@ export function parseMp3FrameHeader(bytes: Uint8Array, offset: number): Mp3Frame
     };
 }
 
+export interface FindMp3FrameOptions {
+    /**
+     * `bytes` ends where the file ends, so a frame ending exactly at
+     * `bytes.length` is the file's last frame and needs no second header.
+     * Leave false for a probe or range that stops mid-file: a stray sync word
+     * whose computed frame happens to end at the cut would otherwise count.
+     */
+    bufferEndsFile?: boolean;
+}
+
 /**
  * Offset of the first confirmed frame at or after `from` and before `to`
  * (exclusive, default `bytes.length`), or -1 when there is none.
  *
  * `0xFF 0xE?` occurs naturally inside compressed audio, so one header that
  * parses proves nothing. A frame counts only when another header of the same
- * MPEG version and sample rate starts one frame length on, or when the frame
- * ends exactly at the end of `bytes` (the buffer's last frame).
+ * MPEG version and sample rate starts one frame length on, or, with
+ * `bufferEndsFile`, when the frame ends exactly at the end of `bytes`.
  */
-export function findMp3Frame(bytes: Uint8Array, from: number, to: number = bytes.length): number {
+export function findMp3Frame(
+    bytes: Uint8Array,
+    from: number,
+    to: number = bytes.length,
+    { bufferEndsFile = false }: FindMp3FrameOptions = {}
+): number {
     const end = Math.min(to, bytes.length - 3);
     for (let i = Math.max(from, 0); i < end; i++) {
         const header = parseMp3FrameHeader(bytes, i);
         if (!header) continue;
         const next = i + header.frameLength;
-        if (next === bytes.length) return i;
+        if (next === bytes.length && bufferEndsFile) return i;
         const nextHeader = parseMp3FrameHeader(bytes, next);
         if (
             nextHeader &&
@@ -209,7 +224,9 @@ export function analyzeMp3(
     fileSize: number,
     scanFrom: number
 ): Mp3Analysis | null {
-    const first = findMp3Frame(probe, Math.max(scanFrom - probeOffset, 0));
+    const first = findMp3Frame(probe, Math.max(scanFrom - probeOffset, 0), probe.length, {
+        bufferEndsFile: probeOffset + probe.length >= fileSize,
+    });
     if (first === -1) return null;
     const firstHeader = parseMp3FrameHeader(probe, first)!;
 

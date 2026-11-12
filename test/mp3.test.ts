@@ -108,12 +108,29 @@ describe("findMp3Frame", () => {
         expect(findMp3Frame(new Uint8Array(4096), 0)).toBe(-1);
     });
 
-    it("accepts a frame that ends exactly at the end of the buffer", () => {
+    it("accepts a frame that ends exactly at the end of the buffer only when that is the file's end", () => {
         const { bytes, first } = loadMp3(MP3_NO_HEADER);
         const next = first + parseMp3FrameHeader(bytes, first)!.frameLength;
         const oneFrame = bytes.slice(first, next);
-        expect(findMp3Frame(oneFrame, 0)).toBe(0);
-        expect(findMp3Frame(oneFrame.slice(0, -1), 0)).toBe(-1); // truncated: not confirmed
+        expect(findMp3Frame(oneFrame, 0, oneFrame.length, { bufferEndsFile: true })).toBe(0);
+        expect(findMp3Frame(oneFrame, 0)).toBe(-1); // a mid-file slice: no second header, not confirmed
+        expect(findMp3Frame(oneFrame.slice(0, -1), 0, oneFrame.length, { bufferEndsFile: true })).toBe(-1); // truncated
+    });
+
+    it("mid-file, skips an isolated sync word whose frame would end at the buffer's end", () => {
+        // A 500-byte range from inside the audio with a real (confirmed) frame at offset 41.
+        const { bytes, first } = loadMp3(MP3_NO_HEADER);
+        const frameLength = parseMp3FrameHeader(bytes, first)!.frameLength;
+        const start = first + frameLength - 41;
+        const range = bytes.slice(start, start + 500);
+        expect(findMp3Frame(range, 0)).toBe(41);
+
+        // A 480-byte frame header (MPEG-1, 160 kbps, 48 kHz) at 20: its frame ends exactly at 500.
+        range.set([0xff, 0xfb, 0xa4, 0xc0], 20);
+        expect(parseMp3FrameHeader(range, 20)!.frameLength).toBe(480);
+
+        expect(findMp3Frame(range, 0)).toBe(41);
+        expect(findMp3Frame(range, 0, range.length, { bufferEndsFile: true })).toBe(20);
     });
 });
 
@@ -197,6 +214,18 @@ describe("analyzeMp3", () => {
         junk.set(bytes.slice(0, first)); // the real ID3 tag, then zeros
         junk.set([0xff, 0xfb, 0x50, 0xc0], first + 100); // one unconfirmed sync word
         expect(analyzeMp3(junk, 0, junk.length, first)).toBeNull();
+    });
+
+    it("treats a frame ending at the probe's end as confirmed only when the probe reaches the file's end", () => {
+        const { bytes, first } = loadMp3(MP3_CBR_INFO);
+        const probe = new Uint8Array(first + 4096);
+        probe.set(bytes.slice(0, first)); // the real ID3 tag, then zeros
+        // A lone 1440-byte frame header (MPEG-1, 320 kbps, 32 kHz) whose frame ends at the probe's end.
+        probe.set([0xff, 0xfb, 0xe8, 0xc0], probe.length - 1440);
+        expect(parseMp3FrameHeader(probe, probe.length - 1440)!.frameLength).toBe(1440);
+
+        expect(analyzeMp3(probe, 0, probe.length + 100_000, first)).toBeNull();
+        expect(analyzeMp3(probe, 0, probe.length, first)?.firstFrameOffset).toBe(probe.length - 1440);
     });
 
     it("returns null when the scan starts past the end of the probe", () => {

@@ -356,7 +356,7 @@ function planMp3Chunks(
             plannedSeconds: sizeBytes / bytesPerSecond,
             load: async () => {
                 const body = await fetchExact(fetchRange, startByte, endByte);
-                return exactBuffer(range.isFirst ? body : startAtAudioFrame(body, index, startByte));
+                return exactBuffer(range.isFirst ? body : startAtAudioFrame(body, index, startByte, range.isLast));
             },
         };
     });
@@ -365,11 +365,13 @@ function planMp3Chunks(
 
 /**
  * Trim a mid-stream MP3 chunk to start at its first confirmed frame, skipping
- * that frame too when it is a VBR header. Without a frame in the resync
- * window, logs `mp3_resync_failed` and returns the bytes unchanged.
+ * that frame too when it is a VBR header. Only the last chunk ends at the
+ * file's end, so only there may a frame ending at the chunk's end go
+ * unconfirmed. Without a frame in the resync window, logs
+ * `mp3_resync_failed` and returns the bytes unchanged.
  */
-function startAtAudioFrame(body: Uint8Array, index: number, startByte: number): Uint8Array {
-    const frame = findMp3Frame(body, 0, MP3_RESYNC_WINDOW_BYTES);
+function startAtAudioFrame(body: Uint8Array, index: number, startByte: number, isLast: boolean): Uint8Array {
+    const frame = findMp3Frame(body, 0, MP3_RESYNC_WINDOW_BYTES, { bufferEndsFile: isLast });
     if (frame === -1) {
         console.log(JSON.stringify({ event: "mp3_resync_failed", chunkIndex: index + 1, startByte }));
         return body;

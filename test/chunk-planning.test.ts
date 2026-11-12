@@ -187,6 +187,27 @@ describe("planChunks: MP3", () => {
         expectBareAudioFrame(second);
     });
 
+    it("resync skips an isolated sync word whose frame would end exactly at the chunk's end", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        // 1440-byte chunks, so a 1440-byte frame header (MPEG-1, 320 kbps, 32 kHz) planted
+        // at chunk 2's first byte looks like a frame filling the whole range.
+        const limits = { maxBytes: 1440, maxSeconds: 900 };
+        const p0 = await plan(file, limits);
+        const { startByte, endByte } = p0.chunks[1].logFields as { startByte: number; endByte: number };
+        expect(endByte - startByte + 1).toBe(1440);
+        expect(p0.chunks[1].isLast).toBe(false);
+        file.set([0xff, 0xfb, 0xe8, 0xc0], startByte);
+        expect(parseMp3FrameHeader(file, startByte)!.frameLength).toBe(1440);
+
+        const p = await plan(file, limits);
+        const second = new Uint8Array(await p.chunks[1].load());
+
+        const header = parseMp3FrameHeader(second, 0)!;
+        expect(header).toMatchObject({ sampleRate: 44100, bitrateKbps: 64 });
+        expect(second.length).toBeLessThan(1440);
+        expect(second).toEqual(file.slice(endByte + 1 - second.length, endByte + 1));
+    });
+
     it("large ID3 tag: plans from the after-tag probe", async () => {
         const file = fixtureBytes(MP3_BIG_ID3);
         expect(id3Length(file)).toBeGreaterThan(CONTAINER_PROBE_BYTES);
