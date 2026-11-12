@@ -11,6 +11,7 @@ import { AppError } from "../lib/errors";
 import { ERROR_CODES, TIMEOUTS, AUDIO_LIMITS, AUDIO_USER_AGENT } from "../lib/constants";
 import { withRetry, isTransientError, isRateLimitError, sleep } from "../lib/retry";
 import {
+    CHUNK_OVERLAP_SECONDS,
     CONTAINER_PROBE_BYTES,
     MAX_CHUNK_SECONDS,
     assertWithinTotalSizeLimit,
@@ -21,12 +22,14 @@ import {
     requiresChunking,
 } from "../lib/audio";
 import { adtsToM4a } from "../lib/adts";
+import { splitMp3ByDuration } from "../lib/mp3";
 import type { ChunkTranscriptCache } from "../types";
 import type { FetchRange } from "./audio-containers";
 import {
     CHUNK_PLAN_VERSION,
     detectContainer,
     exactBuffer,
+    isMp3FramePlan,
     planChunks,
     type AudioContainer,
     type ChunkPlan,
@@ -792,12 +795,14 @@ export interface AudioSource {
 }
 
 /**
- * How a file goes to the model: one upload of exactly `upload`, or a chunk
- * plan. A whole-file `plan` is null when the planner couldn't plan the file.
+ * How a file goes to the model: the whole file, sent as exactly `uploads`
+ * (one upload, or an MP3 split by measured duration; see `uploadParts`), or
+ * a chunk plan. A whole-file `plan` is null when the planner couldn't plan
+ * the file.
  */
 export type UploadRoute =
     | { kind: "chunked"; plan: ChunkPlan }
-    | { kind: "whole"; upload: ArrayBuffer; plan: ChunkPlan | null; container: AudioContainer };
+    | { kind: "whole"; uploads: ArrayBuffer[]; plan: ChunkPlan | null; container: AudioContainer };
 
 /**
  * Decide how the Worker uploads a file. `transcribeAudio` and the
@@ -808,9 +813,10 @@ export type UploadRoute =
  *   `maxSeconds` per chunk.
  * - Otherwise the file is read whole and planned in memory with the upload
  *   limit as its byte cap, so it is chunked only when its audio runs past
- *   `maxSeconds`. A single upload is the plan's only chunk for MP3 (bare
- *   frames, no ID3 tag or VBR header frame) and the file itself otherwise
- *   (ADTS rewrapped as M4A), including when the planner can't plan it.
+ *   `maxSeconds`. A whole-file upload is the plan's only chunk for MP3 (bare
+ *   frames, no ID3 tag or VBR header frame, split into parts when its frames
+ *   run past `maxSeconds`) and the file itself otherwise (ADTS rewrapped as
+ *   M4A), including when the planner can't plan it.
  */
 export async function planUploads(source: AudioSource, limits: UploadLimits): Promise<UploadRoute> {
     const { contentType, fetchRange } = source;
@@ -852,14 +858,53 @@ export async function planUploads(source: AudioSource, limits: UploadLimits): Pr
 
     // MP3 uploads the plan's only chunk, which drops the ID3 tag and any
     // Xing/Info/VBRI frame (or is the whole file when its frames can't be
-    // parsed); everything else uploads as it always has.
-    const upload = plan?.container === "mp3" ? await plan.chunks[0].load() : prepareForUpload(buffer);
+    // parsed), split if its frames run past the cap; everything else uploads
+    // as it always has.
+    const uploads =
+        plan?.container === "mp3"
+            ? uploadParts(await plan.chunks[0].load(), plan, plan.chunks[0], limits.maxSeconds)
+            : [prepareForUpload(buffer)];
     return {
         kind: "whole",
-        upload,
+        uploads,
         plan,
         container: plan?.container ?? detectContainer(probeOf(buffer)),
     };
+}
+
+/**
+ * The uploads that carry one planned chunk's bytes (or a whole-file upload's,
+ * its plan's only chunk). The MP3 planner sizes chunks from the VBR header or
+ * the first frame's bitrate, which a file whose bitrate drops after a short
+ * high-bitrate opening makes far too low, so an MP3 chunk cut on frame
+ * boundaries is measured by its frames and, past `maxSeconds`, split into
+ * parts that each fit it (logged as `mp3_upload_split`). Every other upload,
+ * including MP3 on the byte path, goes up as one. `transcribeAudio` and
+ * `check:chunks` both upload through here.
+ */
+export function uploadParts(
+    upload: ArrayBuffer,
+    plan: ChunkPlan | null,
+    chunk: PlannedChunk,
+    maxSeconds: number,
+): ArrayBuffer[] {
+    if (!isMp3FramePlan(plan)) return [upload];
+    const { seconds, parts } = splitMp3ByDuration(new Uint8Array(upload), maxSeconds, {
+        overlapSeconds: CHUNK_OVERLAP_SECONDS,
+        bufferEndsFile: chunk.isLast,
+    });
+    if (parts.length === 1) return [upload];
+    console.log(
+        JSON.stringify({
+            event: "mp3_upload_split",
+            chunkIndex: chunk.index + 1,
+            totalChunks: plan.chunks.length,
+            measuredSeconds: Math.round(seconds * 100) / 100,
+            maxSeconds,
+            parts: parts.length,
+        })
+    );
+    return parts.map(exactBuffer);
 }
 
 /**
@@ -970,44 +1015,72 @@ export async function transcribeAudio(
         return await transcribePlan(route.plan, ctx);
     }
 
-    // Step 4: One upload, of exactly the bytes planUploads chose.
-    const { upload: uploadBuffer, plan } = route;
+    // Step 4: The whole file, as exactly the bytes planUploads chose.
+    const { uploads, plan } = route;
     if (plan) {
         console.log(
             JSON.stringify({
                 event: "upload_plan",
                 ...planLogFields(plan, ctx),
-                uploadBytes: uploadBuffer.byteLength,
+                uploadBytes: uploads.reduce((n, upload) => n + upload.byteLength, 0),
             })
         );
     }
-    try {
-        const text = await withRetry(
-            () => callTranscriptionApi(uploadBuffer, opts.apiKey, providerConfig, validation.contentType),
-            {
-                maxRetries: 3,
-                baseDelayMs: 1000,
-                shouldRetry: isTransientError,
-            },
-        );
-        return {
-            text: text.trim(),
-            source: providerConfig.name,
-            model: providerConfig.model,
-        };
-    } catch (error) {
-        if (isRejection(error)) {
-            logRejection(error, {
-                position: { wholeFile: true },
-                upload: uploadBuffer,
-                container: route.container,
-                chunk: plan?.chunks[0],
-                vbrHeaderDropped: plan?.audio.vbrHeaderDropped ?? false,
-                audioHost: ctx.audioHost,
-            });
+    const text = await transcribeUploads(uploads, ctx, (error, upload, part) =>
+        logRejection(error, {
+            position: { wholeFile: true },
+            part,
+            upload,
+            container: route.container,
+            chunk: plan?.chunks[0],
+            vbrHeaderDropped: plan?.audio.vbrHeaderDropped ?? false,
+            audioHost: ctx.audioHost,
+        }),
+    );
+    return {
+        text,
+        source: providerConfig.name,
+        model: providerConfig.model,
+    };
+}
+
+/** Which of a chunk's uploads, when `uploadParts` split it. */
+interface UploadPart {
+    part: number;
+    totalParts: number;
+}
+
+/**
+ * Transcribe one chunk's uploads (or a whole file's) in order, retrying
+ * each on transient errors, and stitch their texts (one upload's text is
+ * returned trimmed). A rejection is passed to `onRejected` with the upload
+ * that drew it, then rethrown.
+ */
+async function transcribeUploads(
+    uploads: ArrayBuffer[],
+    ctx: TranscribePlanContext,
+    onRejected: (error: AppError, upload: ArrayBuffer, part: UploadPart | undefined) => void,
+): Promise<string> {
+    const texts: ChunkTranscription[] = [];
+    for (const [i, upload] of uploads.entries()) {
+        try {
+            const text = await withRetry(
+                () => callTranscriptionApi(upload, ctx.apiKey, ctx.provider, ctx.contentType),
+                {
+                    maxRetries: 3,
+                    baseDelayMs: 1000,
+                    shouldRetry: isTransientError,
+                },
+            );
+            texts.push({ text: text.trim(), isFirst: i === 0, isLast: i === uploads.length - 1, overlapBytes: 0 });
+        } catch (error) {
+            if (isRejection(error)) {
+                onRejected(error, upload, uploads.length > 1 ? { part: i + 1, totalParts: uploads.length } : undefined);
+            }
+            throw error;
         }
-        throw error;
     }
+    return stitchTranscripts(texts);
 }
 
 /**
@@ -1133,6 +1206,8 @@ function isRejection(error: unknown): error is AppError {
 interface RejectedUpload {
     /** Which chunk of how many, or the whole file in one upload. */
     position: { chunkIndex: number; totalChunks: number } | { wholeFile: true };
+    /** Which of the chunk's uploads, when it was split by measured duration. */
+    part?: UploadPart;
     /** The bytes sent to the API. */
     upload: ArrayBuffer;
     container: AudioContainer;
@@ -1148,12 +1223,13 @@ interface RejectedUpload {
  * the full OpenAI error body. Host only, never the URL: CDN URLs can be signed.
  */
 function logRejection(error: AppError, rejected: RejectedUpload): void {
-    const { position, upload, container, chunk, vbrHeaderDropped, audioHost } = rejected;
+    const { position, part, upload, container, chunk, vbrHeaderDropped, audioHost } = rejected;
     console.error(
         JSON.stringify({
             event: "transcription_rejected",
             container,
             ...position,
+            ...part,
             uploadBytes: upload.byteLength,
             plannedSeconds: chunk?.plannedSeconds,
             ...chunk?.logFields,
@@ -1200,7 +1276,7 @@ async function planRemote(
  * @returns Combined transcription result
  */
 async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Promise<TranscriptionResult> {
-    const { apiKey, provider, contentType, audioHost, onProgress, chunkCache } = ctx;
+    const { provider, audioHost, onProgress, chunkCache } = ctx;
     const { totalBytes, chunks } = plan;
     const totalChunks = chunks.length;
 
@@ -1249,8 +1325,6 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             continue;
         }
 
-        // Kept outside the try so a rejection can log the bytes it sent.
-        let upload: ArrayBuffer | undefined;
         try {
             // Add delay between chunk fetches to avoid CDN rate limits
             if (fetchedAChunk) {
@@ -1258,20 +1332,20 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             }
             fetchedAChunk = true;
 
-            const bufferToTranscribe = await chunk.load();
-            upload = bufferToTranscribe;
-
-            // Transcribe the chunk
-            const chunkText = await withRetry(
-                () => callTranscriptionApi(bufferToTranscribe, apiKey, provider, contentType),
-                {
-                    maxRetries: 3,
-                    baseDelayMs: 1000,
-                    shouldRetry: isTransientError,
-                },
+            // Transcribe the chunk: one upload, or its parts in order when
+            // its frames run past the cap. A rejected part fails the chunk.
+            const uploads = uploadParts(await chunk.load(), plan, chunk, ctx.maxChunkSeconds);
+            const text = await transcribeUploads(uploads, ctx, (error, upload, part) =>
+                logRejection(error, {
+                    position: { chunkIndex: chunkNumber, totalChunks },
+                    part,
+                    upload,
+                    container: plan.container,
+                    chunk,
+                    vbrHeaderDropped: plan.audio.vbrHeaderDropped ?? false,
+                    audioHost,
+                }),
             );
-
-            const text = chunkText.trim();
             transcriptions.push({
                 text,
                 isFirst: chunk.isFirst,
@@ -1287,7 +1361,7 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
                     event: "chunk_completed",
                     chunkIndex: chunkNumber,
                     totalChunks,
-                    textLength: chunkText.length,
+                    textLength: text.length,
                 })
             );
         } catch (error) {
@@ -1306,17 +1380,6 @@ async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Prom
             // The file itself can't be chunked: dropping the tail would hide that.
             if (error instanceof AppError && error.code === ERROR_CODES.AUDIO_UNSUPPORTED) {
                 throw error;
-            }
-
-            if (isRejection(error) && upload) {
-                logRejection(error, {
-                    position: { chunkIndex: chunkNumber, totalChunks },
-                    upload,
-                    container: plan.container,
-                    chunk,
-                    vbrHeaderDropped: plan.audio.vbrHeaderDropped ?? false,
-                    audioHost,
-                });
             }
 
             // Tolerate failure of a small trailing chunk: some podcast files end in

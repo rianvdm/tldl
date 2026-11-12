@@ -78,6 +78,15 @@ lame --silent -p -b 64 -m m "$TMP/tone.wav" "$TMP/crc-info.mp3"
 "${FF[@]}" -f lavfi -i "sine=frequency=440:duration=2" "${OUTFMT[@]}" "${MP3[@]}" -b:a 64k "$TMP/two-seconds.mp3"
 cat "$TMP/two-seconds.mp3" "$TMP/cbr-info.mp3" > "$TMP/stitched.mp3"
 
+# Mixed bitrate: a 1 s, 256 kbps file (ID3 tag and Info frame) followed by 12 s
+# of bare 32 kbps frames (another tone), like a high-bitrate opening stitched
+# onto a low-bitrate episode. Estimated at the first frame's bitrate it looks
+# like about 2.6 s; it decodes to about 13 s.
+"${FF[@]}" -f lavfi -i "sine=frequency=440:duration=1" "${OUTFMT[@]}" "${MP3[@]}" -b:a 256k "$TMP/opening.mp3"
+"${FF[@]}" -f lavfi -i "sine=frequency=330:duration=12" "${OUTFMT[@]}" "${MP3[@]}" -b:a 32k \
+    -write_xing 0 -id3v2_version 0 "$TMP/body-32k.mp3"
+cat "$TMP/opening.mp3" "$TMP/body-32k.mp3" > "$TMP/mixed-bitrate.mp3"
+
 emit() { # name file
     printf 'export const %s =\n    "%s";\n\n' "$1" "$(base64 < "$2" | tr -d '\n')"
 }
@@ -87,6 +96,7 @@ emit() { # name file
     echo '// Each fixture is a 5 second, mono, 44.1 kHz 440 Hz tone, base64 encoded,'
     echo '// except MP3_STITCHED: a 2 s file followed by the whole of MP3_CBR_INFO.'
     echo '// MP3_CRC_INFO is encoded by lame with error protection (-p), no ID3 tag.'
+    echo '// MP3_MIXED_BITRATE: 1 s at 256 kbps, then 12 s of bare 32 kbps frames.'
     echo
     emit MOOV_FIRST_M4A "$TMP/moov-first.m4a"
     emit MOOV_LAST_M4A "$TMP/moov-last.m4a"
@@ -101,6 +111,7 @@ emit() { # name file
     emit MP3_BIG_ID3 "$TMP/big-id3.mp3"
     emit MP3_STITCHED "$TMP/stitched.mp3"
     emit MP3_CRC_INFO "$TMP/crc-info.mp3"
+    emit MP3_MIXED_BITRATE "$TMP/mixed-bitrate.mp3"
     cat <<'TS'
 /** Decode a base64 fixture into bytes. */
 export function fixtureBytes(b64: string): Uint8Array {

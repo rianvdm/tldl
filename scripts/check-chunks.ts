@@ -1,8 +1,10 @@
 /**
  * Local check for uploads (#53, #48): route the file with the Worker's own
- * routing (`planUploads`, which `transcribeAudio` also calls), write each
- * upload exactly as the Worker would send it, decode each one in full with
- * ffmpeg, and optionally send them to OpenAI.
+ * routing (`planUploads` and `uploadParts`, which `transcribeAudio` also
+ * calls), write each upload exactly as the Worker would send it, decode each
+ * one in full with ffmpeg, and optionally send them to OpenAI. An MP3 chunk
+ * (or whole-file upload) whose frames run past `--max-seconds` goes up in
+ * parts, as in production, and each part is checked as an upload.
  *
  * A file over the 25 MB upload limit is chunked with `--max-mb` per chunk
  * (default 15). A file under it is routed as production routes it: chunked
@@ -16,17 +18,18 @@
  * and ADTS (rewritten as M4A), and anything else, such as OGG or WAV (byte
  * ranges, with the file's first 512 bytes prepended after chunk 1).
  *
- * Each chunk must decode with no ffmpeg errors. Where the planner caps chunk
- * duration (MP3, MP4, ADTS), ffprobe's duration must be at most
- * `--max-seconds` + 5; the byte path is capped by bytes only, so its duration
- * is printed but not checked. MP4 chunks must hold as many audio packets as
+ * Each upload must decode with no ffmpeg errors. Where the planner caps
+ * duration (MP3, MP4, ADTS), the duration ffmpeg decodes must be at most
+ * `--max-seconds` + 5: decoded in full, not ffprobe's estimate, which MP3
+ * takes from the first frame's bitrate and can be far too low. The byte path
+ * is capped by bytes only, so its duration is printed but not checked. MP4 chunks must hold as many audio packets as
  * the plan put non-empty samples in them. MP3 chunks must start on a frame
  * that parses and is not a Xing/Info/VBRI frame, which would declare the whole
  * file's duration.
  *
- * Chunks land in scripts/chunk-check-results/<name>/ (gitignored).
- * `--transcribe` sends each chunk with the filename and MIME type the Worker
- * would send (from the chunk's magic bytes, then the source's content type),
+ * Uploads land in scripts/chunk-check-results/<name>/ (gitignored).
+ * `--transcribe` sends each upload with the filename and MIME type the Worker
+ * would send (from the upload's magic bytes, then the source's content type),
  * using the production model with no fallback, and reads OPENAI_API_KEY from
  * .dev.vars.
  * Exits non-zero on any failed check or any non-200.
@@ -41,13 +44,14 @@ import { AUDIO_USER_AGENT } from "../src/lib/constants";
 import { findMp3Frame, parseMp3FrameHeader, readVbrHeader } from "../src/lib/mp3";
 import { parseAudioTrack, type Mp4AudioTrack } from "../src/lib/mp4";
 import { locateMoov, type FetchRange } from "../src/services/audio-containers";
-import { type ChunkPlan, type PlannedChunk } from "../src/services/chunk-planning";
+import { isMp3FramePlan, type ChunkPlan, type PlannedChunk } from "../src/services/chunk-planning";
 import {
     detectAudioFormat,
     getProviderConfig,
     mimeFromExtension,
     planUploads,
     uploadLimits,
+    uploadParts,
 } from "../src/services/transcription";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -167,14 +171,27 @@ function resultsDir(source: string): string {
     return dir;
 }
 
-/** Decode the whole file, discarding the audio; returns ffmpeg's errors (empty when clean). */
-function ffmpegDecodeErrors(path: string): string {
-    const result = spawnSync("ffmpeg", ["-nostdin", "-v", "error", "-i", path, "-f", "null", "-"], {
-        encoding: "utf8",
-    });
+interface Decode {
+    /** ffmpeg's errors; empty when the decode was clean. */
+    errors: string;
+    /** Seconds of audio ffmpeg decoded, or null when it reported none. */
+    seconds: number | null;
+}
+
+/** Decode the whole file, discarding the audio; report ffmpeg's errors and how much audio it decoded. */
+function ffmpegDecode(path: string): Decode {
+    const result = spawnSync(
+        "ffmpeg",
+        ["-nostdin", "-v", "error", "-i", path, "-f", "null", "-", "-progress", "pipe:1", "-nostats"],
+        { encoding: "utf8" },
+    );
     if (result.error) throw result.error;
-    const errors = result.stderr.trim();
-    return result.status === 0 ? errors : errors || `ffmpeg exited with status ${result.status}`;
+    const stderr = result.stderr.trim();
+    const errors = result.status === 0 ? stderr : stderr || `ffmpeg exited with status ${result.status}`;
+    // -progress writes key=value blocks to stdout; the last out_time_us is where decoding ended.
+    const times = [...result.stdout.matchAll(/^out_time_us=(\d+)$/gm)];
+    const seconds = times.length > 0 ? Number(times[times.length - 1][1]) / 1e6 : null;
+    return { errors, seconds };
 }
 
 /** One ffprobe value as a number, or null when ffprobe fails or reports none. */
@@ -189,11 +206,6 @@ function ffprobeNumber(path: string, args: string[]): number | null {
     } catch {
         return null;
     }
-}
-
-/** The container's duration as ffprobe reports it. */
-function ffprobeDuration(path: string): number | null {
-    return ffprobeNumber(path, ["-show_entries", "format=duration"]);
 }
 
 /** Audio packets ffprobe reads from the first audio stream. */
@@ -242,14 +254,16 @@ function mp3TruncatedTailBytes(bytes: Uint8Array): number {
  * the chunk decodes clean without that frame, so an error anywhere else
  * still fails.
  */
-function mp3DecodeErrors(path: string, bytes: Uint8Array): { errors: string; truncatedTailBytes: number } {
-    const errors = ffmpegDecodeErrors(path);
-    const tail = errors === "" ? 0 : mp3TruncatedTailBytes(bytes);
-    if (tail === 0) return { errors, truncatedTailBytes: 0 };
+function mp3Decode(path: string, bytes: Uint8Array): Decode & { truncatedTailBytes: number } {
+    const decode = ffmpegDecode(path);
+    const tail = decode.errors === "" ? 0 : mp3TruncatedTailBytes(bytes);
+    if (tail === 0) return { ...decode, truncatedTailBytes: 0 };
     const trimmedPath = `${path}.trimmed.mp3`;
     writeFileSync(trimmedPath, bytes.subarray(0, bytes.length - tail));
     try {
-        return ffmpegDecodeErrors(trimmedPath) === "" ? { errors: "", truncatedTailBytes: tail } : { errors, truncatedTailBytes: 0 };
+        return ffmpegDecode(trimmedPath).errors === ""
+            ? { ...decode, errors: "", truncatedTailBytes: tail }
+            : { ...decode, truncatedTailBytes: 0 };
     } finally {
         unlinkSync(trimmedPath);
     }
@@ -306,26 +320,42 @@ async function main(): Promise<void> {
     );
     const plan = route.plan;
     const container = route.kind === "whole" ? route.container : route.plan.container;
-    // What the Worker sends: each planned chunk, or exactly one whole-file upload.
-    const uploads: { label: string; name: string; chunk?: PlannedChunk; load(): Promise<ArrayBuffer> }[] =
+    // What the Worker sends: each planned chunk's uploads, or the whole file's.
+    const sources: { label: string; name: string; chunk?: PlannedChunk; load(): Promise<ArrayBuffer[]> }[] =
         route.kind === "chunked"
             ? route.plan.chunks.map((chunk) => ({
                   label: `chunk ${chunk.index + 1}/${route.plan.chunks.length}`,
                   name: `chunk-${String(chunk.index + 1).padStart(2, "0")}`,
                   chunk,
-                  load: () => chunk.load(),
+                  load: async () => uploadParts(await chunk.load(), route.plan, chunk, args.maxSeconds),
               }))
-            : [{ label: "whole-file upload", name: "whole", chunk: route.plan?.chunks[0], load: async () => route.upload }];
+            : [{ label: "whole-file upload", name: "whole", chunk: route.plan?.chunks[0], load: async () => route.uploads }];
+    const count = Math.min(sources.length, args.limit);
+    /** The uploads of the first `count` sources, in order; a split source's parts are labelled. */
+    async function* uploads() {
+        for (const source of sources.slice(0, count)) {
+            const parts = await source.load();
+            for (const [i, part] of parts.entries()) {
+                const split = parts.length > 1;
+                yield {
+                    label: split ? `${source.label} part ${i + 1}/${parts.length}` : source.label,
+                    name: split ? `${source.name}-part-${i + 1}` : source.name,
+                    chunk: source.chunk,
+                    bytes: new Uint8Array(part),
+                };
+            }
+        }
+    }
     console.log(
         `\nfile: ${size} bytes, content type ${contentType}, container ${container}, ` +
         (route.kind === "chunked"
             ? `${route.plan.totalBytes} audio bytes, ${route.plan.chunks.length} chunks`
-            : "one whole-file upload (under the upload limit and the duration cap)"),
+            : "uploaded whole (under the upload limit, and the planner's duration estimate is under the cap)"),
     );
     console.log(`audio: ${describeAudio(plan)}`);
 
-    // Only the frames path sets vbrHeader; MP3 whose frames can't be parsed falls back to the byte path.
-    const mp3Frames = plan?.container === "mp3" && plan.audio.vbrHeader !== undefined;
+    // MP3 whose frames can't be parsed falls back to the byte path.
+    const mp3Frames = isMp3FramePlan(plan);
     if (container === "mp3" && !mp3Frames) console.log("mp3: frames not found, byte path; frame checks skipped");
     // The plan keeps only sample ranges; the sizes say which samples carry a packet.
     const probe = new Uint8Array(await fetchRange(0, Math.min(CONTAINER_PROBE_BYTES, size) - 1));
@@ -336,9 +366,9 @@ async function main(): Promise<void> {
     console.log("");
 
     let failed = false;
-    const count = Math.min(uploads.length, args.limit);
-    for (const { label, name, chunk, load } of uploads.slice(0, count)) {
-        const bytes = new Uint8Array(await load());
+    let uploadCount = 0;
+    for await (const { label, name, chunk, bytes } of uploads()) {
+        uploadCount++;
         const format = uploadFormat(bytes, contentType);
         const path = join(outDir, `${name}.${format.ext}`);
         writeFileSync(path, bytes);
@@ -346,13 +376,13 @@ async function main(): Promise<void> {
         const problems: string[] = [];
         const notes: string[] = [`${(bytes.length / 1024 / 1024).toFixed(2)} MB`, `audio.${format.ext} ${format.mime}`];
 
-        const duration = ffprobeDuration(path);
+        const decode = mp3Frames ? mp3Decode(path, bytes) : { ...ffmpegDecode(path), truncatedTailBytes: 0 };
         if (chunk?.plannedSeconds !== undefined) notes.push(`planned ${chunk.plannedSeconds.toFixed(1)}s`);
-        notes.push(`ffprobe ${duration === null ? "no duration" : `${duration.toFixed(1)}s`}`);
+        notes.push(`decoded ${decode.seconds === null ? "no duration" : `${decode.seconds.toFixed(1)}s`}`);
         if (chunk?.plannedSeconds !== undefined) {
             const cap = args.maxSeconds + DURATION_SLACK_SECONDS;
-            if (duration === null) problems.push("ffprobe reports no duration");
-            else if (duration > cap) problems.push(`ffprobe duration ${duration.toFixed(1)}s is over ${cap}s`);
+            if (decode.seconds === null) problems.push("ffmpeg decoded no audio");
+            else if (decode.seconds > cap) problems.push(`decoded duration ${decode.seconds.toFixed(1)}s is over ${cap}s`);
         }
 
         if (track && chunk) {
@@ -368,7 +398,6 @@ async function main(): Promise<void> {
             if (problem) problems.push(problem);
         }
 
-        const decode = mp3Frames ? mp3DecodeErrors(path, bytes) : { errors: ffmpegDecodeErrors(path), truncatedTailBytes: 0 };
         const decodeErrors = decode.errors;
         notes.push(
             decodeErrors !== ""
@@ -396,7 +425,8 @@ async function main(): Promise<void> {
         }
     }
 
-    console.log(`\n${failed ? "FAILED" : "all checks passed"} (${count} of ${uploads.length} uploads checked)`);
+    const checked = `${uploadCount} uploads from ${count} of ${sources.length} ${route.kind === "chunked" ? "chunks" : "files"}`;
+    console.log(`\n${failed ? "FAILED" : "all checks passed"} (${checked} checked)`);
     if (failed) process.exitCode = 1;
 }
 

@@ -365,6 +365,15 @@ function planMp3Chunks(
 }
 
 /**
+ * The plan cut an MP3 on frame boundaries, so its chunks are bare MPEG
+ * frames. False for MP3 whose frames couldn't be parsed, which keeps the
+ * byte path (and is the only MP3 plan without `audio.vbrHeader`).
+ */
+export function isMp3FramePlan(plan: ChunkPlan | null): plan is ChunkPlan {
+    return plan?.container === "mp3" && plan.audio.vbrHeader !== undefined;
+}
+
+/**
  * Trim a mid-stream MP3 chunk to start at its first confirmed frame, skipping
  * that frame too when it is a VBR header. Only the last chunk ends at the
  * file's end, so only there may a frame ending at the chunk's end go

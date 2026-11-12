@@ -52,6 +52,7 @@ import {
     MOOV_LAST_M4A,
     MP3_CBR_INFO,
     MP3_CRC_INFO,
+    MP3_MIXED_BITRATE,
     fixtureBytes,
 } from "./fixtures/audio";
 
@@ -2021,7 +2022,7 @@ describe("planUploads (the Worker's routing, shared with check:chunks)", () => {
         expect(route.kind).toBe("whole");
         if (route.kind !== "whole") return;
         expect(route.container).toBe("mp4");
-        expect(new Uint8Array(route.upload)).toEqual(file);
+        expect(route.uploads.map((u) => new Uint8Array(u))).toEqual([file]);
         expect(reads).toEqual(["whole"]);
     });
 
@@ -2035,7 +2036,7 @@ describe("planUploads (the Worker's routing, shared with check:chunks)", () => {
 
         expect(route.kind).toBe("whole");
         if (route.kind !== "whole") return;
-        expect(new Uint8Array(route.upload)).toEqual(file.slice(audioStart));
+        expect(route.uploads.map((u) => new Uint8Array(u))).toEqual([file.slice(audioStart)]);
     });
 
     it("sends a CRC-protected LAME MP3 as one upload without its Info frame", async () => {
@@ -2049,7 +2050,7 @@ describe("planUploads (the Worker's routing, shared with check:chunks)", () => {
         expect(route.kind).toBe("whole");
         if (route.kind !== "whole") return;
         expect(route.plan?.audio.vbrHeaderDropped).toBe(true);
-        expect(new Uint8Array(route.upload)).toEqual(file.slice(audioStart));
+        expect(route.uploads.map((u) => new Uint8Array(u))).toEqual([file.slice(audioStart)]);
     });
 
     it("chunks a small file past the duration cap with the upload limit as the byte cap", async () => {
@@ -2090,12 +2091,149 @@ describe("planUploads (the Worker's routing, shared with check:chunks)", () => {
         expect(reads).not.toContain("whole");
     });
 
+    it("splits a small MP3 whose frames run past maxSeconds though the planner's estimate fits one upload", async () => {
+        const file = fixtureBytes(MP3_MIXED_BITRATE);
+        const { source } = memorySource(file, "audio/mpeg");
+
+        const route = await planUploads(source, uploadLimits({ maxSeconds: 5 }));
+
+        // The planner estimates from the 256 kbps opening: one upload.
+        expect(route.kind).toBe("whole");
+        if (route.kind !== "whole") return;
+        expect(route.plan?.chunks).toHaveLength(1);
+        expect(route.plan!.audio.usedSeconds!).toBeLessThan(5);
+        // The frames hold about 13 s, so the upload goes in parts of at most 5 s.
+        expect(route.uploads.length).toBeGreaterThanOrEqual(3);
+        for (const upload of route.uploads) {
+            const bytes = new Uint8Array(upload);
+            expect(readVbrHeader(bytes, 0, parseMp3FrameHeader(bytes, 0)!)).toBeNull();
+            expect(contiguousSeconds(bytes)).toBeLessThanOrEqual(5);
+        }
+        const total = route.uploads.reduce((n, u) => n + contiguousSeconds(new Uint8Array(u)), 0);
+        expect(total).toBeGreaterThan(12.5);
+    });
+
     it("defaults to the Worker's limits", () => {
         expect(uploadLimits()).toEqual({
             uploadLimitBytes: AUDIO_LIMITS.MAX_SIZE_BYTES,
             maxBytes: TARGET_CHUNK_SIZE_BYTES,
             maxSeconds: MAX_CHUNK_SECONDS,
         });
+    });
+});
+
+/** Seconds of audio in contiguous MP3 frames from offset 0, stopping at a gap or a frame cut short. */
+function contiguousSeconds(bytes: Uint8Array): number {
+    let seconds = 0;
+    for (let offset = 0; ; ) {
+        const header = parseMp3FrameHeader(bytes, offset);
+        if (!header || offset + header.frameLength > bytes.length) return seconds;
+        seconds += header.samplesPerFrame / header.sampleRate;
+        offset += header.frameLength;
+    }
+}
+
+describe("MP3 uploads measured by their frames (#48)", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const MP3_URL = "https://cdn.example.com/episode.mp3";
+    const MAX_SECONDS = 5;
+
+    function splitEvents(log: { mock: { calls: unknown[][] } }) {
+        return loggedEvents(log).filter((e) => e.event === "mp3_upload_split");
+    }
+
+    it("a whole-file upload over the cap goes up in parts, transcribed in order and stitched", async () => {
+        const file = fixtureBytes(MP3_MIXED_BITRATE);
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg", allowWholeFileGet: true });
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const result = await transcribeAudio(MP3_URL, {
+            apiKey: "k",
+            chunkLimits: { maxBytes: TARGET_CHUNK_SIZE_BYTES, maxSeconds: MAX_SECONDS },
+        });
+
+        expect(uploads.length).toBeGreaterThanOrEqual(3);
+        for (const upload of uploads) expect(contiguousSeconds(upload.bytes)).toBeLessThanOrEqual(MAX_SECONDS);
+        expect(result.text).toBe(uploads.map((_, i) => `chunk ${i + 1}.`).join(" "));
+        const [split] = splitEvents(log);
+        expect(splitEvents(log)).toHaveLength(1);
+        expect(split).toEqual({
+            event: "mp3_upload_split",
+            chunkIndex: 1,
+            totalChunks: 1,
+            measuredSeconds: expect.any(Number),
+            maxSeconds: MAX_SECONDS,
+            parts: uploads.length,
+        });
+        expect(split.measuredSeconds as number).toBeGreaterThan(12.5);
+    });
+
+    it("a planned chunk over the cap is split, and the chunk cache stores one stitched text for it", async () => {
+        const file = fixtureBytes(MP3_MIXED_BITRATE);
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg" });
+        const entries = new Map<string, { text: string }>();
+        const cache: ChunkTranscriptCache = {
+            get: async (key) => entries.get(key) ?? null,
+            put: async (key, value) => {
+                entries.set(key, value);
+            },
+        };
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const result = await transcribeAudio(MP3_URL, { ...chunkedOptions(MAX_SECONDS), chunkCache: cache });
+
+        expect(uploads.length).toBeGreaterThanOrEqual(3);
+        const stitched = uploads.map((_, i) => `chunk ${i + 1}.`).join(" ");
+        expect(result.text).toBe(stitched);
+        expect([...entries.values()]).toEqual([{ text: stitched }]);
+        expect(splitEvents(log)).toEqual([expect.objectContaining({ chunkIndex: 1, parts: uploads.length })]);
+    });
+
+    it("leaves an upload within the cap whole and logs no split", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        const { uploads } = serveAudio(file, { contentType: "audio/mpeg", allowWholeFileGet: true });
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await transcribeAudio(MP3_URL, { apiKey: "k" });
+
+        expect(uploads).toHaveLength(1);
+        expect(splitEvents(log)).toEqual([]);
+    });
+
+    it("a rejected part fails its chunk as AUDIO_REJECTED, logs the part, and caches nothing", async () => {
+        const file = fixtureBytes(MP3_MIXED_BITRATE);
+        const { uploads } = serveAudio(file, {
+            contentType: "audio/mpeg",
+            respond: (_upload, n) => (n === 2 ? new Response(CORRUPTED_ERROR, { status: 400 }) : undefined),
+        });
+        const entries = new Map<string, { text: string }>();
+        const cache: ChunkTranscriptCache = {
+            get: async (key) => entries.get(key) ?? null,
+            put: async (key, value) => {
+                entries.set(key, value);
+            },
+        };
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const thrown = await transcribeAudio(MP3_URL, { ...chunkedOptions(MAX_SECONDS), chunkCache: cache }).catch((e) => e);
+
+        expect((thrown as AppError).code).toBe(ERROR_CODES.AUDIO_REJECTED);
+        expect((thrown as AppError).message).toBe("gpt-transcribe rejected chunk 1/1 of the audio");
+        expect(uploads).toHaveLength(2);
+        const rejected = loggedEvents(error).filter((e) => e.event === "transcription_rejected");
+        expect(rejected).toEqual([
+            expect.objectContaining({ chunkIndex: 1, totalChunks: 1, part: 2, totalParts: expect.any(Number), uploadBytes: uploads[1].bytes.length }),
+        ]);
+        expect(rejected[0].totalParts as number).toBeGreaterThanOrEqual(3);
+        expect(entries.size).toBe(0);
     });
 });
 

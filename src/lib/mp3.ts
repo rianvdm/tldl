@@ -259,6 +259,115 @@ export function analyzeMp3(
 }
 
 // ============================================================================
+// Measured duration
+// ============================================================================
+
+export interface SplitMp3Options {
+    /**
+     * Audio each part after the first repeats from the end of the part before
+     * it, so stitching can drop the words cut at the boundary. Capped at a
+     * quarter of `maxSeconds`, so the parts always advance.
+     */
+    overlapSeconds: number;
+    /** `bytes` ends where the file ends (see `FindMp3FrameOptions`). */
+    bufferEndsFile?: boolean;
+}
+
+export interface Mp3Split {
+    /** The audio the frames hold: Σ samplesPerFrame / sampleRate over every complete frame. */
+    seconds: number;
+    /** `[bytes]` itself when it holds at most `maxSeconds`; otherwise frame-aligned parts. */
+    parts: Uint8Array[];
+}
+
+/**
+ * Measure an MP3 upload by its frames and, when it holds more than
+ * `maxSeconds`, split it into frame-aligned parts that each hold at most
+ * `maxSeconds`, of about equal length, consecutive parts overlapping by
+ * about `overlapSeconds`.
+ *
+ * Duration estimates from the first frame's bitrate or a VBR header can be
+ * far too low (a short high-bitrate opening before low-bitrate audio), and
+ * the model rejects an upload holding too much audio, so this counts the
+ * frames. The walk follows frame lengths, and resyncs on a confirmed frame
+ * (see `findMp3Frame`) where a header is missing or changes MPEG version or
+ * sample rate (junk or a tag between stitched pieces). A frame cut short by
+ * the end of `bytes` is not counted. No part starts on a Xing/Info/VBRI
+ * frame. `bytes` is returned whole when no frame is found.
+ */
+export function splitMp3ByDuration(
+    bytes: Uint8Array,
+    maxSeconds: number,
+    { overlapSeconds, bufferEndsFile = false }: SplitMp3Options
+): Mp3Split {
+    const { starts, times, vbr } = walkMp3Frames(bytes, bufferEndsFile);
+    const frameCount = starts.length;
+    const seconds = times[frameCount];
+    if (frameCount === 0 || seconds <= maxSeconds) return { seconds, parts: [bytes] };
+
+    // Equal parts, each `target` long, rather than full parts and a sliver.
+    const overlap = Math.min(overlapSeconds, maxSeconds / 4);
+    const partCount = Math.ceil((seconds - overlap) / (maxSeconds - overlap));
+    const target = Math.min(maxSeconds, (seconds - overlap) / partCount + overlap);
+
+    const skipVbr = (i: number) => {
+        while (i < frameCount && vbr[i]) i++;
+        return i;
+    };
+    const parts: Uint8Array[] = [];
+    let first = skipVbr(0);
+    while (first < frameCount) {
+        // The rest goes in this part when it fits the cap; otherwise frames up to `target`.
+        const cap = times[frameCount] - times[first] <= maxSeconds ? maxSeconds : target;
+        let end = first + 1; // exclusive; at least one frame
+        while (end < frameCount && times[end + 1] - times[first] <= cap) end++;
+        parts.push(bytes.subarray(starts[first], end < frameCount ? starts[end] : bytes.length));
+        if (end >= frameCount) break;
+
+        // Back up about `overlap` seconds for the next part, always moving past `first`.
+        let next = end;
+        while (next - 1 > first && times[end] - times[next - 1] <= overlap) next--;
+        first = skipVbr(next);
+    }
+    return { seconds, parts };
+}
+
+/**
+ * Every complete frame in `bytes`: its start, the time it starts at (with
+ * one more entry, the total), and whether it is a Xing/Info/VBRI frame.
+ */
+function walkMp3Frames(
+    bytes: Uint8Array,
+    bufferEndsFile: boolean
+): { starts: number[]; times: number[]; vbr: boolean[] } {
+    const starts: number[] = [];
+    const times: number[] = [0];
+    const vbr: boolean[] = [];
+    let previous: Mp3FrameHeader | null = null;
+    let offset = findMp3Frame(bytes, 0, bytes.length, { bufferEndsFile });
+    while (offset !== -1 && offset < bytes.length) {
+        const header = parseMp3FrameHeader(bytes, offset);
+        const follows =
+            header !== null &&
+            (previous === null ||
+                (header.version === previous.version && header.sampleRate === previous.sampleRate));
+        if (!follows) {
+            // Resync; `previous` is cleared so the confirmed frame found is taken as it is.
+            offset = findMp3Frame(bytes, offset, bytes.length, { bufferEndsFile });
+            previous = null;
+            continue;
+        }
+        if (offset + header.frameLength > bytes.length) break; // cut short
+        starts.push(offset);
+        times.push(times[times.length - 1] + header.samplesPerFrame / header.sampleRate);
+        vbr.push(readVbrHeader(bytes, offset, header) !== null);
+        previous = header;
+        offset += header.frameLength;
+    }
+    return { starts, times, vbr };
+}
+
+// ============================================================================
 // Byte helpers
 // ============================================================================
 

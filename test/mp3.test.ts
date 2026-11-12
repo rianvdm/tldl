@@ -8,12 +8,14 @@ import {
     findMp3Frame,
     parseMp3FrameHeader,
     readVbrHeader,
+    splitMp3ByDuration,
 } from "../src/lib/mp3";
 import { id3Length } from "../src/lib/audio";
 import {
     MP3_BIG_ID3,
     MP3_CBR_INFO,
     MP3_CRC_INFO,
+    MP3_MIXED_BITRATE,
     MP3_NO_HEADER,
     MP3_STITCHED,
     MP3_VBR_XING,
@@ -273,5 +275,112 @@ describe("analyzeMp3", () => {
         const { bytes } = loadMp3(MP3_CBR_INFO);
         const probe = bytes.slice(0, 1024);
         expect(analyzeMp3(probe, 0, bytes.length, 4096)).toBeNull();
+    });
+});
+
+/**
+ * Seconds of audio in `bytes`, walking frame lengths from offset 0 and
+ * stopping at the first gap or a frame cut short. Good enough for uploads
+ * that are contiguous frames (the mixed-bitrate fixture has no tag between
+ * its pieces).
+ */
+function contiguousSeconds(bytes: Uint8Array): number {
+    let seconds = 0;
+    for (let offset = 0; ; ) {
+        const header = parseMp3FrameHeader(bytes, offset);
+        if (!header || offset + header.frameLength > bytes.length) return seconds;
+        seconds += header.samplesPerFrame / header.sampleRate;
+        offset += header.frameLength;
+    }
+}
+
+/** The part starts on a frame that is plain audio, not a Xing/Info/VBRI frame. */
+function expectBareStart(part: Uint8Array) {
+    const header = parseMp3FrameHeader(part, 0);
+    expect(header).not.toBeNull();
+    expect(readVbrHeader(part, 0, header!)).toBeNull();
+}
+
+describe("splitMp3ByDuration", () => {
+    const OPTIONS = { overlapSeconds: 2, bufferEndsFile: true };
+
+    /** The fixture's audio as the planner uploads it: from the first frame after any VBR header. */
+    function audioOf(b64: string): Uint8Array {
+        const bytes = fixtureBytes(b64);
+        const first = id3Length(bytes);
+        return bytes.subarray(analyzeMp3(bytes, 0, bytes.length, first)!.audioStart);
+    }
+
+    it("returns the bytes whole, with their measured duration, when they fit maxSeconds", () => {
+        const audio = audioOf(MP3_NO_HEADER);
+
+        const split = splitMp3ByDuration(audio, 10, OPTIONS);
+
+        expect(split.parts).toHaveLength(1);
+        expect(split.parts[0]).toBe(audio);
+        expect(split.seconds).toBeCloseTo(contiguousSeconds(audio), 6);
+        expect(split.seconds).toBeCloseTo(5, 0);
+    });
+
+    it("splits a mixed-bitrate upload the first frame's bitrate underestimates, each part within maxSeconds", () => {
+        const bytes = fixtureBytes(MP3_MIXED_BITRATE);
+        const analysis = analyzeMp3(bytes, 0, bytes.length, id3Length(bytes))!;
+        const audio = bytes.subarray(analysis.audioStart);
+        // The planner's view: under 5 s. The frames hold about 13 s.
+        expect(analysis.usedSeconds).toBeLessThan(5);
+        expect(contiguousSeconds(audio)).toBeGreaterThan(12.5);
+
+        const { seconds, parts } = splitMp3ByDuration(audio, 5, OPTIONS);
+
+        expect(seconds).toBeCloseTo(contiguousSeconds(audio), 6);
+        expect(parts.length).toBe(Math.ceil((seconds - 1.25) / (5 - 1.25)));
+        for (const part of parts) {
+            expectBareStart(part);
+            expect(contiguousSeconds(part)).toBeLessThanOrEqual(5);
+            expect(contiguousSeconds(part)).toBeGreaterThan(2); // equal parts, no sliver
+        }
+        // In order, covering the audio, each part starting inside the one before it.
+        const start = (part: Uint8Array) => part.byteOffset - audio.byteOffset;
+        expect(start(parts[0])).toBe(0);
+        expect(start(parts.at(-1)!) + parts.at(-1)!.length).toBe(audio.length);
+        for (let i = 1; i < parts.length; i++) {
+            const previousEnd = start(parts[i - 1]) + parts[i - 1].length;
+            expect(start(parts[i])).toBeLessThan(previousEnd);
+            expect(start(parts[i])).toBeGreaterThan(start(parts[i - 1]));
+            // The overlap is a quarter of the 5 s cap at most.
+            const overlap = contiguousSeconds(audio.subarray(start(parts[i]), previousEnd));
+            expect(overlap).toBeGreaterThan(0);
+            expect(overlap).toBeLessThanOrEqual(1.25);
+        }
+    });
+
+    it("measures through the tag between stitched pieces and never starts a part on a VBR header frame", () => {
+        const audio = audioOf(MP3_STITCHED);
+        // ffmpeg decodes MP3_STITCHED to 7.08 s.
+        expect(splitMp3ByDuration(audio, 60, OPTIONS).seconds).toBeCloseTo(7.1, 1);
+
+        for (let maxSeconds = 0.5; maxSeconds <= 3; maxSeconds += 0.25) {
+            const { parts } = splitMp3ByDuration(audio, maxSeconds, OPTIONS);
+            expect(parts.length).toBeGreaterThan(1);
+            for (const part of parts) {
+                expectBareStart(part);
+                expect(splitMp3ByDuration(part, Infinity, OPTIONS).seconds).toBeLessThanOrEqual(maxSeconds);
+            }
+        }
+    });
+
+    it("does not count a frame cut short by the end of the bytes", () => {
+        const audio = audioOf(MP3_NO_HEADER);
+        const lastFrame = parseMp3FrameHeader(audio, 0)!; // CBR: every frame the same duration
+        const whole = splitMp3ByDuration(audio, 60, OPTIONS).seconds;
+
+        const cut = splitMp3ByDuration(audio.subarray(0, audio.length - 10), 60, { overlapSeconds: 2 }).seconds;
+
+        expect(cut).toBeCloseTo(whole - lastFrame.samplesPerFrame / lastFrame.sampleRate, 6);
+    });
+
+    it("returns the bytes whole when they hold no frame", () => {
+        const zeros = new Uint8Array(4096);
+        expect(splitMp3ByDuration(zeros, 1, OPTIONS)).toEqual({ seconds: 0, parts: [zeros] });
     });
 });
