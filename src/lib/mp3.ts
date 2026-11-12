@@ -183,17 +183,22 @@ export function readVbrHeader(
 ): VbrHeader | null {
     const frameEnd = Math.min(frameOffset + header.frameLength, bytes.length);
 
-    // Xing/Info: after the header, the optional CRC and the side information.
+    // Xing/Info: after the header and the side information. LAME writes the
+    // tag there even when a CRC follows the header (it doesn't shift it by
+    // the CRC's 2 bytes); other encoders may, so a CRC frame checks both.
     const sideInfoBytes =
         header.version === 1 ? (header.channels === 1 ? 17 : 32) : header.channels === 1 ? 9 : 17;
-    const xingTag = frameOffset + 4 + (header.crc ? 2 : 0) + sideInfoBytes;
-    const xingKind = asciiAt(bytes, xingTag, frameEnd);
-    if (xingKind === "Xing" || xingKind === "Info") {
-        // Flags (4 bytes); bit 0 says a 4-byte frame count follows.
-        const flags = uint32At(bytes, xingTag + 4, frameEnd);
-        const frames =
-            flags !== null && (flags & 0x01) !== 0 ? uint32At(bytes, xingTag + 8, frameEnd) : null;
-        return { kind: xingKind === "Xing" ? "xing" : "info", frames };
+    const xingOffsets = header.crc ? [4 + sideInfoBytes, 4 + 2 + sideInfoBytes] : [4 + sideInfoBytes];
+    for (const offset of xingOffsets) {
+        const xingTag = frameOffset + offset;
+        const xingKind = asciiAt(bytes, xingTag, frameEnd);
+        if (xingKind === "Xing" || xingKind === "Info") {
+            // Flags (4 bytes); bit 0 says a 4-byte frame count follows.
+            const flags = uint32At(bytes, xingTag + 4, frameEnd);
+            const frames =
+                flags !== null && (flags & 0x01) !== 0 ? uint32At(bytes, xingTag + 8, frameEnd) : null;
+            return { kind: xingKind === "Xing" ? "xing" : "info", frames };
+        }
     }
 
     const vbriTag = frameOffset + VBRI_TAG_OFFSET;

@@ -51,6 +51,7 @@ import {
     MOOV_FIRST_M4A,
     MOOV_LAST_M4A,
     MP3_CBR_INFO,
+    MP3_CRC_INFO,
     fixtureBytes,
 } from "./fixtures/audio";
 
@@ -2034,6 +2035,20 @@ describe("planUploads (the Worker's routing, shared with check:chunks)", () => {
 
         expect(route.kind).toBe("whole");
         if (route.kind !== "whole") return;
+        expect(new Uint8Array(route.upload)).toEqual(file.slice(audioStart));
+    });
+
+    it("sends a CRC-protected LAME MP3 as one upload without its Info frame", async () => {
+        const file = fixtureBytes(MP3_CRC_INFO);
+        const { source } = memorySource(file, "audio/mpeg");
+        const id3 = id3Length(file);
+        const audioStart = id3 + parseMp3FrameHeader(file, id3)!.frameLength;
+
+        const route = await planUploads(source, uploadLimits());
+
+        expect(route.kind).toBe("whole");
+        if (route.kind !== "whole") return;
+        expect(route.plan?.audio.vbrHeaderDropped).toBe(true);
         expect(new Uint8Array(route.upload)).toEqual(file.slice(audioStart));
     });
 

@@ -13,6 +13,7 @@ import { id3Length } from "../src/lib/audio";
 import {
     MP3_BIG_ID3,
     MP3_CBR_INFO,
+    MP3_CRC_INFO,
     MP3_NO_HEADER,
     MP3_STITCHED,
     MP3_VBR_XING,
@@ -152,6 +153,35 @@ describe("readVbrHeader", () => {
         expect(read(MP3_NO_HEADER)).toBeNull();
     });
 
+    it("finds LAME's Info tag in a CRC-protected frame, where LAME writes it (no CRC offset)", () => {
+        const { bytes, first } = loadMp3(MP3_CRC_INFO);
+        const header = parseMp3FrameHeader(bytes, first)!;
+        expect(header).toMatchObject({ crc: true, channels: 1, version: 1 });
+        // 4-byte header + 17 bytes of mono MPEG-1 side info; LAME doesn't move the tag for the CRC.
+        expect(new TextDecoder().decode(bytes.subarray(first + 21, first + 25))).toBe("Info");
+
+        const vbr = readVbrHeader(bytes, first, header);
+        expect(vbr?.kind).toBe("info");
+        expect(vbr?.frames).toBeGreaterThan(0);
+    });
+
+    it("also finds a Xing/Info tag at the CRC-adjusted offset, for encoders that shift it", () => {
+        // MP3_CBR_INFO's Info frame with the protection bit set and a CRC word inserted after
+        // the header, so the tag moves 2 bytes on, to 4 + 2 + 17.
+        const { bytes, first } = loadMp3(MP3_CBR_INFO);
+        const plain = bytes.slice(first, first + parseMp3FrameHeader(bytes, first)!.frameLength);
+        const frame = new Uint8Array(plain.length);
+        frame.set(plain.subarray(0, 4));
+        frame[1] &= 0xfe; // protection bit 0: a CRC follows
+        frame.set([0x12, 0x34], 4);
+        frame.set(plain.subarray(4, plain.length - 2), 6);
+        const header = parseMp3FrameHeader(frame, 0)!;
+        expect(header.crc).toBe(true);
+        expect(new TextDecoder().decode(frame.subarray(23, 27))).toBe("Info");
+
+        expect(readVbrHeader(frame, 0, header)).toEqual(readVbrHeader(bytes, first, parseMp3FrameHeader(bytes, first)!));
+    });
+
     it("finds a VBRI tag 36 bytes into the frame", () => {
         // A 1,045-byte MPEG-1 frame (320 kbps, 44.1 kHz, padded) carrying a VBRI tag.
         const frame = new Uint8Array(1045);
@@ -177,6 +207,17 @@ describe("analyzeMp3", () => {
         expect(Math.abs(a.estimatedSeconds - 5)).toBeLessThan(0.1);
         expect(a.usedSeconds).toBeGreaterThanOrEqual(a.estimatedSeconds);
         expect(a.usedSeconds).toBeGreaterThanOrEqual(a.declaredSeconds!);
+    });
+
+    it("analyzeMp3 skips a CRC-protected LAME Info frame", () => {
+        const { bytes, first } = loadMp3(MP3_CRC_INFO);
+        const a = analyzeMp3(bytes, 0, bytes.length, first)!;
+        const infoFrame = parseMp3FrameHeader(bytes, first)!;
+
+        expect(a.firstFrameOffset).toBe(first);
+        expect(a.vbrHeader).toBe("info");
+        expect(a.audioStart).toBe(first + infoFrame.frameLength);
+        expect(Math.abs(a.declaredSeconds! - 5)).toBeLessThan(0.1);
     });
 
     it("starts audio at the first frame when there is no VBR header", () => {

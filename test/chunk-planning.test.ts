@@ -19,6 +19,7 @@ import {
     MOOV_FIRST_M4A,
     MP3_BIG_ID3,
     MP3_CBR_INFO,
+    MP3_CRC_INFO,
     MP3_STITCHED,
     fixtureBytes,
 } from "./fixtures/audio";
@@ -141,6 +142,27 @@ describe("planChunks: MP3", () => {
         expect(first).toEqual(file.slice(audioStart, (p.chunks[0].logFields.endByte as number) + 1));
         // newBytes add up to the audio after audioStart.
         expect(p.chunks.reduce((n, c) => n + c.newBytes, 0)).toBe(p.totalBytes);
+    });
+
+    it("CRC-protected LAME MP3: the Info frame is dropped from chunk 1 and vbrHeaderDropped is true", async () => {
+        const file = fixtureBytes(MP3_CRC_INFO);
+        const id3 = id3Length(file);
+        const infoFrame = parseMp3FrameHeader(file, id3)!;
+        expect(infoFrame.crc).toBe(true);
+        // LAME writes the tag right after the mono side info, CRC or not.
+        expect(new TextDecoder().decode(file.subarray(id3 + 21, id3 + 25))).toBe("Info");
+        const audioStart = id3 + infoFrame.frameLength;
+
+        const p = await plan(file);
+        const chunks = await loadAll(p);
+
+        expect(p.audio).toMatchObject({ vbrHeader: "info", vbrHeaderDropped: true });
+        expect(p.chunks[0].logFields).toMatchObject({ startByte: audioStart });
+        expect(chunks[0]).toEqual(file.slice(audioStart, (p.chunks[0].logFields.endByte as number) + 1));
+        for (const bytes of chunks) {
+            expect(new TextDecoder().decode(bytes.subarray(21, 25))).not.toBe("Info");
+            expectBareAudioFrame(bytes);
+        }
     });
 
     it("plannedSeconds never exceeds maxSeconds", async () => {
