@@ -12,6 +12,9 @@ import {
     detectAudioFormat,
     prepareForUpload,
     chunkCacheKey,
+    planUploads,
+    uploadLimits,
+    type AudioSource,
 } from "../src/services/transcription";
 import { withRetry, isTransientError, isRateLimitError, isServerError } from "../src/lib/retry";
 import { AppError } from "../src/lib/errors";
@@ -1977,6 +1980,107 @@ describe("duration-aware routing for small files", () => {
         expect(plans[0]).toMatchObject({ ...mp3Summary(file), uploadBytes: file.length - mp3AudioStart(file) });
         expectHostOnly(plans[0]);
         expect(events.some((e) => e.event === "chunking_plan")).toBe(false);
+    });
+});
+
+describe("planUploads (the Worker's routing, shared with check:chunks)", () => {
+    beforeEach(() => {
+        vi.spyOn(console, "log").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** An in-memory source that records how it was read. */
+    function memorySource(file: Uint8Array, contentType = "unknown") {
+        const reads: string[] = [];
+        const source: AudioSource = {
+            size: file.length,
+            contentType,
+            audioHost: "cdn.example.com",
+            fetchWhole: async () => {
+                reads.push("whole");
+                return file.slice().buffer;
+            },
+            fetchRange: async (start, end) => {
+                reads.push(`${start}-${end}`);
+                return file.slice(start, end + 1).buffer;
+            },
+        };
+        return { source, reads };
+    }
+
+    it("sends a small MP4 as one whole-file upload, bytes unchanged", async () => {
+        const file = fixtureBytes(MOOV_FIRST_M4A);
+        const { source, reads } = memorySource(file);
+
+        const route = await planUploads(source, uploadLimits());
+
+        expect(route.kind).toBe("whole");
+        if (route.kind !== "whole") return;
+        expect(route.container).toBe("mp4");
+        expect(new Uint8Array(route.upload)).toEqual(file);
+        expect(reads).toEqual(["whole"]);
+    });
+
+    it("sends a small MP3 as one upload of bare frames", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        const { source } = memorySource(file, "audio/mpeg");
+        const id3 = id3Length(file);
+        const audioStart = id3 + parseMp3FrameHeader(file, id3)!.frameLength;
+
+        const route = await planUploads(source, uploadLimits());
+
+        expect(route.kind).toBe("whole");
+        if (route.kind !== "whole") return;
+        expect(new Uint8Array(route.upload)).toEqual(file.slice(audioStart));
+    });
+
+    it("chunks a small file past the duration cap with the upload limit as the byte cap", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        const { source, reads } = memorySource(file, "audio/mpeg");
+        // A tiny per-chunk byte cap must not apply to a file that fits one upload.
+        const limits = uploadLimits({ maxBytes: 1024, maxSeconds: 2 });
+
+        const route = await planUploads(source, limits);
+
+        const expected = await planChunks({
+            probe: file,
+            fileSize: file.length,
+            contentType: "audio/mpeg",
+            limits: { maxBytes: limits.uploadLimitBytes, maxSeconds: 2 },
+            fetchRange: async (start, end) => file.slice(start, end + 1).buffer,
+        });
+        expect(route.kind).toBe("chunked");
+        if (route.kind !== "chunked") return;
+        expect(route.plan.chunks.map((c) => c.cacheId)).toEqual(expected.chunks.map((c) => c.cacheId));
+        expect(reads).toEqual(["whole"]);
+    });
+
+    it("plans a file over the upload limit from range reads with the per-chunk byte cap", async () => {
+        const file = fixtureBytes(MP3_CBR_INFO);
+        const { source, reads } = memorySource(file, "audio/mpeg");
+        const limits = uploadLimits({ uploadLimitBytes: 1024, maxBytes: 4096 });
+
+        const route = await planUploads(source, limits);
+
+        expect(route.kind).toBe("chunked");
+        if (route.kind !== "chunked") return;
+        expect(route.plan.chunks.length).toBeGreaterThan(1);
+        for (const chunk of route.plan.chunks) {
+            const { startByte, endByte } = chunk.logFields as { startByte: number; endByte: number };
+            expect(endByte - startByte + 1).toBeLessThanOrEqual(4096);
+        }
+        expect(reads).not.toContain("whole");
+    });
+
+    it("defaults to the Worker's limits", () => {
+        expect(uploadLimits()).toEqual({
+            uploadLimitBytes: AUDIO_LIMITS.MAX_SIZE_BYTES,
+            maxBytes: TARGET_CHUNK_SIZE_BYTES,
+            maxSeconds: MAX_CHUNK_SECONDS,
+        });
     });
 });
 

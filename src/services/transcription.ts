@@ -755,10 +755,112 @@ export interface TranscribeChunkLimits extends ChunkSizeLimits {
     uploadLimitBytes?: number;
 }
 
-const DEFAULT_CHUNK_LIMITS: ChunkSizeLimits = {
-    maxBytes: TARGET_CHUNK_SIZE_BYTES,
-    maxSeconds: MAX_CHUNK_SECONDS,
-};
+/** The caps that decide how a file is uploaded, all resolved. */
+export interface UploadLimits {
+    /** Files larger than this are planned from range reads, with `maxBytes` per chunk. */
+    uploadLimitBytes: number;
+    /** Per-chunk byte cap for a file over the upload limit. */
+    maxBytes: number;
+    /** Per-upload duration cap, chunk or whole file (MP3, MP4 and ADTS). */
+    maxSeconds: number;
+}
+
+/**
+ * The Worker's upload limits (25 MB upload, 15 MB chunks, 15 minutes), with
+ * any override. Tests and `check:chunks` override; production uses the defaults.
+ */
+export function uploadLimits(overrides: Partial<UploadLimits> = {}): UploadLimits {
+    return {
+        uploadLimitBytes: overrides.uploadLimitBytes ?? MAX_AUDIO_SIZE_BYTES,
+        maxBytes: overrides.maxBytes ?? TARGET_CHUNK_SIZE_BYTES,
+        maxSeconds: overrides.maxSeconds ?? MAX_CHUNK_SECONDS,
+    };
+}
+
+/** Where `planUploads` reads the audio from. */
+export interface AudioSource {
+    /** The file's size as the server reports it; 0 when unknown, which reads the file whole. */
+    size: number;
+    /** Content-type header of the audio file. */
+    contentType: string;
+    /** Hostname of the audio URL, for logs. Never the full URL: CDN URLs can be signed. */
+    audioHost: string;
+    /** Read an inclusive byte range, as an HTTP Range request does. */
+    fetchRange: FetchRange;
+    /** Read the whole file (for a file that fits one upload). */
+    fetchWhole(): Promise<ArrayBuffer>;
+}
+
+/**
+ * How a file goes to the model: one upload of exactly `upload`, or a chunk
+ * plan. A whole-file `plan` is null when the planner couldn't plan the file.
+ */
+export type UploadRoute =
+    | { kind: "chunked"; plan: ChunkPlan }
+    | { kind: "whole"; upload: ArrayBuffer; plan: ChunkPlan | null; container: AudioContainer };
+
+/**
+ * Decide how the Worker uploads a file. `transcribeAudio` and the
+ * `check:chunks` script both route through here, so the script reproduces
+ * exactly what production sends.
+ *
+ * - Over the upload limit: a plan from range reads, capped at `maxBytes` and
+ *   `maxSeconds` per chunk.
+ * - Otherwise the file is read whole and planned in memory with the upload
+ *   limit as its byte cap, so it is chunked only when its audio runs past
+ *   `maxSeconds`. A single upload is the plan's only chunk for MP3 (bare
+ *   frames, no ID3 tag or VBR header frame) and the file itself otherwise
+ *   (ADTS rewrapped as M4A), including when the planner can't plan it.
+ */
+export async function planUploads(source: AudioSource, limits: UploadLimits): Promise<UploadRoute> {
+    const { contentType, fetchRange } = source;
+    const chunkLimits: ChunkSizeLimits = { maxBytes: limits.maxBytes, maxSeconds: limits.maxSeconds };
+
+    if (requiresChunking(source.size, limits.uploadLimitBytes)) {
+        console.log(
+            JSON.stringify({
+                event: "chunked_transcription_start",
+                contentLength: source.size,
+                contentLengthMB: Math.round(source.size / 1024 / 1024),
+            })
+        );
+        return { kind: "chunked", plan: await planRemote(fetchRange, source.size, contentType, chunkLimits) };
+    }
+
+    const buffer = await source.fetchWhole();
+
+    // Double-check actual size (in case Content-Length was inaccurate)
+    if (buffer.byteLength > limits.uploadLimitBytes) {
+        console.log(
+            JSON.stringify({
+                event: "size_mismatch_chunking",
+                expected: source.size,
+                actual: buffer.byteLength,
+            })
+        );
+        return { kind: "chunked", plan: await planRemote(fetchRange, buffer.byteLength, contentType, chunkLimits) };
+    }
+
+    // It fits one upload, but a low-bitrate file can still run past the
+    // model's duration limit, so it is chunked whenever the plan has more
+    // than one chunk (#48).
+    const smallFileLimits: ChunkSizeLimits = { maxBytes: limits.uploadLimitBytes, maxSeconds: limits.maxSeconds };
+    const plan = await planSmallFile(buffer, contentType, smallFileLimits, source.audioHost);
+    if (plan && plan.chunks.length > 1) {
+        return { kind: "chunked", plan };
+    }
+
+    // MP3 uploads the plan's only chunk, which drops the ID3 tag and any
+    // Xing/Info/VBRI frame (or is the whole file when its frames can't be
+    // parsed); everything else uploads as it always has.
+    const upload = plan?.container === "mp3" ? await plan.chunks[0].load() : prepareForUpload(buffer);
+    return {
+        kind: "whole",
+        upload,
+        plan,
+        container: plan?.container ?? detectContainer(probeOf(buffer)),
+    };
+}
 
 /**
  * Transcribe audio from URL using OpenAI gpt-transcribe.
@@ -792,11 +894,7 @@ export async function transcribeAudio(
 
     const providerConfig = getProviderConfig(opts.provider);
     const progressCallback = opts.onProgress || onProgress;
-    const uploadLimitBytes = opts.chunkLimits?.uploadLimitBytes ?? MAX_AUDIO_SIZE_BYTES;
-    const chunkLimits: ChunkSizeLimits = {
-        maxBytes: opts.chunkLimits?.maxBytes ?? DEFAULT_CHUNK_LIMITS.maxBytes,
-        maxSeconds: opts.chunkLimits?.maxSeconds ?? DEFAULT_CHUNK_LIMITS.maxSeconds,
-    };
+    const limits = uploadLimits(opts.chunkLimits);
 
     console.log(
         JSON.stringify({
@@ -844,63 +942,36 @@ export async function transcribeAudio(
         }
     }
 
-    // Called only once the URL has been validated or fetched, so it parses.
-    const planContext = (): TranscribePlanContext => ({
+    // Step 3: Route: chunked for a file over the upload limit or past the
+    // duration cap, otherwise one upload (see planUploads).
+    const route = await planUploads(
+        {
+            size: validation.contentLength,
+            contentType: validation.contentType,
+            // A getter: read only once the URL has been validated or fetched, so it parses.
+            get audioHost() {
+                return new URL(audioUrl).hostname;
+            },
+            fetchRange: (start, end) => fetchAudioChunk(audioUrl, start, end),
+            fetchWhole: () => fetchAudio(audioUrl),
+        },
+        limits,
+    );
+    const ctx: TranscribePlanContext = {
         apiKey: opts.apiKey,
         provider: providerConfig,
         contentType: validation.contentType,
         audioHost: new URL(audioUrl).hostname,
-        maxChunkSeconds: chunkLimits.maxSeconds,
+        maxChunkSeconds: limits.maxSeconds,
         onProgress: progressCallback,
         chunkCache: opts.chunkCache,
-    });
-
-    // Step 3: Route based on file size
-    if (requiresChunking(validation.contentLength, uploadLimitBytes)) {
-        // Large file - use chunked transcription
-        console.log(
-            JSON.stringify({
-                event: "chunked_transcription_start",
-                provider: providerConfig.name,
-                contentLength: validation.contentLength,
-                contentLengthMB: Math.round(validation.contentLength / 1024 / 1024),
-            })
-        );
-        const plan = await planRemote(audioUrl, validation.contentLength, validation.contentType, chunkLimits);
-        return await transcribePlan(plan, planContext());
+    };
+    if (route.kind === "chunked") {
+        return await transcribePlan(route.plan, ctx);
     }
 
-    // Small file - fetch it whole
-    const audioBuffer = await fetchAudio(audioUrl);
-    const ctx = planContext();
-
-    // Double-check actual size (in case Content-Length was inaccurate)
-    if (audioBuffer.byteLength > uploadLimitBytes) {
-        // If it's bigger than expected, fall back to chunking
-        console.log(
-            JSON.stringify({
-                event: "size_mismatch_chunking",
-                expected: validation.contentLength,
-                actual: audioBuffer.byteLength,
-            })
-        );
-        const plan = await planRemote(audioUrl, audioBuffer.byteLength, validation.contentType, chunkLimits);
-        return await transcribePlan(plan, ctx);
-    }
-
-    // Step 4: Plan the file from the bytes in hand. It fits one upload, but a
-    // low-bitrate file can still run past the model's duration limit, so it
-    // is chunked whenever the plan has more than one chunk (#48).
-    const smallFileLimits: ChunkSizeLimits = { maxBytes: uploadLimitBytes, maxSeconds: chunkLimits.maxSeconds };
-    const plan = await planSmallFile(audioBuffer, validation.contentType, smallFileLimits, ctx.audioHost);
-    if (plan && plan.chunks.length > 1) {
-        return await transcribePlan(plan, ctx);
-    }
-
-    // Step 5: One upload. MP3 uploads the plan's only chunk, which drops the
-    // ID3 tag and any Xing/Info/VBRI frame (or is the whole file when its
-    // frames can't be parsed); everything else uploads as it always has.
-    const uploadBuffer = plan?.container === "mp3" ? await plan.chunks[0].load() : prepareForUpload(audioBuffer);
+    // Step 4: One upload, of exactly the bytes planUploads chose.
+    const { upload: uploadBuffer, plan } = route;
     if (plan) {
         console.log(
             JSON.stringify({
@@ -929,7 +1000,7 @@ export async function transcribeAudio(
             logRejection(error, {
                 position: { wholeFile: true },
                 upload: uploadBuffer,
-                container: plan?.container ?? detectContainer(probeOf(audioBuffer)),
+                container: route.container,
                 chunk: plan?.chunks[0],
                 vbrHeaderDropped: plan?.audio.vbrHeaderDropped ?? false,
                 audioHost: ctx.audioHost,
@@ -1099,13 +1170,13 @@ function logRejection(error: AppError, rejected: RejectedUpload): void {
  * its first bytes to identify the container, then plan with range reads
  * (see `planChunks`).
  *
- * @param audioUrl - URL of the audio file
+ * @param fetchRange - Range reader over the audio file
  * @param contentLength - Total file size in bytes
  * @param contentType - Content-type header of the audio file
  * @param limits - Per-chunk byte and duration caps
  */
 async function planRemote(
-    audioUrl: string,
+    fetchRange: FetchRange,
     contentLength: number,
     contentType: string,
     limits: ChunkSizeLimits,
@@ -1115,15 +1186,9 @@ async function planRemote(
 
     const probeBytes = Math.min(CONTAINER_PROBE_BYTES, contentLength);
     console.log(JSON.stringify({ event: "fetching_container_probe", probeBytes }));
-    const probe = new Uint8Array(await fetchAudioChunk(audioUrl, 0, probeBytes - 1));
+    const probe = new Uint8Array(await fetchRange(0, probeBytes - 1));
 
-    return planChunks({
-        probe,
-        fileSize: contentLength,
-        contentType,
-        limits,
-        fetchRange: (start, end) => fetchAudioChunk(audioUrl, start, end),
-    });
+    return planChunks({ probe, fileSize: contentLength, contentType, limits, fetchRange });
 }
 
 /**

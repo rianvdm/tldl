@@ -1,7 +1,14 @@
 /**
- * Local check for chunked uploads (#53, #48): plan chunks with the production
- * planner (`planChunks`), write each chunk exactly as the Worker would upload
- * it, decode each one in full with ffmpeg, and optionally send them to OpenAI.
+ * Local check for uploads (#53, #48): route the file with the Worker's own
+ * routing (`planUploads`, which `transcribeAudio` also calls), write each
+ * upload exactly as the Worker would send it, decode each one in full with
+ * ffmpeg, and optionally send them to OpenAI.
+ *
+ * A file over the 25 MB upload limit is chunked with `--max-mb` per chunk
+ * (default 15). A file under it is routed as production routes it: chunked
+ * only when its audio runs past `--max-seconds`, otherwise one whole-file
+ * upload (bare frames for MP3, the file unchanged for MP4 and anything the
+ * planner can't plan, M4A for ADTS). `--max-mb` never splits a small file.
  *
  *   npm run check:chunks -- <url-or-path> [--max-mb 15] [--max-seconds 900] [--limit N] [--transcribe]
  *
@@ -34,8 +41,14 @@ import { AUDIO_USER_AGENT } from "../src/lib/constants";
 import { findMp3Frame, parseMp3FrameHeader, readVbrHeader } from "../src/lib/mp3";
 import { parseAudioTrack, type Mp4AudioTrack } from "../src/lib/mp4";
 import { locateMoov, type FetchRange } from "../src/services/audio-containers";
-import { planChunks, type ChunkPlan, type PlannedChunk } from "../src/services/chunk-planning";
-import { detectAudioFormat, getProviderConfig, mimeFromExtension } from "../src/services/transcription";
+import { type ChunkPlan, type PlannedChunk } from "../src/services/chunk-planning";
+import {
+    detectAudioFormat,
+    getProviderConfig,
+    mimeFromExtension,
+    planUploads,
+    uploadLimits,
+} from "../src/services/transcription";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..");
@@ -250,7 +263,8 @@ function plannedPackets(track: Mp4AudioTrack, chunk: PlannedChunk): number {
     return packets;
 }
 
-function describeAudio(plan: ChunkPlan): string {
+function describeAudio(plan: ChunkPlan | null): string {
+    if (!plan) return "the planner couldn't plan the file (uploaded whole, as production does)";
     const fields = Object.entries(plan.audio).map(([key, value]) =>
         typeof value === "number" && !Number.isInteger(value) ? `${key} ${value.toFixed(1)}` : `${key} ${value}`,
     );
@@ -278,53 +292,70 @@ async function main(): Promise<void> {
     const outDir = resultsDir(args.source);
     console.log(`output: ${outDir}`);
     const { size, contentType, fetchRange } = await openSource(args.source);
-    const probe = new Uint8Array(await fetchRange(0, Math.min(CONTAINER_PROBE_BYTES, size) - 1));
-    const plan = await planChunks({
-        probe,
-        fileSize: size,
-        contentType,
-        // Whole bytes: a fractional --max-mb would plan fractional byte offsets.
-        limits: { maxBytes: Math.floor(args.maxMb * 1024 * 1024), maxSeconds: args.maxSeconds },
-        fetchRange,
-    });
+    const route = await planUploads(
+        {
+            size,
+            contentType,
+            audioHost: /^https?:\/\//.test(args.source) ? new URL(args.source).hostname : "local file",
+            fetchRange,
+            fetchWhole: () => fetchRange(0, size - 1),
+        },
+        // --max-mb is the per-chunk cap for files over the upload limit only, as
+        // production's 15 MB is. Whole bytes: a fractional value would plan fractional offsets.
+        uploadLimits({ maxBytes: Math.floor(args.maxMb * 1024 * 1024), maxSeconds: args.maxSeconds }),
+    );
+    const plan = route.plan;
+    const container = route.kind === "whole" ? route.container : route.plan.container;
+    // What the Worker sends: each planned chunk, or exactly one whole-file upload.
+    const uploads: { label: string; name: string; chunk?: PlannedChunk; load(): Promise<ArrayBuffer> }[] =
+        route.kind === "chunked"
+            ? route.plan.chunks.map((chunk) => ({
+                  label: `chunk ${chunk.index + 1}/${route.plan.chunks.length}`,
+                  name: `chunk-${String(chunk.index + 1).padStart(2, "0")}`,
+                  chunk,
+                  load: () => chunk.load(),
+              }))
+            : [{ label: "whole-file upload", name: "whole", chunk: route.plan?.chunks[0], load: async () => route.upload }];
     console.log(
-        `\nfile: ${size} bytes, content type ${contentType}, container ${plan.container}, ` +
-        `${plan.totalBytes} audio bytes, ${plan.chunks.length} chunks`,
+        `\nfile: ${size} bytes, content type ${contentType}, container ${container}, ` +
+        (route.kind === "chunked"
+            ? `${route.plan.totalBytes} audio bytes, ${route.plan.chunks.length} chunks`
+            : "one whole-file upload (under the upload limit and the duration cap)"),
     );
     console.log(`audio: ${describeAudio(plan)}`);
 
     // Only the frames path sets vbrHeader; MP3 whose frames can't be parsed falls back to the byte path.
-    const mp3Frames = plan.container === "mp3" && plan.audio.vbrHeader !== undefined;
-    if (plan.container === "mp3" && !mp3Frames) console.log("mp3: frames not found, byte path; frame checks skipped");
+    const mp3Frames = plan?.container === "mp3" && plan.audio.vbrHeader !== undefined;
+    if (container === "mp3" && !mp3Frames) console.log("mp3: frames not found, byte path; frame checks skipped");
     // The plan keeps only sample ranges; the sizes say which samples carry a packet.
-    const track = plan.container === "mp4" ? parseAudioTrack((await locateMoov(probe, size, fetchRange)).moov) : null;
+    const probe = new Uint8Array(await fetchRange(0, Math.min(CONTAINER_PROBE_BYTES, size) - 1));
+    const track = plan?.container === "mp4" ? parseAudioTrack((await locateMoov(probe, size, fetchRange)).moov) : null;
 
     rmSync(outDir, { recursive: true, force: true });
     mkdirSync(outDir, { recursive: true });
     console.log("");
 
     let failed = false;
-    const count = Math.min(plan.chunks.length, args.limit);
-    for (const chunk of plan.chunks.slice(0, count)) {
-        const label = `chunk ${chunk.index + 1}/${plan.chunks.length}`;
-        const bytes = new Uint8Array(await chunk.load());
+    const count = Math.min(uploads.length, args.limit);
+    for (const { label, name, chunk, load } of uploads.slice(0, count)) {
+        const bytes = new Uint8Array(await load());
         const format = uploadFormat(bytes, contentType);
-        const path = join(outDir, `chunk-${String(chunk.index + 1).padStart(2, "0")}.${format.ext}`);
+        const path = join(outDir, `${name}.${format.ext}`);
         writeFileSync(path, bytes);
 
         const problems: string[] = [];
         const notes: string[] = [`${(bytes.length / 1024 / 1024).toFixed(2)} MB`, `audio.${format.ext} ${format.mime}`];
 
         const duration = ffprobeDuration(path);
-        if (chunk.plannedSeconds !== undefined) notes.push(`planned ${chunk.plannedSeconds.toFixed(1)}s`);
+        if (chunk?.plannedSeconds !== undefined) notes.push(`planned ${chunk.plannedSeconds.toFixed(1)}s`);
         notes.push(`ffprobe ${duration === null ? "no duration" : `${duration.toFixed(1)}s`}`);
-        if (chunk.plannedSeconds !== undefined) {
+        if (chunk?.plannedSeconds !== undefined) {
             const cap = args.maxSeconds + DURATION_SLACK_SECONDS;
             if (duration === null) problems.push("ffprobe reports no duration");
             else if (duration > cap) problems.push(`ffprobe duration ${duration.toFixed(1)}s is over ${cap}s`);
         }
 
-        if (track) {
+        if (track && chunk) {
             const planned = plannedPackets(track, chunk);
             const packets = ffprobePacketCount(path);
             notes.push(`packets ${packets ?? "?"}/${planned}`);
@@ -365,7 +396,7 @@ async function main(): Promise<void> {
         }
     }
 
-    console.log(`\n${failed ? "FAILED" : "all checks passed"} (${count} of ${plan.chunks.length} chunks checked)`);
+    console.log(`\n${failed ? "FAILED" : "all checks passed"} (${count} of ${uploads.length} uploads checked)`);
     if (failed) process.exitCode = 1;
 }
 
