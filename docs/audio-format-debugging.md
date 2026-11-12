@@ -1,5 +1,17 @@
 # Audio Format Detection & Transcription Debugging
 
+## Resolved 2026-11-12
+
+The "corrupted or unsupported" rejections below were never about corruption. gpt-transcribe refuses audio whose real or **declared** duration is too long, and reports both with the same 400.
+
+- **The cause was the LAME/Xing Info frame.** Many podcast MP3s start with an Info frame (right after the ID3 tag) that declares the whole file's frame count. Chunk 1 began with that frame, and the old chunker prepended the file's first 512 bytes, which hold it, to every later chunk, so every chunk of a 96-minute file declared 96 minutes. On Supra Insider #135 (2026-11-09), the same chunk went from 400 to 200 once the Info frame was removed, and so did the final chunk sent as ID3 plus audio from the next frame sync.
+- **A real duration limit also exists, between 45 and 70 minutes.** Clean re-encodes with no Info frame were accepted at 20, 30 and 45 minutes and rejected at 70, with the same "corrupted or unsupported" message.
+- **The fix:** MP3 chunks are cut on frame boundaries and uploaded as bare MPEG frames with no ID3 tag and no Xing/Info/VBRI frame, and no MP3, MP4 or ADTS upload, chunk or whole file, covers more than 15 minutes. A rejection that still gets through fails the job as `AUDIO_REJECTED` with a `npm run check:chunks -- '<url>' --transcribe` command; the runbook is the `transcription_rejected` entry in `CLAUDE.md`.
+
+Evidence and design: [Transcribe without whisper-1](superpowers/specs/2026-11-12-transcribe-without-whisper-design.md). The investigation below is kept as it was written on 2026-03-08.
+
+---
+
 **Date:** 2026-03-08  
 **Codebase:** [tldl](file:///Users/rian/Documents/GitHub/tldl) (Cloudflare Workers podcast transcription app)  
 **Key files:**

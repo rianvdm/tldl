@@ -96,8 +96,19 @@ export interface Transcript {
     episodeId: string;
     text: string;                  // Full transcript text
     source: TranscriptSource;
-    model?: string;                // e.g., "gpt-transcribe", "whisper-1"
+    model?: string;                // e.g., "gpt-transcribe"
     createdAt: string;             // ISO timestamp
+}
+
+/**
+ * Where chunked transcription keeps each chunk's transcript, so a retried
+ * queue attempt resumes instead of re-transcribing finished chunks (#48).
+ * Keys come from `chunkCacheKey()` in the transcription service. Both calls
+ * are best effort: the transcription service logs and ignores their errors.
+ */
+export interface ChunkTranscriptCache {
+    get(chunkKey: string): Promise<{ text: string } | null>;
+    put(chunkKey: string, value: { text: string }): Promise<void>;
 }
 
 /**

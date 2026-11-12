@@ -35,7 +35,7 @@ vi.mock("../src/services/transcription", () => ({
     transcribeAudio: vi.fn(),
     getProviderConfig: vi.fn().mockReturnValue({
         baseUrl: "https://api.openai.com/v1/audio/transcriptions",
-        model: "whisper-1",
+        model: "gpt-transcribe",
         name: "openai",
     }),
 }));
@@ -54,6 +54,7 @@ import { fetchTranscript } from "../src/services/rss";
 import { transcribeAudio } from "../src/services/transcription";
 import { generateSummary } from "../src/services/summarization";
 import { generateEpisodeTags } from "../src/services/tag-generation";
+import type { TranscribeOptions } from "../src/services/transcription";
 import queueConsumer from "../src/queue/consumer";
 
 // ============================================================================
@@ -176,7 +177,7 @@ describe("Queue Consumer - process_episode", () => {
         vi.clearAllMocks();
     });
 
-    it("processes new episode successfully with Whisper transcription", async () => {
+    it("processes new episode successfully with gpt-transcribe transcription", async () => {
         // Set up mocks
         vi.mocked(getEpisodeMetadata).mockResolvedValue({
             podcastName: "Test Podcast",
@@ -189,7 +190,7 @@ describe("Queue Consumer - process_episode", () => {
         });
 
         vi.mocked(transcribeAudio).mockResolvedValue({
-            text: "This is the transcribed text from Whisper.",
+            text: "This is the transcribed text from gpt-transcribe.",
             source: "openai",
             model: "gpt-transcribe",
         });
@@ -226,7 +227,7 @@ describe("Queue Consumer - process_episode", () => {
         // Verify transcript saved
         const transcript = await getTranscript(env.TLDL_DATA, "123_456");
         expect(transcript).not.toBeNull();
-        expect(transcript?.text).toBe("This is the transcribed text from Whisper.");
+        expect(transcript?.text).toBe("This is the transcribed text from gpt-transcribe.");
         expect(transcript?.source).toBe("openai");
 
         // Verify summary saved
@@ -235,7 +236,33 @@ describe("Queue Consumer - process_episode", () => {
         expect(summary?.text).toContain("Summary");
     });
 
-    it("uses RSS transcript when available (skips Whisper)", async () => {
+    it("passes a chunk cache bound to the episode to transcribeAudio", async () => {
+        vi.mocked(getEpisodeMetadata).mockResolvedValue({
+            podcastName: "Test Podcast",
+            episodeTitle: "Test Episode",
+            episodeDuration: 1800,
+            episodeDate: "2024-01-15T00:00:00.000Z",
+            audioUrl: "https://example.com/audio.mp3",
+            feedUrl: "https://example.com/feed.xml",
+        });
+        vi.mocked(transcribeAudio).mockResolvedValue({
+            text: "Transcribed.",
+            source: "openai",
+            model: "gpt-transcribe",
+        });
+        vi.mocked(generateSummary).mockResolvedValue({ text: "# Summary", model: "claude-opus-5-5" });
+        await createJob(env.TLDL_DATA, createSampleJob());
+
+        await queueConsumer.queue(createMockBatch([createQueueMessage()]), getTestEnv());
+
+        const options = vi.mocked(transcribeAudio).mock.calls[0][1] as TranscribeOptions;
+        expect(options.chunkCache).toBeDefined();
+        await options.chunkCache!.put("2:mp3:1000:0:0-499", { text: "chunk one." });
+        expect(await env.TLDL_DATA.get("chunkcache:123_456:2:mp3:1000:0:0-499", "json")).toEqual({ text: "chunk one." });
+        await env.TLDL_DATA.delete("chunkcache:123_456:2:mp3:1000:0:0-499");
+    });
+
+    it("uses RSS transcript when available (skips gpt-transcribe)", async () => {
         vi.mocked(getEpisodeMetadata).mockResolvedValue({
             podcastName: "Test Podcast",
             episodeTitle: "Test Episode",
@@ -268,7 +295,7 @@ describe("Queue Consumer - process_episode", () => {
         // Verify message acknowledged
         expect(batch.messages[0].ack).toHaveBeenCalled();
 
-        // Verify Whisper was NOT called
+        // Verify gpt-transcribe was NOT called
         expect(transcribeAudio).not.toHaveBeenCalled();
 
         // Verify RSS transcript was used
@@ -277,7 +304,7 @@ describe("Queue Consumer - process_episode", () => {
         expect(transcript?.text).toContain("RSS transcript text from the podcast feed");
     });
 
-    it("uses cached transcript (skips both RSS and Whisper)", async () => {
+    it("uses cached transcript (skips both RSS and gpt-transcribe)", async () => {
         // Pre-save transcript
         const existingTranscript = createSampleTranscript({
             source: "openai",
@@ -495,6 +522,72 @@ describe("Queue Consumer - process_episode", () => {
 
         const log = await getActivityLog(env.TLDL_DATA);
         expect(log.some((e) => e.type === "episode_failed")).toBe(true);
+    });
+
+    it("fails rejected audio on the first attempt with a copy-paste debug command", async () => {
+        // A signed CDN URL: the query string is a credential and must stay out of logs,
+        // and `?`/`&` must survive the shell when the command is pasted.
+        const signedUrl = "https://cdn.example.com/it's/audio.mp3?Expires=1763000000&Signature=abc123";
+        vi.mocked(getEpisodeMetadata).mockResolvedValue({
+            podcastName: "Test Podcast",
+            episodeTitle: "Test Episode",
+            episodeDuration: 1800,
+            episodeDate: "2024-01-15T00:00:00.000Z",
+            audioUrl: signedUrl,
+            feedUrl: "https://example.com/feed.xml",
+        });
+
+        vi.mocked(transcribeAudio).mockRejectedValue(
+            new AppError(
+                ERROR_CODES.AUDIO_REJECTED,
+                "gpt-transcribe rejected chunk 3/7 of the audio",
+                new Error('{"error":{"message":"Audio file might be corrupted or unsupported"}}')
+            )
+        );
+
+        const job = createSampleJob();
+        await createJob(env.TLDL_DATA, job);
+
+        const batch = createMockBatch([createQueueMessage()], { attempts: 1 });
+
+        const logSpy = vi.spyOn(console, "log");
+        const errorSpy = vi.spyOn(console, "error");
+        let lines: string[];
+        try {
+            await queueConsumer.queue(batch, getTestEnv());
+        } finally {
+            // Read the calls before mockRestore, which clears them
+            lines = [...logSpy.mock.calls, ...errorSpy.mock.calls].map((args) => args.map(String).join(" "));
+            logSpy.mockRestore();
+            errorSpy.mockRestore();
+        }
+
+        expect(batch.messages[0].retry).not.toHaveBeenCalled();
+        expect(batch.messages[0].ack).toHaveBeenCalled();
+
+        const expected =
+            "gpt-transcribe rejected chunk 3/7 of the audio. Debug with: npm run check:chunks -- " +
+            "'https://cdn.example.com/it'\\''s/audio.mp3?Expires=1763000000&Signature=abc123' --transcribe";
+        const updatedJob = await getJob(env.TLDL_DATA, job.id);
+        expect(updatedJob?.status).toBe("failed");
+        expect(updatedJob?.error).toBe(expected);
+
+        const log = await getActivityLog(env.TLDL_DATA);
+        const failure = log.find((e) => e.type === "episode_failed");
+        expect(failure?.details).toBe(expected);
+
+        // Both failure log lines are written, and neither carries the URL or its signature.
+        const failureLines = lines.filter(
+            (line) => line.includes('"event":"job_error"') || line.includes('"event":"job_marked_failed"')
+        );
+        expect(failureLines.some((line) => line.includes('"event":"job_error"'))).toBe(true);
+        expect(failureLines.some((line) => line.includes('"event":"job_marked_failed"'))).toBe(true);
+        for (const line of failureLines) {
+            expect(line).toContain("gpt-transcribe rejected chunk 3/7 of the audio");
+            expect(line).not.toContain("Expires=");
+            expect(line).not.toContain("Signature=");
+            expect(line).not.toContain("cdn.example.com/it");
+        }
     });
 
     it("fails job on summarization error", async () => {

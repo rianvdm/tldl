@@ -2,26 +2,44 @@
  * Transcription service using OpenAI gpt-transcribe.
  * Handles audio validation and transcription for podcast episodes.
  * Supports chunked transcription for files over 25MB.
- * Automatically falls back to whisper-1 for files gpt-transcribe rejects.
+ * An upload the model rejects fails as AUDIO_REJECTED (there is no fallback
+ * model), except a small final chunk, which is skipped (#54). An optional
+ * chunk cache lets a retried job resume chunked transcription (#48).
  */
 
 import { AppError } from "../lib/errors";
 import { ERROR_CODES, TIMEOUTS, AUDIO_LIMITS, AUDIO_USER_AGENT } from "../lib/constants";
 import { withRetry, isTransientError, isRateLimitError, sleep } from "../lib/retry";
 import {
+    CHUNK_OVERLAP_SECONDS,
     CONTAINER_PROBE_BYTES,
     MAX_CHUNK_SECONDS,
     assertWithinTotalSizeLimit,
     TARGET_CHUNK_SIZE_BYTES,
     estimateTranscriptionTime,
+    hexBytes,
     id3Length,
     requiresChunking,
 } from "../lib/audio";
 import { adtsToM4a } from "../lib/adts";
-import { detectContainer, exactBuffer, planChunks, type ChunkSizeLimits } from "./chunk-planning";
+import { loggableHeaders, urlHost } from "../lib/log-urls";
+import { splitMp3ByDuration } from "../lib/mp3";
+import type { ChunkTranscriptCache } from "../types";
+import type { FetchRange } from "./audio-containers";
+import {
+    CHUNK_PLAN_VERSION,
+    detectContainer,
+    exactBuffer,
+    isMp3FramePlan,
+    planChunks,
+    type AudioContainer,
+    type ChunkPlan,
+    type ChunkSizeLimits,
+    type PlannedChunk,
+} from "./chunk-planning";
 
 
-// Use centralized constant for Whisper size limit
+// Use centralized constant for the API's upload size limit
 const MAX_AUDIO_SIZE_BYTES = AUDIO_LIMITS.MAX_SIZE_BYTES;
 
 // ============================================================================
@@ -64,7 +82,7 @@ export function extensionFromMime(contentType: string): string {
  * Get the correct MIME type for a file extension.
  * Used when constructing the Blob sent to the API.
  */
-function mimeFromExtension(ext: string): string {
+export function mimeFromExtension(ext: string): string {
     return EXTENSION_TO_MIME[ext] ?? "audio/mpeg";
 }
 
@@ -209,6 +227,20 @@ export interface TranscriptionResult {
 export interface AudioValidation {
     contentLength: number;
     contentType: string;
+    /** The response's content identity (see `contentVersion`), or null without one. */
+    contentVersion: string | null;
+}
+
+/**
+ * Which version of a file a response carries, for the chunk cache key: its
+ * strong ETag, else its Last-Modified, else null. A weak (`W/`) ETag is
+ * ignored: it promises equivalent content, not the same bytes.
+ */
+export function contentVersion(headers: Headers): string | null {
+    const etag = headers.get("etag");
+    if (etag && !etag.startsWith("W/")) return `etag:${etag}`;
+    const lastModified = headers.get("last-modified");
+    return lastModified ? `lm:${lastModified}` : null;
 }
 
 /**
@@ -392,7 +424,7 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
             );
         }
 
-        return { contentLength, contentType };
+        return { contentLength, contentType, contentVersion: contentVersion(response.headers) };
     } catch (error) {
         clearTimeout(timeoutId);
 
@@ -417,13 +449,13 @@ export async function validateAudioUrl(audioUrl: string): Promise<AudioValidatio
 }
 
 /**
- * Fetch audio file as ArrayBuffer.
- * 
+ * Fetch a whole audio file.
+ *
  * @param audioUrl - URL of the audio file
- * @returns Audio data as ArrayBuffer
+ * @returns The file's bytes and the content version of the response that carried them
  * @throws AppError with AUDIO_UNAVAILABLE on failure
  */
-async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
+async function fetchAudio(audioUrl: string): Promise<WholeAudio> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.AUDIO_FETCH_MS);
 
@@ -449,15 +481,15 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
         if (response.status === 403) {
             console.log(JSON.stringify({
                 event: "fetch_audio_403_retry",
-                url: audioUrl,
+                host: urlHost(audioUrl),
                 message: "Attempting redirect resolution fallback",
             }));
             const resolvedUrl = await resolveAudioUrl(audioUrl);
             if (resolvedUrl !== audioUrl) {
                 console.log(JSON.stringify({
                     event: "fetch_audio_403_resolved",
-                    original: audioUrl,
-                    resolved: resolvedUrl,
+                    originalHost: urlHost(audioUrl),
+                    resolvedHost: urlHost(resolvedUrl),
                 }));
                 const retryController = new AbortController();
                 const retryTimeoutId = setTimeout(() => retryController.abort(), TIMEOUTS.AUDIO_FETCH_MS);
@@ -470,10 +502,10 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
                     if (retryResponse.ok) {
                         console.log(JSON.stringify({
                             event: "fetch_audio_403_resolved_success",
-                            resolvedUrl,
+                            resolvedHost: urlHost(resolvedUrl),
                             status: retryResponse.status,
                         }));
-                        return await retryResponse.arrayBuffer();
+                        return await wholeAudio(retryResponse);
                     }
                 } catch {
                     clearTimeout(retryTimeoutId);
@@ -481,15 +513,13 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
             }
 
             // Log details of the original 403 for diagnostics
-            const respHeaders: Record<string, string> = {};
-            response.headers.forEach((v, k) => { respHeaders[k] = v; });
             console.log(JSON.stringify({
                 event: "fetch_audio_error_details",
                 status: 403,
-                url: response.url,
-                requestedUrl: audioUrl,
+                ...fetchErrorHosts(audioUrl, response),
                 redirected: response.redirected,
-                headers: respHeaders,
+                headers: loggableHeaders(response.headers),
+                ...(await errorBodyFields(response)),
             }));
             throw new AppError(
                 ERROR_CODES.AUDIO_UNAVAILABLE,
@@ -499,22 +529,14 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
 
         if (!response.ok) {
             // Capture diagnostic details for non-200 responses
-            const respHeaders: Record<string, string> = {};
-            response.headers.forEach((v, k) => { respHeaders[k] = v; });
-            let respBody: string | null = null;
-            try {
-                respBody = await response.text();
-                if (respBody.length > 1000) respBody = respBody.slice(0, 1000);
-            } catch { /* ignore */ }
             console.log(
                 JSON.stringify({
                     event: "fetch_audio_error_details",
                     status: response.status,
-                    url: response.url,
-                    requestedUrl: audioUrl,
+                    ...fetchErrorHosts(audioUrl, response),
                     redirected: response.redirected,
-                    headers: respHeaders,
-                    body: respBody,
+                    headers: loggableHeaders(response.headers),
+                    ...(await errorBodyFields(response)),
                 })
             );
             throw new AppError(
@@ -523,7 +545,7 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
             );
         }
 
-        return await response.arrayBuffer();
+        return await wholeAudio(response);
     } catch (error) {
         clearTimeout(timeoutId);
 
@@ -546,29 +568,52 @@ async function fetchAudio(audioUrl: string): Promise<ArrayBuffer> {
     }
 }
 
+/** Hosts of the requested URL and, when the fetch followed redirects, of the URL that answered. */
+function fetchErrorHosts(requestedUrl: string, response: Response): { requestedHost: string; finalHost?: string } {
+    return {
+        requestedHost: urlHost(requestedUrl),
+        ...(response.url && { finalHost: urlHost(response.url) }),
+    };
+}
+
 /**
- * Call OpenAI transcription API.
- * Uses gpt-transcribe as primary model with automatic whisper-1 fallback.
+ * An audio host's error body described by its size and type, never its
+ * text: CDN and S3 error bodies can echo the signed URL, in forms (such as
+ * JSON-escaped slashes) no redaction reliably catches.
+ */
+async function errorBodyFields(response: Response): Promise<{ bodyBytes: number | null; bodyContentType: string | null }> {
+    let bodyBytes: number | null = null;
+    try {
+        bodyBytes = (await response.arrayBuffer()).byteLength;
+    } catch { /* unreadable: size unknown */ }
+    return { bodyBytes, bodyContentType: response.headers.get("content-type") };
+}
+
+async function wholeAudio(response: Response): Promise<WholeAudio> {
+    return { bytes: await response.arrayBuffer(), contentVersion: contentVersion(response.headers) };
+}
+
+/**
+ * Call the OpenAI transcription API with gpt-transcribe.
  *
  * @param audioBuffer - Audio data as ArrayBuffer
  * @param apiKey - OpenAI API key
  * @param provider - Provider config
- * @returns Transcribed text and model used
- * @throws AppError with TRANSCRIPTION_FAILED or RATE_LIMITED
+ * @returns Transcribed text
+ * @throws AppError with AUDIO_REJECTED when the model refuses the audio (a
+ *   400 the same upload would get again: its `cause` carries the OpenAI
+ *   response body), TRANSCRIPTION_FAILED on any other 400 or a malformed
+ *   response, and a plain Error on 429 or 5xx for `withRetry` to retry
  */
-async function callWhisperApi(
+async function callTranscriptionApi(
     audioBuffer: ArrayBuffer,
     apiKey: string,
     provider: ProviderConfig = PROVIDER_CONFIGS.openai,
     contentType: string = "audio/mpeg",
-): Promise<{ text: string; model: string }> {
+): Promise<string> {
     // Detect format from actual bytes (magic bytes), falling back to content-type header
     const ext = detectAudioFormat(audioBuffer, contentType);
     const blobMime = mimeFromExtension(ext);
-
-    // Log first 16 bytes as hex for debugging format detection
-    const preview = new Uint8Array(audioBuffer, 0, Math.min(16, audioBuffer.byteLength));
-    const hexBytes = Array.from(preview).map(b => b.toString(16).padStart(2, "0")).join(" ");
 
     console.log(
         JSON.stringify({
@@ -577,7 +622,7 @@ async function callWhisperApi(
             blobMime,
             headerContentType: contentType,
             bufferSizeBytes: audioBuffer.byteLength,
-            firstBytesHex: hexBytes,
+            firstBytesHex: hexBytes(new Uint8Array(audioBuffer, 0, Math.min(16, audioBuffer.byteLength))),
         })
     );
 
@@ -588,12 +633,12 @@ async function callWhisperApi(
     formData.append("response_format", "json");
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.WHISPER_API_MS);
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUTS.TRANSCRIPTION_API_MS);
 
     const startTime = Date.now();
     console.log(
         JSON.stringify({
-            event: "whisper_api_call_start",
+            event: "transcription_api_call_start",
             provider: provider.name,
             model: provider.model,
             audioSizeMB: Math.round(audioBuffer.byteLength / 1024 / 1024 * 100) / 100,
@@ -617,21 +662,21 @@ async function callWhisperApi(
         if (error instanceof Error && error.name === "AbortError") {
             console.error(
                 JSON.stringify({
-                    event: "whisper_api_timeout",
+                    event: "transcription_api_timeout",
                     provider: provider.name,
                     elapsedMs: elapsed,
-                    timeoutMs: TIMEOUTS.WHISPER_API_MS,
+                    timeoutMs: TIMEOUTS.TRANSCRIPTION_API_MS,
                 })
             );
             throw new AppError(
                 ERROR_CODES.TRANSCRIPTION_FAILED,
-                `${provider.name} Whisper API timed out after ${Math.round(elapsed / 1000)}s`,
+                `${provider.name} transcription API timed out after ${Math.round(elapsed / 1000)}s`,
             );
         }
 
         console.error(
             JSON.stringify({
-                event: "whisper_api_network_error",
+                event: "transcription_api_network_error",
                 provider: provider.name,
                 elapsedMs: elapsed,
                 error: error instanceof Error ? error.message : "Unknown error",
@@ -658,7 +703,7 @@ async function callWhisperApi(
         const errorText = await response.text().catch(() => "Unknown error");
         console.error(
             JSON.stringify({
-                event: "whisper_api_error",
+                event: "transcription_api_error",
                 provider: provider.name,
                 status,
                 elapsedMs: elapsed,
@@ -666,118 +711,31 @@ async function callWhisperApi(
             })
         );
 
-        // Fallback: if gpt-transcribe rejects the file (corrupted/unsupported or input too large), retry with whisper-1.
-        // "corrupted or unsupported" verified live against gpt-transcribe (2026-08-02 pre-flight): the 400 wording is
-        // identical to the old model's. A missed fallback logs the full error in whisper_api_error with the string to add.
-        const isCorruptedError = errorText.includes("corrupted or unsupported");
-        const isInputTooLarge = errorText.includes("input_too_large") || errorText.includes("too large for this model");
-        const isPrimaryTranscribeModel = provider.model === "gpt-transcribe";
-        let fallbackErrorMessage: string | null = null;
-        if (status === 400 && (isCorruptedError || isInputTooLarge) && isPrimaryTranscribeModel) {
-            const reason = isInputTooLarge
-                ? `${provider.model} chunk too large, falling back to whisper-1`
-                : `${provider.model} rejected file, falling back to whisper-1`;
-            console.log(
-                JSON.stringify({
-                    event: "whisper_fallback_start",
-                    reason,
-                    originalModel: provider.model,
-                    fallbackModel: "whisper-1",
-                })
+        // The model refuses this audio, and would refuse the same upload again.
+        // "corrupted or unsupported" verified live against gpt-transcribe
+        // (2026-08-02 pre-flight). A rejection that slips past these checks
+        // fails as TRANSCRIPTION_FAILED, with its body in transcription_api_error.
+        const rejected =
+            errorText.includes("corrupted or unsupported") ||
+            errorText.includes("input_too_large") ||
+            errorText.includes("too large for this model");
+        if (status === 400 && rejected) {
+            throw new AppError(
+                ERROR_CODES.AUDIO_REJECTED,
+                `${provider.model} rejected the audio`,
+                new Error(errorText),
             );
-
-            // Fallback to whisper-1 with retry for transient errors (5xx, 429).
-            // Always uses the OpenAI base URL — whisper-1 is an OpenAI model.
-            const fallbackStart = Date.now();
-            const attemptWhisper1 = async (): Promise<string> => {
-                const fallbackFormData = new FormData();
-                fallbackFormData.append("file", new Blob([audioBuffer], { type: blobMime }), `audio.${ext}`);
-                fallbackFormData.append("model", "whisper-1");
-                fallbackFormData.append("response_format", "text");
-
-                const fallbackController = new AbortController();
-                const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), TIMEOUTS.WHISPER_API_MS);
-
-                let fallbackResponse: Response;
-                try {
-                    fallbackResponse = await fetch(PROVIDER_CONFIGS.openai.baseUrl, {
-                        method: "POST",
-                        headers: { Authorization: `Bearer ${apiKey}` },
-                        body: fallbackFormData,
-                        signal: fallbackController.signal,
-                    });
-                } catch (err) {
-                    clearTimeout(fallbackTimeoutId);
-                    throw err;
-                }
-                clearTimeout(fallbackTimeoutId);
-
-                if (fallbackResponse.status === 429) {
-                    throw new Error("Rate limited: HTTP 429");
-                }
-                if (fallbackResponse.status >= 500) {
-                    throw new Error(`Server error: HTTP ${fallbackResponse.status}`);
-                }
-
-                if (!fallbackResponse.ok) {
-                    const fallbackError = await fallbackResponse.text().catch(() => "Unknown");
-                    const fallbackElapsed = Date.now() - fallbackStart;
-                    console.error(
-                        JSON.stringify({
-                            event: "whisper_fallback_failed",
-                            fallbackModel: "whisper-1",
-                            status: fallbackResponse.status,
-                            elapsedMs: fallbackElapsed,
-                            error: fallbackError,
-                        })
-                    );
-                    // Non-retryable — throw a plain error so withRetry won't retry
-                    throw new Error(`whisper-1 error: ${fallbackError}`);
-                }
-
-                return fallbackResponse.text();
-            };
-
-            try {
-                const fallbackText = await withRetry(attemptWhisper1, {
-                    maxRetries: 3,
-                    baseDelayMs: 1000,
-                    shouldRetry: isTransientError,
-                });
-                const fallbackElapsed = Date.now() - fallbackStart;
-                console.log(
-                    JSON.stringify({
-                        event: "whisper_fallback_success",
-                        fallbackModel: "whisper-1",
-                        elapsedMs: fallbackElapsed,
-                        elapsedSeconds: Math.round(fallbackElapsed / 1000),
-                    })
-                );
-                return { text: fallbackText, model: "whisper-1" };
-            } catch (fallbackErr) {
-                fallbackErrorMessage = fallbackErr instanceof Error ? fallbackErr.message : "Unknown";
-                console.error(
-                    JSON.stringify({
-                        event: "whisper_fallback_error",
-                        fallbackModel: "whisper-1",
-                        error: fallbackErrorMessage,
-                    })
-                );
-            }
         }
 
-        const errorDetail = fallbackErrorMessage
-            ? `${provider.name} Whisper API error: ${errorText} | whisper-1 fallback also failed: ${fallbackErrorMessage}`
-            : `${provider.name} Whisper API error: ${errorText}`;
         throw new AppError(
             ERROR_CODES.TRANSCRIPTION_FAILED,
-            errorDetail,
+            `${provider.name} transcription API error: ${errorText}`,
         );
     }
 
     console.log(
         JSON.stringify({
-            event: "whisper_api_call_complete",
+            event: "transcription_api_call_complete",
             provider: provider.name,
             elapsedMs: elapsed,
             elapsedSeconds: Math.round(elapsed / 1000),
@@ -800,7 +758,7 @@ async function callWhisperApi(
             `Unexpected transcription response shape from ${provider.model}`,
         );
     }
-    return { text: body.text, model: provider.model };
+    return body.text;
 }
 
 /**
@@ -817,6 +775,12 @@ export interface TranscribeOptions {
     skipValidation?: boolean;
     /** Override chunk sizing. Production uses the defaults; tests and scripts shrink them. */
     chunkLimits?: TranscribeChunkLimits;
+    /**
+     * Where chunked transcription keeps each finished chunk's text, so a
+     * retried attempt skips chunks an earlier one already paid for (#48).
+     * Best effort: read and write errors are logged and ignored.
+     */
+    chunkCache?: ChunkTranscriptCache;
 }
 
 export interface TranscribeChunkLimits extends ChunkSizeLimits {
@@ -824,20 +788,189 @@ export interface TranscribeChunkLimits extends ChunkSizeLimits {
     uploadLimitBytes?: number;
 }
 
-const DEFAULT_CHUNK_LIMITS: ChunkSizeLimits = {
-    maxBytes: TARGET_CHUNK_SIZE_BYTES,
-    maxSeconds: MAX_CHUNK_SECONDS,
-};
+/** The caps that decide how a file is uploaded, all resolved. */
+export interface UploadLimits {
+    /** Files larger than this are planned from range reads, with `maxBytes` per chunk. */
+    uploadLimitBytes: number;
+    /** Per-chunk byte cap for a file over the upload limit. */
+    maxBytes: number;
+    /** Per-upload duration cap, chunk or whole file (MP3, MP4 and ADTS). */
+    maxSeconds: number;
+}
+
+/**
+ * The Worker's upload limits (25 MB upload, 15 MB chunks, 15 minutes), with
+ * any override. Tests and `check:chunks` override; production uses the defaults.
+ */
+export function uploadLimits(overrides: Partial<UploadLimits> = {}): UploadLimits {
+    return {
+        uploadLimitBytes: overrides.uploadLimitBytes ?? MAX_AUDIO_SIZE_BYTES,
+        maxBytes: overrides.maxBytes ?? TARGET_CHUNK_SIZE_BYTES,
+        maxSeconds: overrides.maxSeconds ?? MAX_CHUNK_SECONDS,
+    };
+}
+
+/** Where `planUploads` reads the audio from. */
+export interface AudioSource {
+    /** The file's size as the server reports it; 0 when unknown, which reads the file whole. */
+    size: number;
+    /** Content-type header of the audio file. */
+    contentType: string;
+    /** The file's content version from the HEAD that reported `size` (see `contentVersion`), or null. */
+    contentVersion: string | null;
+    /** Hostname of the audio URL, for logs. Never the full URL: CDN URLs can be signed. */
+    audioHost: string;
+    /** Read an inclusive byte range, as an HTTP Range request does. */
+    fetchRange: FetchRange;
+    /** Read the whole file (for a file that fits one upload). */
+    fetchWhole(): Promise<WholeAudio>;
+}
+
+/** A whole file and the content version of the response that carried it. */
+export interface WholeAudio {
+    bytes: ArrayBuffer;
+    contentVersion: string | null;
+}
+
+/**
+ * How a file goes to the model: the whole file, sent as exactly `uploads`
+ * (one upload, or an MP3 split by measured duration; see `uploadParts`), or
+ * a chunk plan. A whole-file `plan` is null when the planner couldn't plan
+ * the file. `contentVersion` identifies the bytes planned, for the chunk
+ * cache key: the whole-file GET's when the file was read whole, else the
+ * HEAD's.
+ */
+export type UploadRoute = (
+    | { kind: "chunked"; plan: ChunkPlan }
+    | { kind: "whole"; uploads: ArrayBuffer[]; plan: ChunkPlan | null; container: AudioContainer }
+) & { contentVersion: string | null };
+
+/**
+ * Decide how the Worker uploads a file. `transcribeAudio` and the
+ * `check:chunks` script both route through here, so the script reproduces
+ * exactly what production sends.
+ *
+ * - Over the upload limit: a plan from range reads, capped at `maxBytes` and
+ *   `maxSeconds` per chunk.
+ * - Otherwise the file is read whole and planned in memory with the upload
+ *   limit as its byte cap, so it is chunked only when its audio runs past
+ *   `maxSeconds`. A whole-file upload is the plan's only chunk for MP3 (bare
+ *   frames, no ID3 tag or VBR header frame, split into parts when its frames
+ *   run past `maxSeconds`) and the file itself otherwise (ADTS rewrapped as
+ *   M4A), including when the planner can't plan it.
+ */
+export async function planUploads(source: AudioSource, limits: UploadLimits): Promise<UploadRoute> {
+    const { contentType, fetchRange } = source;
+    const chunkLimits: ChunkSizeLimits = { maxBytes: limits.maxBytes, maxSeconds: limits.maxSeconds };
+
+    if (requiresChunking(source.size, limits.uploadLimitBytes)) {
+        console.log(
+            JSON.stringify({
+                event: "chunked_transcription_start",
+                contentLength: source.size,
+                contentLengthMB: Math.round(source.size / 1024 / 1024),
+            })
+        );
+        return {
+            kind: "chunked",
+            plan: await planRemote(fetchRange, source.size, contentType, chunkLimits),
+            contentVersion: source.contentVersion,
+        };
+    }
+
+    const whole = await source.fetchWhole();
+    const buffer = whole.bytes;
+    const version = whole.contentVersion ?? source.contentVersion;
+
+    // Double-check actual size (in case Content-Length was inaccurate)
+    if (buffer.byteLength > limits.uploadLimitBytes) {
+        console.log(
+            JSON.stringify({
+                event: "size_mismatch_chunking",
+                expected: source.size,
+                actual: buffer.byteLength,
+            })
+        );
+        return {
+            kind: "chunked",
+            plan: await planRemote(fetchRange, buffer.byteLength, contentType, chunkLimits),
+            contentVersion: version,
+        };
+    }
+
+    // It fits one upload, but a low-bitrate file can still run past the
+    // model's duration limit, so it is chunked whenever the plan has more
+    // than one chunk (#48).
+    const smallFileLimits: ChunkSizeLimits = { maxBytes: limits.uploadLimitBytes, maxSeconds: limits.maxSeconds };
+    const plan = await planSmallFile(buffer, contentType, smallFileLimits, source.audioHost);
+    if (plan && plan.chunks.length > 1) {
+        return { kind: "chunked", plan, contentVersion: version };
+    }
+
+    // MP3 uploads the plan's only chunk, which drops the ID3 tag and any
+    // Xing/Info/VBRI frame (or is the whole file when its frames can't be
+    // parsed), split if its frames run past the cap; everything else uploads
+    // as it always has.
+    const uploads =
+        plan?.container === "mp3"
+            ? uploadParts(await plan.chunks[0].load(), plan, plan.chunks[0], limits.maxSeconds)
+            : [prepareForUpload(buffer)];
+    return {
+        kind: "whole",
+        uploads,
+        plan,
+        container: plan?.container ?? detectContainer(probeOf(buffer)),
+        contentVersion: version,
+    };
+}
+
+/**
+ * The uploads that carry one planned chunk's bytes (or a whole-file upload's,
+ * its plan's only chunk). The MP3 planner sizes chunks from the VBR header or
+ * the first frame's bitrate, which a file whose bitrate drops after a short
+ * high-bitrate opening makes far too low, so an MP3 chunk cut on frame
+ * boundaries is measured by its frames and, past `maxSeconds`, split into
+ * parts that each fit it (logged as `mp3_upload_split`). Every other upload,
+ * including MP3 on the byte path, goes up as one. `transcribeAudio` and
+ * `check:chunks` both upload through here.
+ */
+export function uploadParts(
+    upload: ArrayBuffer,
+    plan: ChunkPlan | null,
+    chunk: PlannedChunk,
+    maxSeconds: number,
+): ArrayBuffer[] {
+    if (!isMp3FramePlan(plan)) return [upload];
+    const { seconds, parts } = splitMp3ByDuration(new Uint8Array(upload), maxSeconds, {
+        overlapSeconds: CHUNK_OVERLAP_SECONDS,
+        bufferEndsFile: chunk.isLast,
+    });
+    if (parts.length === 1) return [upload];
+    console.log(
+        JSON.stringify({
+            event: "mp3_upload_split",
+            chunkIndex: chunk.index + 1,
+            totalChunks: plan.chunks.length,
+            measuredSeconds: Math.round(seconds * 100) / 100,
+            maxSeconds,
+            parts: parts.length,
+        })
+    );
+    return parts.map(exactBuffer);
+}
 
 /**
  * Transcribe audio from URL using OpenAI gpt-transcribe.
- * Automatically falls back to whisper-1 for files the primary model rejects.
- * Automatically handles large files by chunking them into smaller segments.
- * 
+ * Chunks any file over the upload limit, or whose audio runs past the
+ * per-chunk duration cap (`MAX_CHUNK_SECONDS`), which the model enforces
+ * whatever the file size.
+ *
  * @param audioUrl - URL of the audio file to transcribe
  * @param options - Transcription options (apiKey, onProgress)
  * @returns Transcription result with text and source
- * @throws AppError with AUDIO_UNAVAILABLE, TRANSCRIPTION_FAILED, or RATE_LIMITED
+ * @throws AppError with AUDIO_UNAVAILABLE, AUDIO_UNSUPPORTED, AUDIO_REJECTED
+ *   (the model refused an upload; logged as `transcription_rejected`),
+ *   TRANSCRIPTION_FAILED, or RATE_LIMITED
  * 
  * @example
  * ```typescript
@@ -858,11 +991,7 @@ export async function transcribeAudio(
 
     const providerConfig = getProviderConfig(opts.provider);
     const progressCallback = opts.onProgress || onProgress;
-    const uploadLimitBytes = opts.chunkLimits?.uploadLimitBytes ?? MAX_AUDIO_SIZE_BYTES;
-    const chunkLimits: ChunkSizeLimits = {
-        maxBytes: opts.chunkLimits?.maxBytes ?? DEFAULT_CHUNK_LIMITS.maxBytes,
-        maxSeconds: opts.chunkLimits?.maxSeconds ?? DEFAULT_CHUNK_LIMITS.maxSeconds,
-    };
+    const limits = uploadLimits(opts.chunkLimits);
 
     console.log(
         JSON.stringify({
@@ -883,7 +1012,7 @@ export async function transcribeAudio(
     let validation: AudioValidation;
     if (opts.skipValidation) {
         // Caller has already resolved the URL — skip validation and redirect resolution
-        validation = { contentLength: 0, contentType: "audio/mpeg" };
+        validation = { contentLength: 0, contentType: "audio/mpeg", contentVersion: null };
     } else {
         audioUrl = await resolveAudioUrl(audioUrl);
 
@@ -910,131 +1039,322 @@ export async function transcribeAudio(
         }
     }
 
-    // Step 3: Route based on file size
-    if (requiresChunking(validation.contentLength, uploadLimitBytes)) {
-        // Large file - use chunked transcription
-        console.log(
-            JSON.stringify({
-                event: "chunked_transcription_start",
-                provider: providerConfig.name,
-                contentLength: validation.contentLength,
-                contentLengthMB: Math.round(validation.contentLength / 1024 / 1024),
-            })
-        );
-        return await transcribeWithChunking(
-            audioUrl,
-            validation.contentLength,
-            opts.apiKey,
-            providerConfig,
-            progressCallback,
-            validation.contentType,
-            chunkLimits,
-        );
-    }
-
-    // Small file - fetch and transcribe directly
-    const audioBuffer = await fetchAudio(audioUrl);
-
-    // Double-check actual size (in case Content-Length was inaccurate)
-    if (audioBuffer.byteLength > uploadLimitBytes) {
-        // If it's bigger than expected, fall back to chunking
-        console.log(
-            JSON.stringify({
-                event: "size_mismatch_chunking",
-                expected: validation.contentLength,
-                actual: audioBuffer.byteLength,
-            })
-        );
-        return await transcribeWithChunking(
-            audioUrl,
-            audioBuffer.byteLength,
-            opts.apiKey,
-            providerConfig,
-            progressCallback,
-            validation.contentType,
-            chunkLimits,
-        );
-    }
-
-    // Step 4: Call transcription API with retry for transient errors
-    const uploadBuffer = prepareForUpload(audioBuffer);
-    const result = await withRetry(
-        () => callWhisperApi(uploadBuffer, opts.apiKey, providerConfig, validation.contentType),
+    // Step 3: Route: chunked for a file over the upload limit or past the
+    // duration cap, otherwise one upload (see planUploads).
+    const route = await planUploads(
         {
-            maxRetries: 3,
-            baseDelayMs: 1000,
-            shouldRetry: isTransientError,
+            size: validation.contentLength,
+            contentType: validation.contentType,
+            contentVersion: validation.contentVersion,
+            // A getter: read only once the URL has been validated or fetched, so it parses.
+            get audioHost() {
+                return new URL(audioUrl).hostname;
+            },
+            fetchRange: (start, end) => fetchAudioChunk(audioUrl, start, end),
+            fetchWhole: () => fetchAudio(audioUrl),
         },
+        limits,
     );
-
-    return {
-        text: result.text.trim(),
-        source: providerConfig.name,
-        model: result.model,
+    const ctx: TranscribePlanContext = {
+        apiKey: opts.apiKey,
+        provider: providerConfig,
+        contentType: validation.contentType,
+        audioHost: new URL(audioUrl).hostname,
+        maxChunkSeconds: limits.maxSeconds,
+        onProgress: progressCallback,
+        chunkCache: opts.chunkCache,
+        contentVersion: route.contentVersion,
     };
+    if (route.kind === "chunked") {
+        return await transcribePlan(route.plan, ctx);
+    }
+
+    // Step 4: The whole file, as exactly the bytes planUploads chose.
+    const { uploads, plan } = route;
+    if (plan) {
+        console.log(
+            JSON.stringify({
+                event: "upload_plan",
+                ...planLogFields(plan, ctx),
+                uploadBytes: uploads.reduce((n, upload) => n + upload.byteLength, 0),
+            })
+        );
+    }
+    const text = await transcribeUploads(uploads, ctx, (error, upload, part) =>
+        logRejection(error, {
+            position: { wholeFile: true },
+            part,
+            upload,
+            container: route.container,
+            chunk: plan?.chunks[0],
+            vbrHeaderDropped: plan?.audio.vbrHeaderDropped ?? false,
+            audioHost: ctx.audioHost,
+        }),
+    );
+    return {
+        text,
+        source: providerConfig.name,
+        model: providerConfig.model,
+    };
+}
+
+/** Which of a chunk's uploads, when `uploadParts` split it. */
+interface UploadPart {
+    part: number;
+    totalParts: number;
+}
+
+/**
+ * Transcribe one chunk's uploads (or a whole file's) in order, retrying
+ * each on transient errors, and stitch their texts (one upload's text is
+ * returned trimmed). A rejection is passed to `onRejected` with the upload
+ * that drew it, then rethrown.
+ */
+async function transcribeUploads(
+    uploads: ArrayBuffer[],
+    ctx: TranscribePlanContext,
+    onRejected: (error: AppError, upload: ArrayBuffer, part: UploadPart | undefined) => void,
+): Promise<string> {
+    const texts: ChunkTranscription[] = [];
+    for (const [i, upload] of uploads.entries()) {
+        try {
+            const text = await withRetry(
+                () => callTranscriptionApi(upload, ctx.apiKey, ctx.provider, ctx.contentType),
+                {
+                    maxRetries: 3,
+                    baseDelayMs: 1000,
+                    shouldRetry: isTransientError,
+                },
+            );
+            texts.push({ text: text.trim(), isFirst: i === 0, isLast: i === uploads.length - 1, overlapBytes: 0 });
+        } catch (error) {
+            if (isRejection(error)) {
+                onRejected(error, upload, uploads.length > 1 ? { part: i + 1, totalParts: uploads.length } : undefined);
+            }
+            throw error;
+        }
+    }
+    return stitchTranscripts(texts);
+}
+
+/**
+ * Plan a file that is already in memory. Returns null when the planner
+ * rejects the format (fragmented or truncated MP4, say): such a file fits
+ * one upload, which may still work, so it keeps today's whole-file path.
+ */
+async function planSmallFile(
+    buffer: ArrayBuffer,
+    contentType: string,
+    limits: ChunkSizeLimits,
+    audioHost: string,
+): Promise<ChunkPlan | null> {
+    try {
+        return await planChunks({
+            probe: probeOf(buffer),
+            fileSize: buffer.byteLength,
+            contentType,
+            limits,
+            fetchRange: inMemoryRange(buffer),
+        });
+    } catch (error) {
+        if (!(error instanceof AppError && error.code === ERROR_CODES.AUDIO_UNSUPPORTED)) throw error;
+        console.log(
+            JSON.stringify({
+                event: "upload_plan_unavailable",
+                reason: error.message,
+                fileBytes: buffer.byteLength,
+                audioHost,
+            })
+        );
+        return null;
+    }
+}
+
+/** The first bytes of a file in memory, as much as container detection reads. */
+function probeOf(buffer: ArrayBuffer): Uint8Array {
+    return new Uint8Array(buffer, 0, Math.min(CONTAINER_PROBE_BYTES, buffer.byteLength));
+}
+
+/** Serve range reads from a buffer, clamping `end` to its length like an HTTP Range request. */
+function inMemoryRange(buffer: ArrayBuffer): FetchRange {
+    return async (start, end) => buffer.slice(start, Math.min(end, buffer.byteLength - 1) + 1);
 }
 
 // ============================================================================
 // Chunked Transcription
 // ============================================================================
 
+/** What `transcribePlan` needs besides the plan. */
+interface TranscribePlanContext {
+    apiKey: string;
+    provider: ProviderConfig;
+    /** Content-type header of the audio file. */
+    contentType: string;
+    /** Hostname of the audio URL, for logs. Never the full URL: CDN URLs can be signed. */
+    audioHost: string;
+    /** The per-chunk duration cap the plan was made with, for logs. */
+    maxChunkSeconds: number;
+    onProgress?: (currentChunk: number, totalChunks: number) => void;
+    chunkCache?: ChunkTranscriptCache;
+    /** The planned bytes' content version, for the chunk cache key (see `UploadRoute`). */
+    contentVersion: string | null;
+}
+
 /**
- * Transcribe a large audio file by splitting it into chunks.
+ * The cache key for one planned chunk. It holds everything that decides the
+ * chunk's audio, so a planner change (a `CHUNK_PLAN_VERSION` bump), a
+ * re-encoded file or a different cut misses instead of stitching text from
+ * different audio. `contentVersion` (the source's strong ETag or
+ * Last-Modified) tells apart two files of the same size, such as a CDN
+ * replacing the audio between attempts; without one ("-"), the file size is
+ * the only identity.
+ */
+export function chunkCacheKey(plan: ChunkPlan, chunk: PlannedChunk, contentVersion: string | null): string {
+    return `${CHUNK_PLAN_VERSION}:${plan.container}:${plan.fileSize}:${contentVersion ?? "-"}:${chunk.index}:${chunk.cacheId}`;
+}
+
+/** A cached chunk transcript, or null on a miss or a cache error (logged, never thrown). */
+async function readCachedChunk(cache: ChunkTranscriptCache, key: string, chunkNumber: number): Promise<string | null> {
+    try {
+        return (await cache.get(key))?.text ?? null;
+    } catch (error) {
+        console.warn(
+            JSON.stringify({
+                event: "chunk_cache_read_failed",
+                chunkIndex: chunkNumber,
+                error: error instanceof Error ? error.message : String(error),
+            })
+        );
+        return null;
+    }
+}
+
+/** Cache a chunk transcript; a cache error is logged, never thrown. */
+async function writeCachedChunk(cache: ChunkTranscriptCache, key: string, text: string, chunkNumber: number): Promise<void> {
+    try {
+        await cache.put(key, { text });
+    } catch (error) {
+        console.warn(
+            JSON.stringify({
+                event: "chunk_cache_write_failed",
+                chunkIndex: chunkNumber,
+                error: error instanceof Error ? error.message : String(error),
+            })
+        );
+    }
+}
+
+/**
+ * The plan's audio summary for `chunking_plan` and `upload_plan`, so a
+ * rejected upload can be diagnosed from the logs alone.
+ */
+function planLogFields(plan: ChunkPlan, ctx: TranscribePlanContext): Record<string, unknown> {
+    return {
+        container: plan.container,
+        ...plan.audio,
+        maxChunkSeconds: ctx.maxChunkSeconds,
+        audioHost: ctx.audioHost,
+    };
+}
+
+/** An upload the model refused: `callTranscriptionApi` throws these, and nothing else does. */
+function isRejection(error: unknown): error is AppError {
+    return error instanceof AppError && error.code === ERROR_CODES.AUDIO_REJECTED;
+}
+
+interface RejectedUpload {
+    /** Which chunk of how many, or the whole file in one upload. */
+    position: { chunkIndex: number; totalChunks: number } | { wholeFile: true };
+    /** Which of the chunk's uploads, when it was split by measured duration. */
+    part?: UploadPart;
+    /** The bytes sent to the API. */
+    upload: ArrayBuffer;
+    container: AudioContainer;
+    /** The planned chunk the upload came from; absent when the file couldn't be planned. */
+    chunk?: PlannedChunk;
+    vbrHeaderDropped: boolean;
+    audioHost: string;
+}
+
+/**
+ * Log `transcription_rejected` with enough to reproduce the rejection from
+ * Workers Logs alone: where the upload sat in the file, its first bytes, and
+ * the full OpenAI error body. Host only, never the URL: CDN URLs can be signed.
+ */
+function logRejection(error: AppError, rejected: RejectedUpload): void {
+    const { position, part, upload, container, chunk, vbrHeaderDropped, audioHost } = rejected;
+    console.error(
+        JSON.stringify({
+            event: "transcription_rejected",
+            container,
+            ...position,
+            ...part,
+            uploadBytes: upload.byteLength,
+            plannedSeconds: chunk?.plannedSeconds,
+            ...chunk?.logFields,
+            firstBytesHex: hexBytes(new Uint8Array(upload, 0, Math.min(32, upload.byteLength))),
+            vbrHeaderDropped,
+            openAiError: error.cause?.message,
+            audioHost,
+        })
+    );
+}
+
+/**
+ * Plan chunks for a remote file too large for one upload: fetch a probe of
+ * its first bytes to identify the container, then plan with range reads
+ * (see `planChunks`).
  *
- * Fetches a probe of the file's first bytes to identify the container, plans
- * chunks for it (see `planChunks`), then loads, transcribes and stitches the
- * chunks one at a time so only one is in memory at once.
- *
- * @param audioUrl - URL of the audio file
+ * @param fetchRange - Range reader over the audio file
  * @param contentLength - Total file size in bytes
- * @param apiKey - API key for the transcription provider
- * @param provider - Provider config
- * @param onProgress - Optional progress callback
  * @param contentType - Content-type header of the audio file
  * @param limits - Per-chunk byte and duration caps
- * @returns Combined transcription result
  */
-async function transcribeWithChunking(
-    audioUrl: string,
+async function planRemote(
+    fetchRange: FetchRange,
     contentLength: number,
-    apiKey: string,
-    provider: ProviderConfig,
-    onProgress: ((currentChunk: number, totalChunks: number) => void) | undefined,
     contentType: string,
     limits: ChunkSizeLimits,
-): Promise<TranscriptionResult> {
+): Promise<ChunkPlan> {
     // Before the probe, so an oversized file costs no audio fetch.
     assertWithinTotalSizeLimit(contentLength);
 
     const probeBytes = Math.min(CONTAINER_PROBE_BYTES, contentLength);
     console.log(JSON.stringify({ event: "fetching_container_probe", probeBytes }));
-    const probe = new Uint8Array(await fetchAudioChunk(audioUrl, 0, probeBytes - 1));
+    const probe = new Uint8Array(await fetchRange(0, probeBytes - 1));
 
-    const { container, totalBytes, chunks } = await planChunks({
-        probe,
-        fileSize: contentLength,
-        contentType,
-        limits,
-        fetchRange: (start, end) => fetchAudioChunk(audioUrl, start, end),
-    });
+    return planChunks({ probe, fileSize: contentLength, contentType, limits, fetchRange });
+}
+
+/**
+ * Transcribe a chunk plan: load, transcribe and stitch the chunks one at a
+ * time so only one is in memory at once. With a chunk cache, a cached chunk
+ * is neither fetched nor sent to OpenAI, and each new chunk is cached once
+ * transcribed.
+ *
+ * @returns Combined transcription result
+ */
+async function transcribePlan(plan: ChunkPlan, ctx: TranscribePlanContext): Promise<TranscriptionResult> {
+    const { provider, audioHost, onProgress, chunkCache } = ctx;
+    const { totalBytes, chunks } = plan;
     const totalChunks = chunks.length;
 
     console.log(
         JSON.stringify({
             event: "chunking_plan",
-            container,
+            ...planLogFields(plan, ctx),
             totalChunks,
-            contentLengthMB: Math.round(contentLength / 1024 / 1024),
-            estimatedSeconds: estimateTranscriptionTime(contentLength, totalChunks),
+            contentLengthMB: Math.round(plan.fileSize / 1024 / 1024),
+            estimatedTranscriptionSeconds: estimateTranscriptionTime(plan.fileSize, totalChunks),
         })
     );
 
     // Process chunks sequentially to manage memory
     const transcriptions: ChunkTranscription[] = [];
-    // Distinct models actually used, in first-use order. A single chunk falling
-    // back must not relabel the whole transcript — mixed runs are the norm.
-    const modelsUsed: string[] = [];
     let tailChunkSkipped: { chunkIndex: number; error: string; sharePercent: number } | null = null;
+    // The inter-chunk sleep spaces out CDN fetches, so it's owed only once a
+    // chunk has been fetched: a resumed job's first uncached chunk goes at once.
+    let fetchedAChunk = false;
 
     for (const chunk of chunks) {
         const chunkNumber = chunk.index + 1;
@@ -1051,34 +1371,48 @@ async function transcribeWithChunking(
             })
         );
 
-        try {
-            // Add delay between chunks to avoid CDN rate limits (skip first chunk)
-            if (chunk.index > 0) {
-                await sleep(TIMEOUTS.CHUNK_FETCH_DELAY_MS);
-            }
-
-            const bufferToTranscribe = await chunk.load();
-
-            // Transcribe the chunk
-            const chunkResult = await withRetry(
-                () => callWhisperApi(bufferToTranscribe, apiKey, provider, contentType),
-                {
-                    maxRetries: 3,
-                    baseDelayMs: 1000,
-                    shouldRetry: isTransientError,
-                },
-            );
-
+        const cacheKey = chunkCacheKey(plan, chunk, ctx.contentVersion);
+        const cachedText = chunkCache ? await readCachedChunk(chunkCache, cacheKey, chunkNumber) : null;
+        if (cachedText !== null) {
             transcriptions.push({
-                text: chunkResult.text.trim(),
+                text: cachedText,
                 isFirst: chunk.isFirst,
                 isLast: chunk.isLast,
                 overlapBytes: chunk.overlapBytes,
             });
+            console.log(JSON.stringify({ event: "chunk_cache_hit", chunkIndex: chunkNumber, totalChunks }));
+            continue;
+        }
 
-            // Track actual model used (may differ from primary if fallback occurred)
-            if (!modelsUsed.includes(chunkResult.model)) {
-                modelsUsed.push(chunkResult.model);
+        try {
+            // Add delay between chunk fetches to avoid CDN rate limits
+            if (fetchedAChunk) {
+                await sleep(TIMEOUTS.CHUNK_FETCH_DELAY_MS);
+            }
+            fetchedAChunk = true;
+
+            // Transcribe the chunk: one upload, or its parts in order when
+            // its frames run past the cap. A rejected part fails the chunk.
+            const uploads = uploadParts(await chunk.load(), plan, chunk, ctx.maxChunkSeconds);
+            const text = await transcribeUploads(uploads, ctx, (error, upload, part) =>
+                logRejection(error, {
+                    position: { chunkIndex: chunkNumber, totalChunks },
+                    part,
+                    upload,
+                    container: plan.container,
+                    chunk,
+                    vbrHeaderDropped: plan.audio.vbrHeaderDropped ?? false,
+                    audioHost,
+                }),
+            );
+            transcriptions.push({
+                text,
+                isFirst: chunk.isFirst,
+                isLast: chunk.isLast,
+                overlapBytes: chunk.overlapBytes,
+            });
+            if (chunkCache) {
+                await writeCachedChunk(chunkCache, cacheKey, text, chunkNumber);
             }
 
             console.log(
@@ -1086,7 +1420,7 @@ async function transcribeWithChunking(
                     event: "chunk_completed",
                     chunkIndex: chunkNumber,
                     totalChunks,
-                    textLength: chunkResult.text.length,
+                    textLength: text.length,
                 })
             );
         } catch (error) {
@@ -1108,10 +1442,10 @@ async function transcribeWithChunking(
             }
 
             // Tolerate failure of a small trailing chunk: some podcast files end in
-            // a non-decodable trailer (ID3v1 footers, ad markers, etc.) that both the
-            // primary model and whisper-1 reject. Losing a few minutes of outro beats
-            // failing the episode. But the last chunk can hold up to a full chunk of
-            // audio (half of a two-chunk file), so a large tail fails like any other
+            // a non-decodable trailer (ID3v1 footers, ad markers, etc.) that the
+            // model rejects. Losing a few minutes of outro beats failing the
+            // episode. But the last chunk can hold up to a full chunk of audio
+            // (half of a two-chunk file), so a large tail fails like any other
             // chunk rather than silently dropping real content (#54).
             if (chunk.isLast && transcriptions.length > 0 && totalChunks > 1) {
                 // Overlap was already transcribed with the previous chunk, so only
@@ -1135,6 +1469,13 @@ async function transcribeWithChunking(
             }
 
             // Re-throw with context
+            if (isRejection(error)) {
+                throw new AppError(
+                    ERROR_CODES.AUDIO_REJECTED,
+                    `${provider.model} rejected chunk ${chunkNumber}/${totalChunks} of the audio`,
+                    error.cause,
+                );
+            }
             if (error instanceof AppError) {
                 throw error;
             }
@@ -1160,11 +1501,10 @@ async function transcribeWithChunking(
     return {
         text: combinedText,
         source: provider.name,
-        // "gpt-transcribe+whisper-1" when chunks used different models.
-        model: modelsUsed.length > 0 ? modelsUsed.join("+") : provider.model,
+        model: provider.model,
         ...(tailChunkSkipped && {
             partial: true,
-            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} failed transcription after both ${provider.model} and whisper-1 rejected it (${tailChunkSkipped.error}). The transcript is missing the last ${tailChunkSkipped.sharePercent}% of the audio.`,
+            partialReason: `Final chunk ${tailChunkSkipped.chunkIndex}/${totalChunks} was rejected by ${provider.model} (${tailChunkSkipped.error}). The transcript is missing the last ${tailChunkSkipped.sharePercent}% of the audio.`,
         }),
     };
 }

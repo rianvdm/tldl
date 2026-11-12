@@ -52,6 +52,7 @@ import {
 } from "../lib/queue";
 import { parseApplePodcastsUrl, parsePodcastUrl, deriveEpisodeId, deriveManualEpisodeId } from "../lib/url-parser";
 import { resolveWebsiteUrl, toWebsiteUrl } from "../lib/podcast-links";
+import { urlHost } from "../lib/log-urls";
 import { isValidTemplateId, getValidTags, validateTags, TEMPLATES, isBlockedPodcast } from "../lib/constants";
 import { prefetchEpisodeInfo } from "../services/apple-podcasts";
 import { resolveAudioUrl } from "../services/transcription";
@@ -469,8 +470,8 @@ admin.post("/submit", async (c) => {
             preResolvedAudioUrl = resolved;
             console.log(JSON.stringify({
                 event: "admin_preresolve_audio_url",
-                original: audioUrlOverride,
-                resolved,
+                originalHost: urlHost(audioUrlOverride),
+                resolvedHost: urlHost(resolved),
             }));
         }
     }

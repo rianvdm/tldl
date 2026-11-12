@@ -3,6 +3,9 @@
  * Used for handling transient failures in external API calls
  */
 
+import { ERROR_CODES } from "./constants";
+import { AppError } from "./errors";
+
 export interface RetryOptions {
     /** Maximum number of retry attempts (not including initial attempt) */
     maxRetries: number;
@@ -85,8 +88,16 @@ export function isServerError(error: Error): boolean {
 }
 
 /**
- * Predicate for retrying on transient errors (rate limit or server errors)
+ * Predicate for retrying on transient errors (rate limit or server errors).
+ * A rejected or unsupported file fails the same way every time, so it is never
+ * transient, whatever digits its message happens to contain.
  */
 export function isTransientError(error: Error): boolean {
+    if (
+        error instanceof AppError &&
+        (error.code === ERROR_CODES.AUDIO_REJECTED || error.code === ERROR_CODES.AUDIO_UNSUPPORTED)
+    ) {
+        return false;
+    }
     return isRateLimitError(error) || isServerError(error);
 }

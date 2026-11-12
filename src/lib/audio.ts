@@ -1,7 +1,7 @@
 /**
  * Audio utilities for handling large audio files
- * Provides MP3 frame detection and chunk range calculation for
- * splitting large files for transcription
+ * Provides ID3 tag measurement and chunk range calculation for
+ * splitting large files for transcription (MP3 frames: see mp3.ts)
  */
 
 // ============================================================================
@@ -9,14 +9,7 @@
 // ============================================================================
 
 /**
- * MP3 frame sync word - first 11 bits are all 1s
- * Frame header starts with 0xFF followed by 0xE0-0xFF
- */
-const MP3_SYNC_BYTE_1 = 0xff;
-const MP3_SYNC_MASK = 0xe0; // First 3 bits of second byte must be 111
-
-/**
- * Target chunk size for transcription (under 25MB Whisper limit)
+ * Target chunk size for transcription (under the API's 25MB upload limit)
  */
 export const TARGET_CHUNK_SIZE_BYTES = 15 * 1024 * 1024; // 15MB
 
@@ -33,12 +26,17 @@ export const CHUNK_OVERLAP_BYTES = 32 * 1024; // 32KB (~2 seconds at 128kbps)
 export const MAX_TOTAL_SIZE_BYTES = 300 * 1024 * 1024; // 300MB safety limit
 
 /**
- * Longest audio a single MP4/M4A transcription chunk may cover. The model's
- * audio token budget scales with duration, so bytes alone are not a safe cap.
+ * Longest audio a single MP3, MP4/M4A or ADTS transcription chunk may cover.
+ * The model's audio token budget scales with duration, so bytes alone are not
+ * a safe cap. The `other` byte path (OGG, WAV) can't measure duration and
+ * stays byte-capped.
  */
 export const MAX_CHUNK_SECONDS = 15 * 60;
 
-/** Overlap between MP4/M4A chunks, measured in time and cut on sample boundaries. */
+/**
+ * Overlap between chunks in seconds of audio: cut on sample boundaries for
+ * MP4/M4A, converted to bytes at the average byte rate for MP3 and ADTS.
+ */
 export const CHUNK_OVERLAP_SECONDS = 2;
 
 /** Bytes fetched up front to sniff the container and, usually, locate `moov`. */
@@ -95,79 +93,6 @@ export function id3Length(bytes: Uint8Array): number {
         ((bytes[8] & 0x7f) << 7) |
         (bytes[9] & 0x7f);
     return 10 + bodySize;
-}
-
-// ============================================================================
-// MP3 Frame Detection
-// ============================================================================
-
-/**
- * Find the nearest MP3 frame boundary at or after the given offset.
- * MP3 frames start with a sync word: 11 bits of 1s (0xFF followed by 0xE0+)
- * 
- * This ensures we don't cut audio mid-frame, which would cause decoding errors.
- * 
- * @param buffer - Audio data to search
- * @param startOffset - Position to start searching from
- * @param maxSearch - Maximum bytes to search (default 4KB, covers ~10 frames)
- * @returns Byte offset of the frame boundary, or startOffset if not found
- */
-export function findMp3FrameBoundary(
-    buffer: Uint8Array,
-    startOffset: number,
-    maxSearch: number = 4096
-): number {
-    const endSearch = Math.min(startOffset + maxSearch, buffer.length - 1);
-
-    for (let i = startOffset; i < endSearch; i++) {
-        // Check for MP3 sync word
-        if (buffer[i] === MP3_SYNC_BYTE_1 && i + 1 < buffer.length) {
-            const secondByte = buffer[i + 1];
-            // Verify it's a valid frame header (top 3 bits must be 111)
-            if ((secondByte & MP3_SYNC_MASK) === MP3_SYNC_MASK) {
-                // Additional validation: MPEG version bits (bits 4-3) shouldn't be 01
-                const versionBits = (secondByte >> 3) & 0x03;
-                if (versionBits !== 0x01) {
-                    return i;
-                }
-            }
-        }
-    }
-
-    // If no frame found, return the original offset
-    // The decoder should still handle this reasonably
-    return startOffset;
-}
-
-/**
- * Search backwards from a position to find an MP3 frame boundary.
- * Used when we need to ensure overlap starts at a clean frame.
- * 
- * @param buffer - Audio data to search
- * @param startOffset - Position to start searching backwards from
- * @param maxSearch - Maximum bytes to search backwards
- * @returns Byte offset of the frame boundary
- */
-export function findMp3FrameBoundaryReverse(
-    buffer: Uint8Array,
-    startOffset: number,
-    maxSearch: number = 4096
-): number {
-    const endSearch = Math.max(startOffset - maxSearch, 0);
-
-    for (let i = startOffset; i >= endSearch; i--) {
-        if (buffer[i] === MP3_SYNC_BYTE_1 && i + 1 < buffer.length) {
-            const secondByte = buffer[i + 1];
-            if ((secondByte & MP3_SYNC_MASK) === MP3_SYNC_MASK) {
-                const versionBits = (secondByte >> 3) & 0x03;
-                if (versionBits !== 0x01) {
-                    return i;
-                }
-            }
-        }
-    }
-
-    return startOffset;
 }
 
 // ============================================================================
@@ -285,9 +210,9 @@ export function estimateTranscriptionTime(
     _totalBytes: number,
     chunkCount: number
 ): number {
-    // Rough estimates based on observed Whisper API performance:
-    // - ~30-60 seconds per 20MB chunk
-    // - Plus overhead for HTTP requests, processing
+    // Rough, conservative estimate, kept from an earlier model that took
+    // ~30-60 seconds per 20MB chunk (gpt-transcribe takes ~20s per 15MB),
+    // plus overhead for HTTP requests and processing.
     const baseSecondsPerChunk = 45;
     const overheadSeconds = 15;
 
@@ -298,7 +223,7 @@ export function estimateTranscriptionTime(
  * Check if a file size requires chunking.
  * 
  * @param contentLength - File size in bytes
- * @param whisperLimit - Upload limit (default 25MB, the API's). Production uses the default;
+ * @param uploadLimit - Upload limit (default 25MB, the API's). Production uses the default;
  *   tests lower it to force small fixtures onto the chunked path. The actual chunk size is
  *   controlled by TARGET_CHUNK_SIZE_BYTES (currently 15MB), which is intentionally smaller
  *   than this limit to stay clear of the transcription model's per-request audio budget.
@@ -306,7 +231,16 @@ export function estimateTranscriptionTime(
  */
 export function requiresChunking(
     contentLength: number,
-    whisperLimit: number = 25 * 1024 * 1024
+    uploadLimit: number = 25 * 1024 * 1024
 ): boolean {
-    return contentLength > whisperLimit;
+    return contentLength > uploadLimit;
+}
+
+// ============================================================================
+// Logging
+// ============================================================================
+
+/** Lowercase hex pairs separated by spaces, for logging the first bytes of audio. */
+export function hexBytes(bytes: Uint8Array): string {
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
 }

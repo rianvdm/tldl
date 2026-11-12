@@ -8,8 +8,14 @@
  * - ADTS (raw AAC): byte ranges sized to the duration cap; each chunk's
  *   complete frames are rewrapped as a standalone M4A, because OpenAI
  *   rejects raw ADTS.
- * - Everything else (MP3, OGG, WAV): byte ranges, with the file's first
- *   512 bytes prepended to every chunk after the first.
+ * - MP3: byte ranges sized to the duration cap, starting at the first audio
+ *   frame. Each chunk is bare MPEG frames: no ID3 tag and never a
+ *   Xing/Info/VBRI frame, which declares the whole file's duration and makes
+ *   gpt-transcribe reject the chunk. A chunk after the first starts at its
+ *   first confirmed frame.
+ * - Everything else (OGG, WAV, and MP3 whose frames can't be parsed): byte
+ *   ranges, with the file's first 512 bytes prepended to every chunk after
+ *   the first.
  *
  * Must not import from `./transcription` (which imports this module).
  */
@@ -22,16 +28,33 @@ import {
     MAX_CHUNK_FETCH_FACTOR,
     RUN_COALESCE_GAP_BYTES,
     calculateChunkRanges,
+    hexBytes,
     id3Length,
 } from "../lib/audio";
 import { ERROR_CODES } from "../lib/constants";
 import { AppError } from "../lib/errors";
+import {
+    MP3_RESYNC_WINDOW_BYTES,
+    analyzeMp3,
+    findMp3Frame,
+    parseMp3FrameHeader,
+    readVbrHeader,
+    type VbrHeaderKind,
+} from "../lib/mp3";
 import { coalesceRuns, parseAudioTrack, planSampleChunks, sampleDataEnd } from "../lib/mp4";
 import { fetchExact, loadMp4Chunk, locateMoov, type FetchRange } from "./audio-containers";
 
 /**
- * Size of the file header prepended to byte-range chunks after the first,
- * so the API can recognise the format. Enough for MP3 headers and metadata.
+ * Version of the planner's output and the chunk cache key's format. A cached
+ * chunk transcript is reused only under the same version, so bump this
+ * whenever the chunks planned for the same file and limits change
+ * (boundaries or the bytes a chunk uploads) or `chunkCacheKey` changes.
+ */
+export const CHUNK_PLAN_VERSION = 3;
+
+/**
+ * Size of the file header prepended to byte-range chunks after the first on
+ * the `other` path, so the API can recognise the format.
  */
 const AUDIO_HEADER_SIZE_BYTES = 512;
 
@@ -43,7 +66,7 @@ const ADTS_CONFIRM_BYTES = 0x1fff + 7;
 
 export type AudioContainer = "mp3" | "mp4" | "adts" | "other";
 
-/** Per-chunk caps. The MP3/other byte path uses only `maxBytes`; MP4 and ADTS use both. */
+/** Per-chunk caps. MP3, MP4 and ADTS use both; the `other` byte path uses only `maxBytes`. */
 export interface ChunkSizeLimits {
     maxBytes: number;
     maxSeconds: number;
@@ -60,6 +83,14 @@ export interface PlannedChunk {
     newBytes: number;
     /** Container-specific fields for the `chunk_processing` log event. */
     logFields: Record<string, unknown>;
+    /**
+     * Identifies the chunk's audio within the file, for the chunk cache:
+     * `b{startByte}-{endByte}` (absolute, inclusive) on the byte, MP3 and ADTS
+     * paths, `s{firstSample}-{endSample}` (end exclusive) on MP4.
+     */
+    cacheId: string;
+    /** Audio duration the planner expects the chunk to hold (unset on the `other` byte path). */
+    plannedSeconds?: number;
     /** Fetch the chunk's audio and return the bytes to upload. */
     load(): Promise<ArrayBuffer>;
 }
@@ -67,11 +98,33 @@ export interface PlannedChunk {
 export interface ChunkPlan {
     container: AudioContainer;
     /**
-     * All the audio bytes: the file size on the byte path, the bytes after
-     * any ID3 tag for ADTS, the track's sample bytes for MP4.
+     * All the audio bytes: the file size on the byte path, the bytes from
+     * the first audio frame for MP3, the bytes after any ID3 tag for ADTS,
+     * the track's sample bytes for MP4.
      */
     totalBytes: number;
+    /** The whole file's byte length, whatever the container. */
+    fileSize: number;
+    /** What the planner learnt about the audio; `{}` on the byte path. */
+    audio: ChunkPlanAudio;
     chunks: PlannedChunk[];
+}
+
+/** The audio facts a plan was sized from, for logs. Fields a container can't supply are absent. */
+export interface ChunkPlanAudio {
+    bitrateKbps?: number;
+    sampleRate?: number;
+    channels?: number;
+    /** MP3 only: the VBR header frame before the audio, if any. */
+    vbrHeader?: VbrHeaderKind | "none";
+    /** MP3 only: the VBR header frame was left out of every chunk. */
+    vbrHeaderDropped?: boolean;
+    /** MP3 only: the duration the VBR header declares, or null without a frame count. */
+    declaredSeconds?: number | null;
+    /** MP3 only: the duration from the audio bytes at the first frame's bitrate. */
+    estimatedSeconds?: number;
+    /** The duration the per-chunk seconds cap was applied to. */
+    usedSeconds?: number;
 }
 
 export interface PlanChunksInput {
@@ -120,7 +173,7 @@ export function detectContainer(probe: Uint8Array): AudioContainer {
 /** Detect the container and plan its chunks. */
 export async function planChunks(input: PlanChunksInput): Promise<ChunkPlan> {
     const id3Bytes = id3Length(input.probe);
-    const { container, audioProbe, probedAfterId3 } = await sniffContainer(input, id3Bytes);
+    const { container, audioProbe, audioProbeOffset, probedAfterId3 } = await sniffContainer(input, id3Bytes);
     console.log(
         JSON.stringify({
             event: "container_detected",
@@ -133,6 +186,7 @@ export async function planChunks(input: PlanChunksInput): Promise<ChunkPlan> {
 
     if (container === "mp4") return planMp4Chunks(input);
     if (container === "adts") return planAdtsChunks(input, audioProbe, id3Bytes);
+    if (container === "mp3") return planMp3Chunks(input, audioProbe, audioProbeOffset, id3Bytes);
     return planByteChunks(container, input);
 }
 
@@ -141,12 +195,19 @@ export async function planChunks(input: PlanChunksInput): Promise<ChunkPlan> {
  * (embedded cover art is common), leaving too little audio after it to
  * confirm ADTS, which `detectContainer` then calls `mp3`. In that case fetch
  * a second probe where the tag ends and check that for ADTS; anything else
- * keeps the first verdict. `audioProbe` holds the first audio frames.
+ * keeps the first verdict. `audioProbe` holds the first audio frames, from
+ * absolute offset `audioProbeOffset`: the after-tag probe for ADTS and MP3,
+ * so the MP3 planner can find its first frame behind an oversized tag.
  */
 async function sniffContainer(
     { probe, fileSize, fetchRange }: PlanChunksInput,
     id3Bytes: number,
-): Promise<{ container: AudioContainer; audioProbe: Uint8Array; probedAfterId3: boolean }> {
+): Promise<{
+    container: AudioContainer;
+    audioProbe: Uint8Array;
+    audioProbeOffset: number;
+    probedAfterId3: boolean;
+}> {
     const container = detectContainer(probe);
     const tagHidesAudio =
         (container === "mp3" || container === "other") &&
@@ -154,17 +215,23 @@ async function sniffContainer(
         id3Bytes + ADTS_CONFIRM_BYTES > probe.length &&
         probe.length < fileSize &&
         id3Bytes < fileSize;
-    if (!tagHidesAudio) return { container, audioProbe: probe, probedAfterId3: false };
+    if (!tagHidesAudio) return { container, audioProbe: probe, audioProbeOffset: 0, probedAfterId3: false };
 
     // Probe size, not just ADTS_CONFIRM_BYTES: the ADTS route estimates the bitrate from these frames.
     const end = Math.min(id3Bytes + CONTAINER_PROBE_BYTES, fileSize) - 1;
     const afterTag = new Uint8Array(await fetchRange(id3Bytes, end));
-    return detectContainer(afterTag) === "adts"
-        ? { container: "adts", audioProbe: afterTag, probedAfterId3: true }
-        : { container, audioProbe: probe, probedAfterId3: true };
+    if (detectContainer(afterTag) === "adts") {
+        return { container: "adts", audioProbe: afterTag, audioProbeOffset: id3Bytes, probedAfterId3: true };
+    }
+    return container === "mp3"
+        ? { container, audioProbe: afterTag, audioProbeOffset: id3Bytes, probedAfterId3: true }
+        : { container, audioProbe: probe, audioProbeOffset: 0, probedAfterId3: true };
 }
 
-/** Today's MP3 path: byte ranges, with the file header prepended to chunks after the first. */
+/**
+ * The `other` path (and MP3 whose frames can't be parsed): byte ranges over
+ * the whole file, with the file header prepended to chunks after the first.
+ */
 function planByteChunks(
     container: AudioContainer,
     { probe, fileSize, limits, fetchRange }: PlanChunksInput,
@@ -183,13 +250,18 @@ function planByteChunks(
                 endByte: range.endByte,
                 sizeMB: Math.round(sizeBytes / 1024 / 1024),
             },
+            cacheId: byteCacheId(range.startByte, range.endByte),
             load: async () => {
                 const body = await fetchRange(range.startByte, range.endByte);
                 return range.isFirst ? body : prependHeader(header, body, index);
             },
         };
     });
-    return { container, totalBytes: fileSize, chunks };
+    return { container, totalBytes: fileSize, fileSize, audio: {}, chunks };
+}
+
+function byteCacheId(startByte: number, endByte: number): string {
+    return `b${startByte}-${endByte}`;
 }
 
 function prependHeader(header: Uint8Array, body: ArrayBuffer, index: number): ArrayBuffer {
@@ -209,6 +281,130 @@ function prependHeader(header: Uint8Array, body: ArrayBuffer, index: number): Ar
 }
 
 /**
+ * MP3: byte ranges over the audio from its first frame, each holding at most
+ * `limits.maxSeconds` at the file's average byte rate. The duration is the
+ * longer of the VBR header's and the byte estimate, so a stitched file whose
+ * Info frame describes only a pre-roll is still sized by its bytes.
+ *
+ * Chunk 1 starts at the first audio frame, past the ID3 tag and any
+ * Xing/Info/VBRI frame. A later chunk's range starts mid-stream, so its load
+ * trims the bytes before the first confirmed frame, and that frame too when
+ * it is a VBR header (a stitched file's second piece starts with one). The
+ * overlap (about CHUNK_OVERLAP_SECONDS of audio) covers what is trimmed.
+ * When the planner can't find the first frame it keeps the byte path.
+ */
+function planMp3Chunks(
+    input: PlanChunksInput,
+    audioProbe: Uint8Array,
+    audioProbeOffset: number,
+    scanFrom: number,
+): ChunkPlan {
+    const { fileSize, limits, fetchRange } = input;
+    const analysis = analyzeMp3(audioProbe, audioProbeOffset, fileSize, scanFrom);
+    if (!analysis) {
+        const at = Math.max(scanFrom - audioProbeOffset, 0);
+        console.log(
+            JSON.stringify({
+                event: "mp3_frame_parse_failed",
+                scanFrom,
+                firstBytesHex: hexBytes(audioProbe.subarray(at, at + 32)),
+            }),
+        );
+        return planByteChunks("mp3", input);
+    }
+
+    const { audioStart, header, usedSeconds } = analysis;
+    const audioBytes = fileSize - audioStart;
+    const bytesPerSecond = audioBytes / usedSeconds;
+    const maxChunkBytes = Math.min(limits.maxBytes, Math.floor(bytesPerSecond * limits.maxSeconds));
+    const overlapBytes = chunkOverlapBytes(bytesPerSecond, maxChunkBytes);
+    const ranges = calculateChunkRanges(audioBytes, maxChunkBytes, overlapBytes);
+    const audio: ChunkPlanAudio = {
+        bitrateKbps: header.bitrateKbps,
+        sampleRate: header.sampleRate,
+        channels: header.channels,
+        vbrHeader: analysis.vbrHeader,
+        vbrHeaderDropped: analysis.vbrHeader !== "none",
+        declaredSeconds: analysis.declaredSeconds,
+        estimatedSeconds: analysis.estimatedSeconds,
+        usedSeconds,
+    };
+    console.log(
+        JSON.stringify({
+            event: "mp3_chunk_plan",
+            totalChunks: ranges.length,
+            firstFrameOffset: analysis.firstFrameOffset,
+            audioStart,
+            audioBytes,
+            bytesPerSecond: Math.round(bytesPerSecond),
+            maxChunkBytes,
+            overlapBytes,
+            ...audio,
+        }),
+    );
+
+    const chunks = ranges.map((range, index): PlannedChunk => {
+        const startByte = audioStart + range.startByte;
+        const endByte = audioStart + range.endByte;
+        const sizeBytes = endByte - startByte + 1;
+        return {
+            index,
+            isFirst: range.isFirst,
+            isLast: range.isLast,
+            overlapBytes: range.overlapBytes,
+            newBytes: sizeBytes - range.overlapBytes,
+            logFields: { startByte, endByte, sizeMB: Math.round(sizeBytes / 1024 / 1024) },
+            cacheId: byteCacheId(startByte, endByte),
+            plannedSeconds: sizeBytes / bytesPerSecond,
+            load: async () => {
+                const body = await fetchExact(fetchRange, startByte, endByte);
+                return exactBuffer(range.isFirst ? body : startAtAudioFrame(body, index, startByte, range.isLast));
+            },
+        };
+    });
+    return { container: "mp3", totalBytes: audioBytes, fileSize, audio, chunks };
+}
+
+/**
+ * The plan cut an MP3 on frame boundaries, so its chunks are bare MPEG
+ * frames. False for MP3 whose frames couldn't be parsed, which keeps the
+ * byte path (and is the only MP3 plan without `audio.vbrHeader`).
+ */
+export function isMp3FramePlan(plan: ChunkPlan | null): plan is ChunkPlan {
+    return plan?.container === "mp3" && plan.audio.vbrHeader !== undefined;
+}
+
+/**
+ * Trim a mid-stream MP3 chunk to start at its first confirmed frame, skipping
+ * that frame too when it is a VBR header. Only the last chunk ends at the
+ * file's end, so only there may a frame ending at the chunk's end go
+ * unconfirmed. Without a frame in the resync window, logs
+ * `mp3_resync_failed` and returns the bytes unchanged.
+ */
+function startAtAudioFrame(body: Uint8Array, index: number, startByte: number, isLast: boolean): Uint8Array {
+    const frame = findMp3Frame(body, 0, MP3_RESYNC_WINDOW_BYTES, { bufferEndsFile: isLast });
+    if (frame === -1) {
+        console.log(JSON.stringify({ event: "mp3_resync_failed", chunkIndex: index + 1, startByte }));
+        return body;
+    }
+    const header = parseMp3FrameHeader(body, frame)!;
+    return body.subarray(readVbrHeader(body, frame, header) ? frame + header.frameLength : frame);
+}
+
+/**
+ * Overlap between byte-range chunks: CHUNK_OVERLAP_SECONDS of audio, at most
+ * CHUNK_OVERLAP_BYTES, and never a whole chunk's worth, or the plan would
+ * stop advancing.
+ */
+function chunkOverlapBytes(bytesPerSecond: number, maxChunkBytes: number): number {
+    return Math.min(
+        CHUNK_OVERLAP_BYTES,
+        Math.round(bytesPerSecond * CHUNK_OVERLAP_SECONDS),
+        Math.floor(maxChunkBytes / 4),
+    );
+}
+
+/**
  * ADTS: byte ranges over the audio after any ID3 tag, each holding at most
  * `limits.maxSeconds` at the bitrate of the probe's frames, rewrapped as M4A
  * on load. Frames resync on their own, so a range may start or end mid-frame:
@@ -224,12 +420,7 @@ function planAdtsChunks(
     const frameBytes = frames.reduce((n, frame) => n + frame.length, 0);
     const bytesPerSecond = frameBytes / ((frames.length * ADTS_SAMPLES_PER_FRAME) / config.sampleRate);
     const maxChunkBytes = Math.min(limits.maxBytes, Math.floor(bytesPerSecond * limits.maxSeconds));
-    // Never a whole chunk's worth, or the plan would stop advancing.
-    const overlapBytes = Math.min(
-        CHUNK_OVERLAP_BYTES,
-        Math.round(bytesPerSecond * CHUNK_OVERLAP_SECONDS),
-        Math.floor(maxChunkBytes / 4),
-    );
+    const overlapBytes = chunkOverlapBytes(bytesPerSecond, maxChunkBytes);
 
     const audioBytes = fileSize - audioStart;
     const ranges = calculateChunkRanges(audioBytes, maxChunkBytes, overlapBytes);
@@ -259,10 +450,18 @@ function planAdtsChunks(
             overlapBytes: range.overlapBytes,
             newBytes: sizeBytes - range.overlapBytes,
             logFields: { startByte, endByte, sizeMB: Math.round(sizeBytes / 1024 / 1024) },
+            cacheId: byteCacheId(startByte, endByte),
+            plannedSeconds: sizeBytes / bytesPerSecond,
             load: async () => exactBuffer(adtsToM4a(await fetchExact(fetchRange, startByte, endByte))),
         };
     });
-    return { container: "adts", totalBytes: audioBytes, chunks };
+    return {
+        container: "adts",
+        totalBytes: audioBytes,
+        fileSize,
+        audio: { usedSeconds: audioBytes / bytesPerSecond },
+        chunks,
+    };
 }
 
 /**
@@ -346,10 +545,18 @@ async function planMp4Chunks({ probe, fileSize, limits, fetchRange }: PlanChunks
             overlapBytes: chunk.payloadBytes - chunk.newPayloadBytes,
             newBytes: chunk.newPayloadBytes,
             logFields: chunkSummaries[index],
+            cacheId: `s${chunk.firstSample}-${chunk.endSample}`,
+            plannedSeconds: chunk.endSeconds - chunk.startSeconds,
             load: async () => exactBuffer(await loadMp4Chunk(track, chunk, fetchRange)),
         }),
     );
-    return { container: "mp4", totalBytes: track.totalPayloadBytes, chunks };
+    return {
+        container: "mp4",
+        totalBytes: track.totalPayloadBytes,
+        fileSize,
+        audio: { usedSeconds: track.durationSeconds },
+        chunks,
+    };
 }
 
 function roundSeconds(seconds: number): number {

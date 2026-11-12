@@ -4,7 +4,7 @@
  * Handles the full pipeline for podcast episode processing:
  * 1. Fetch episode metadata from Apple/RSS
  * 2. Check for existing transcript (RSS or previous processing)
- * 3. Transcribe via OpenAI Whisper if needed
+ * 3. Transcribe via OpenAI gpt-transcribe if needed
  * 4. Generate summary via GPT-5.2
  * 5. Store results in KV
  */
@@ -17,6 +17,7 @@ import { generateEditorialMeta } from "../services/editorial-meta";
 import { parseApplePodcastsUrl, extractPodcastId } from "../lib/url-parser";
 import { resolveWebsiteUrl, showLevelAppleUrl, toEpisodePageUrl, toWebsiteUrl } from "../lib/podcast-links";
 import { notifyDiscord, DISCORD_COLORS } from "../lib/discord";
+import { urlHost, urlPath } from "../lib/log-urls";
 import {
     getJob,
     updateJobStatus,
@@ -29,6 +30,7 @@ import {
     addToEpisodeIndex,
     appendActivityEvent,
     getMonitoredPodcast,
+    makeChunkTranscriptCache,
 } from "../lib/kv";
 import {
     updateJobStatusDO,
@@ -44,6 +46,7 @@ import {
     type RssEpisode,
 } from "../services/rss";
 import { transcribeAudio } from "../services/transcription";
+import type { TranscriptionResult } from "../services/transcription";
 import { generateSummary } from "../services/summarization";
 import { notifySubscribers } from "../notifications";
 
@@ -221,9 +224,12 @@ const queueHandler = {
 
                 // Rate-limited jobs get more attempts with longer backoff to let CDN cool down
                 const isRateLimited = error instanceof AppError && error.code === ERROR_CODES.RATE_LIMITED;
-                // Unsupported audio (e.g. fragmented MP4, non-AAC codec) is deterministic: retrying can't help
-                const isUnsupported = error instanceof AppError && error.code === ERROR_CODES.AUDIO_UNSUPPORTED;
-                const maxAttempts = isUnsupported ? 1 : isRateLimited ? 5 : 3;
+                // Unsupported audio (e.g. fragmented MP4, non-AAC codec) and audio the
+                // model rejected are deterministic: retrying can't help
+                const isDeterministicAudioFailure =
+                    error instanceof AppError &&
+                    (error.code === ERROR_CODES.AUDIO_UNSUPPORTED || error.code === ERROR_CODES.AUDIO_REJECTED);
+                const maxAttempts = isDeterministicAudioFailure ? 1 : isRateLimited ? 5 : 3;
                 if (message.attempts >= maxAttempts) {
                     // Final attempt failed - mark job as failed and acknowledge
                     try {
@@ -235,7 +241,8 @@ const queueHandler = {
                             JSON.stringify({
                                 event: "job_marked_failed",
                                 jobId: message.body.jobId,
-                                errorMessage,
+                                // An AppError's userMessage can carry a full audio URL; its message never does
+                                errorMessage: error instanceof AppError ? error.message : errorMessage,
                             })
                         );
 
@@ -274,9 +281,10 @@ const queueHandler = {
 
                     // Surface retry state to the user. Keep `status` at its current
                     // step (so the UI's progress phrasing still works) but populate
-                    // the error field with a human-readable retry note. This also
-                    // bumps `updatedAt`, preventing the 119-min stale-job sweep from
-                    // firing while legitimate queue retries are still pending.
+                    // the error field with a human-readable retry note. This bumps
+                    // `updatedAt`, but it doesn't hold off the stale-job sweep: that
+                    // sweep (listActiveJobsWithDO) measures age from `createdAt` and
+                    // fails the job once it passes TIMEOUTS.JOB_MS.
                     const retryNote = isRateLimited
                         ? `Audio CDN rate-limited. Retrying in ${Math.round(delaySeconds / 60)} min (attempt ${message.attempts} of ${maxAttempts}).`
                         : `Transient error; retrying in ${delaySeconds}s (attempt ${message.attempts} of ${maxAttempts}).`;
@@ -442,7 +450,7 @@ async function readFeedEpisode(
  * 1. Check for existing episode/transcript (fast path for regeneration)
  * 2. Fetch metadata if needed
  * 3. Check RSS for transcript if needed
- * 4. Transcribe via Whisper if needed
+ * 4. Transcribe via gpt-transcribe if needed
  * 5. Generate summary
  * 6. Store all data
  */
@@ -535,7 +543,9 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         console.log(JSON.stringify({
             event: "consumer_rss_sourced_skip_pi",
             episodeId,
-            audioUrl: ctx.prefetchedAudioUrl,
+            // Host and path find the episode; the query can hold a CDN signature.
+            audioHost: urlHost(ctx.prefetchedAudioUrl),
+            audioPath: urlPath(ctx.prefetchedAudioUrl),
         }));
     } else {
         if (!appleUrl) {
@@ -598,7 +608,7 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         transcriptSource = transcript.source;
     }
 
-    // Step 3: Transcribe via Whisper if no transcript found
+    // Step 3: Transcribe via gpt-transcribe if no transcript found
     if (!transcript) {
         await updateJobStatusBoth(env, kv, jobId, "transcribing");
 
@@ -614,20 +624,30 @@ async function processEpisode(ctx: ProcessingContext): Promise<void> {
         if (ctx.preResolvedAudioUrl) {
             console.log(JSON.stringify({
                 event: "using_preresolve_audio_url",
-                resolved: ctx.preResolvedAudioUrl,
-                original: ctx.audioUrlOverride || metadata.audioUrl,
+                resolvedHost: urlHost(ctx.preResolvedAudioUrl),
+                originalHost: urlHost(ctx.audioUrlOverride || metadata.audioUrl),
             }));
         } else if (ctx.audioUrlOverride) {
             console.log(JSON.stringify({
                 event: "using_audio_url_override",
-                override: ctx.audioUrlOverride,
+                overrideHost: urlHost(ctx.audioUrlOverride),
             }));
         }
 
-        const transcriptionResult = await transcribeAudio(
-            audioUrl,
-            { apiKey: env.OPENAI_API_KEY, skipValidation },
-        );
+        let transcriptionResult: TranscriptionResult;
+        try {
+            transcriptionResult = await transcribeAudio(
+                audioUrl,
+                {
+                    apiKey: env.OPENAI_API_KEY,
+                    skipValidation,
+                    // A retried attempt resumes from the chunks this one finishes (#48).
+                    chunkCache: makeChunkTranscriptCache(kv, episodeId),
+                },
+            );
+        } catch (error) {
+            throw withCheckChunksCommand(error, audioUrl);
+        }
 
         if (transcriptionResult.partial) {
             await reportPartialTranscript(env, episodeId, metadata, transcriptionResult);
@@ -985,6 +1005,32 @@ async function updateJobEstimate(
     } catch {
         // Non-critical - don't fail job if estimate update fails
     }
+}
+
+/**
+ * Append a copy-paste `check:chunks` command to a model rejection's user-facing
+ * message, so the failure alert says how to reproduce it. The URL goes only into
+ * `userMessage`: `message` (and so the stack and logs) stays URL-free, because
+ * signed CDN URLs carry credentials. Other errors pass through unchanged.
+ */
+function withCheckChunksCommand(error: unknown, audioUrl: string): unknown {
+    if (!(error instanceof AppError) || error.code !== ERROR_CODES.AUDIO_REJECTED) {
+        return error;
+    }
+    return new AppError(
+        ERROR_CODES.AUDIO_REJECTED,
+        error.message,
+        error,
+        `${error.userMessage}. Debug with: npm run check:chunks -- ${shellQuote(audioUrl)} --transcribe`
+    );
+}
+
+/**
+ * Quote a string as one POSIX shell argument, so `?`, `&` and `'` in a signed
+ * URL survive being pasted into zsh or bash.
+ */
+function shellQuote(value: string): string {
+    return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**
