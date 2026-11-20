@@ -21,34 +21,50 @@ export interface CardModel {
 // The card fonts have no emoji glyphs, so whole emoji sequences go: a keycap
 // (base, optional U+FE0F, U+20E3), a regional-indicator flag pair, or a
 // pictograph with its variation selectors, skin-tone modifiers and ZWJ-joined
-// parts. Then any leftover component goes too: a lone selector, joiner,
-// keycap mark, modifier or regional indicator, or a subdivision-flag tag.
-const EMOJI_SEQUENCE = /[#*0-9]\u{FE0F}?\u{20E3}|\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\u{FE0F}|\p{Emoji_Modifier})*(?:\u{200D}\p{Extended_Pictographic}(?:\u{FE0F}|\p{Emoji_Modifier})*)*/gu;
+// parts. A pictograph counts as emoji when it defaults to emoji presentation,
+// sits outside the BMP, or carries U+FE0F or a modifier; a BMP symbol that
+// defaults to text (™, ©, ↔) stays. Each sequence becomes a space, so an
+// emoji between two words still separates them. Then any leftover component
+// goes too: a lone selector, joiner, keycap mark, modifier or regional
+// indicator, or a subdivision-flag tag.
+const WITH_SELECTORS = String.raw`(?:\u{FE0F}|\p{Emoji_Modifier})`;
+const EMOJI_PICTOGRAPH = String.raw`(?:\p{Emoji_Presentation}|(?=[\u{10000}-\u{10FFFF}])\p{Extended_Pictographic})${WITH_SELECTORS}*`
+    + String.raw`|\p{Extended_Pictographic}${WITH_SELECTORS}+`;
+const ZWJ_PART = String.raw`\u{200D}\p{Extended_Pictographic}${WITH_SELECTORS}*`;
+const EMOJI_SEQUENCE = new RegExp(
+    String.raw`[#*0-9]\u{FE0F}?\u{20E3}|\p{Regional_Indicator}{2}|(?:${EMOJI_PICTOGRAPH})(?:${ZWJ_PART})*`, "gu");
 const EMOJI_LEFTOVER = /[\u{FE0F}\u{200D}\u{20E3}\p{Emoji_Modifier}\p{Regional_Indicator}\u{E0020}-\u{E007F}]/gu;
 
 /** Shown when an episode's title and podcast name both clean to nothing. */
 const FALLBACK_TITLE = "TL;DL";
 
-function cleanText(text: string): string {
-    return text.replace(EMOJI_SEQUENCE, "").replace(EMOJI_LEFTOVER, "").replace(/\s+/g, " ").trim();
+/** The text with emoji removed and whitespace collapsed; "" for a non-string. */
+function cleanText(text: unknown): string {
+    if (typeof text !== "string") return "";
+    return text.replace(EMOJI_SEQUENCE, " ").replace(EMOJI_LEFTOVER, "").replace(/\s+/g, " ").trim();
 }
 
-function kickerDate(episodeDate: string): string | null {
-    if (Number.isNaN(Date.parse(episodeDate))) return null;
+function kickerDate(episodeDate: unknown): string | null {
+    if (typeof episodeDate !== "string" || Number.isNaN(Date.parse(episodeDate))) return null;
     return new Date(episodeDate)
         .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })
         .toUpperCase();
 }
 
 /** The Broadsheet pages' runtime, uppercased; none when the duration is unknown. */
-function formatRuntime(seconds: number): string | null {
-    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+function formatRuntime(seconds: unknown): string | null {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
     return formatDuration(seconds).toUpperCase();
 }
 
+/**
+ * The card's text for an episode. The record is JSON from KV and can drift
+ * from the Episode type (an older record with `deck: null`), so a field of
+ * the wrong type counts as absent rather than throwing.
+ */
 export function toCardModel(ep: Episode): CardModel {
     const podcastName = cleanText(ep.podcastName);
-    const deck = ep.deck === undefined ? "" : cleanText(ep.deck);
+    const deck = cleanText(ep.deck);
     return {
         podcast: podcastName.toUpperCase(),
         date: kickerDate(ep.episodeDate),
@@ -59,9 +75,10 @@ export function toCardModel(ep: Episode): CardModel {
 }
 
 /**
- * First 12 hex chars of SHA-256 over the template version and the card model.
- * Hashing the model, not raw episode fields, changes the version exactly when
- * the drawn card changes.
+ * First 12 hex chars of SHA-256 over CARD_TEMPLATE_VERSION and the normalized
+ * card model. Hashing the model, not raw episode fields, ignores edits the card
+ * doesn't use (tags, summary). It isn't a hash of the pixels: text past a
+ * clamp's ellipsis still changes the version while the image looks the same.
  */
 export async function cardVersion(ep: Episode): Promise<string> {
     const input = new TextEncoder().encode(JSON.stringify([CARD_TEMPLATE_VERSION, toCardModel(ep)]));

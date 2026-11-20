@@ -253,13 +253,26 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
     const transcript = await getTranscript(c.env.TLDL_DATA, episodeId);
     const transcriptText = transcript?.text ?? null;
 
+    // The share card is extra: if its URL can't be built, the page keeps the
+    // site-wide default image rather than failing.
+    let ogImageUrl: string | undefined;
+    try {
+        ogImageUrl = episodeCardUrl(episode.id, await cardVersion(episode));
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: "og_card_version_failed",
+            episodeId,
+            error: error instanceof Error ? error.message : String(error),
+        }));
+    }
+
     const html = renderDetailPage({
         episode,
         summaryHtml,
         activeTemplate,
         availableTemplates: available,
         transcriptText,
-        ogImageUrl: episodeCardUrl(episode.id, await cardVersion(episode)),
+        ogImageUrl,
     });
     return c.html(html);
 });

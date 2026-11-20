@@ -80,7 +80,15 @@ export function createOgRoutes(deps: OgRouteDeps = {}): Hono<HonoEnv> {
             return c.notFound();
         }
 
-        const version = await cardVersion(episode);
+        let model: CardModel;
+        let version: string;
+        try {
+            model = toCardModel(episode);
+            version = await cardVersion(episode);
+        } catch (error) {
+            console.error(JSON.stringify({ event: "og_card_version_failed", episodeId, error: errorMessage(error) }));
+            return redirect(DEFAULT_OG_IMAGE, 302);
+        }
         if (c.req.query("v") !== version) return redirect(`${cardPath(episodeId)}?v=${version}`, 302);
 
         const key = KV_KEYS.ogCard(episodeId, version);
@@ -94,7 +102,7 @@ export function createOgRoutes(deps: OgRouteDeps = {}): Hono<HonoEnv> {
 
         let png: Uint8Array;
         try {
-            png = await render(toCardModel(episode));
+            png = await render(model);
         } catch (error) {
             console.error(JSON.stringify({ event: "og_render_failed", episodeId, error: errorMessage(error) }));
             return redirect(DEFAULT_OG_IMAGE, 302);

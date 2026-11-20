@@ -61,6 +61,31 @@ describe("toCardModel", () => {
 
     it("strips emoji from the podcast name", () =>
         expect(toCardModel(episode({ podcastName: "🎙️ Pod  Cast 🔥" })).podcast).toBe("POD CAST"));
+
+    it("keeps a word boundary where an emoji separated two words", () =>
+        expect(toCardModel(episode({ episodeTitle: "Branding™ for AI⚡apps" })).title).toBe("Branding™ for AI apps"));
+
+    it("keeps symbols whose default presentation is text", () =>
+        expect(toCardModel(episode({ episodeTitle: "A ↔ B © 2026" })).title).toBe("A ↔ B © 2026"));
+
+    it("strips a text-default symbol that U+FE0F asks to draw as emoji", () =>
+        expect(toCardModel(episode({ episodeTitle: "❤️ love" })).title).toBe("love"));
+
+    it("strips an astral pictograph even without U+FE0F", () =>
+        expect(toCardModel(episode({ episodeTitle: "\u{1F399} Live show" })).title).toBe("Live show"));
+});
+
+/** A stored record as JSON hands it back, which can drift from the Episode type. */
+function stored(fields: Record<string, unknown>): Episode {
+    return { ...episode(), ...fields } as unknown as Episode;
+}
+
+describe("toCardModel on stored records that drift from the type", () => {
+    it("treats a null deck as no deck", () => expect(toCardModel(stored({ deck: null })).deck).toBeNull());
+
+    it("treats non-string text fields as absent instead of throwing", () =>
+        expect(toCardModel(stored({ podcastName: 42, episodeTitle: null, deck: 7, episodeDate: 0, episodeDuration: "1h" })))
+            .toEqual({ podcast: "", date: null, title: "TL;DL", deck: null, runtime: null }));
 });
 
 describe("cardVersion", () => {

@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createOgRoutes } from "../src/routes/og";
 import { cardVersion } from "../src/lib/og/card-model";
 import { saveEpisode, saveEpisodeRedirect, saveSummary } from "../src/lib/kv";
@@ -183,17 +183,88 @@ describe("the card route in the app", () => {
         expect(Array.from(bytes.subarray(0, 4))).toEqual(Array.from(PNG_BYTES));
     });
 
+    it("draws a title with emoji as the same PNG as the title without them", async () => {
+        const card = async (id: string, episodeTitle: string) => {
+            const stored = { ...ep, id, episodeTitle };
+            await saveEpisode(env.TLDL_DATA, stored);
+            const res = await SELF.fetch(`https://tldl-pod.com/og/episode/${id}.png?v=${await cardVersion(stored)}`);
+            expect(res.status).toBe(200);
+            expect(res.headers.get("content-type")).toBe("image/png");
+            return new Uint8Array(await res.arrayBuffer());
+        };
+        const withEmoji = await card("1769051199_rss_emoji", "AI 🤖 agents 🇺🇸 now 1️⃣");
+        expect(Array.from(withEmoji.subarray(0, 4))).toEqual(Array.from(PNG_BYTES));
+        expect(withEmoji).toEqual(await card("1769051199_rss_plain", "AI agents now"));
+    });
+
     it("points the episode page's og:image at the episode's current card", async () => {
-        await saveSummary(env.TLDL_DATA, {
-            episodeId: ep.id,
-            templateId: "key-takeaways",
-            text: "Summary text.",
-            model: "claude-opus-5-5",
-            createdAt: "2026-11-05T16:30:00.000Z",
-        });
+        await saveSummaryFor(ep.id);
         const res = await SELF.fetch(`https://tldl-pod.com/episode/${ep.id}`);
         expect(res.status).toBe(200);
-        const ogImage = (await res.text()).match(/<meta property="og:image" content="([^"]*)">/)?.[1];
-        expect(ogImage).toBe(`https://tldl-pod.com/og/episode/${ep.id}.png?v=${v}`);
+        expect(ogImageOf(await res.text())).toBe(`https://tldl-pod.com/og/episode/${ep.id}.png?v=${v}`);
     });
 });
+
+describe("a stored record with deck: null", () => {
+    const id = "1769051199_rss_nulldeck";
+
+    beforeEach(async () => {
+        // Raw JSON, as an older or hand-edited record could hold it; saveEpisode's type can't express it.
+        await env.TLDL_DATA.put(`episode:${id}`, JSON.stringify({ ...ep, id, deck: null }));
+        await saveSummaryFor(id);
+    });
+
+    it("still gets its card", async () => {
+        const first = await SELF.fetch(`https://tldl-pod.com/og/episode/${id}.png`, { redirect: "manual" });
+        expect(first.status).toBe(302);
+        const res = await SELF.fetch(`https://tldl-pod.com${first.headers.get("location")}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("image/png");
+    });
+
+    it("still renders its episode page, pointing at the card", async () => {
+        const res = await SELF.fetch(`https://tldl-pod.com/episode/${id}`);
+        expect(res.status).toBe(200);
+        expect(ogImageOf(await res.text())).toMatch(new RegExp(`^https://tldl-pod\\.com/og/episode/${id}\\.png\\?v=[0-9a-f]{12}$`));
+    });
+});
+
+describe("when the card version can't be computed", () => {
+    // cardVersion hashes with crypto.subtle; failing it stands in for any throw
+    // while building the card's URL.
+    beforeEach(() => {
+        vi.spyOn(crypto.subtle, "digest").mockRejectedValue(new Error("digest down"));
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it("the episode page still renders, with the default image", async () => {
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        await saveSummaryFor(ep.id);
+        const res = await SELF.fetch(`https://tldl-pod.com/episode/${ep.id}`);
+        expect(res.status).toBe(200);
+        expect(ogImageOf(await res.text())).toBe(DEFAULT_OG_IMAGE);
+        expect(logged).toHaveBeenCalledWith(JSON.stringify({ event: "og_card_version_failed", episodeId: ep.id, error: "digest down" }));
+    });
+
+    it("the card route 302s to the default image, uncached", async () => {
+        const res = await app.request(`/og/episode/${ep.id}.png?v=${v}`, {}, env);
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toBe(DEFAULT_OG_IMAGE);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        expect(calls).toBe(0);
+    });
+});
+
+async function saveSummaryFor(episodeId: string) {
+    await saveSummary(env.TLDL_DATA, {
+        episodeId,
+        templateId: "key-takeaways",
+        text: "Summary text.",
+        model: "claude-opus-5-5",
+        createdAt: "2026-11-05T16:30:00.000Z",
+    });
+}
+
+function ogImageOf(html: string): string | undefined {
+    return html.match(/<meta property="og:image" content="([^"]*)">/)?.[1];
+}
