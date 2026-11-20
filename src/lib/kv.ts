@@ -15,6 +15,7 @@ export const KV_KEYS = {
         `summary:${episodeId}:${templateId}`,
     episodeIndex: "episodes:index",
     episodeRedirect: (fromEpisodeId: string) => `episode-redirect:${fromEpisodeId}`,
+    ogCard: (episodeId: string, version: string) => `og:${episodeId}:${version}`,
     // Podcast monitoring keys
     monitorSettings: "monitor:settings",
     monitoredList: "monitored:list",

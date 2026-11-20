@@ -12,6 +12,7 @@ import { AppError, logError } from "./lib/errors";
 import api from "./routes/api";
 import admin from "./routes/admin";
 import publicRoutes from "./routes/public";
+import ogRoutes from "./routes/og";
 import { subscriptionsRoutes } from "./routes/subscriptions";
 import { webhookRoutes } from "./routes/webhooks";
 import queueConsumer from "./queue/consumer";
@@ -316,6 +317,12 @@ Disallow: /debug/
 
     app.route("/", subscriptionsRoutes);
     app.route("/", webhookRoutes);
+
+    // ============================================================================
+    // Episode Share Cards (/og/episode/<id>.png)
+    // ============================================================================
+
+    app.route("/", ogRoutes);
 
     // ============================================================================
     // Public HTML Routes

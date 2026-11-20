@@ -1,6 +1,7 @@
 import { escapeHtml } from "../auth";
 
-const OG_IMAGE = "https://file.elezea.com/tldl-og-1200x630.png";
+/** The site-wide share card, used when a page has no card of its own. */
+export const DEFAULT_OG_IMAGE = "https://file.elezea.com/tldl-og-1200x630.png";
 
 export interface HeadOptions {
     title: string;                  // full <title> content, already formed
@@ -18,7 +19,7 @@ export interface HeadOptions {
 export function renderBroadsheetHead(opts: HeadOptions): string {
     const title = escapeHtml(opts.title);
     const description = escapeHtml(opts.description ?? "Podcast summaries that respect your time. Read long-form podcast episodes as scannable takeaways, narratives, or ELI5 explanations.");
-    const ogImage = escapeHtml(opts.ogImage ?? OG_IMAGE);
+    const ogImage = escapeHtml(opts.ogImage ?? DEFAULT_OG_IMAGE);
     const canonical = opts.canonicalUrl ? escapeHtml(opts.canonicalUrl) : "";
 
     return `<meta charset="utf-8">
