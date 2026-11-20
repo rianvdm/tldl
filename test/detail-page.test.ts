@@ -55,3 +55,23 @@ describe("detail page outbound links", () => {
         expect(moreLinks(html)).not.toContain("Episode page →");
     });
 });
+
+describe("detail page share image", () => {
+    it("uses the episode card for og:image and twitter:image when given", () => {
+        const url = "https://tldl-pod.com/og/episode/x.png?v=abc123abc123";
+        const html = renderDetailPage({
+            episode: episode(),
+            summaryHtml: "",
+            activeTemplate: "key-takeaways",
+            availableTemplates: ["key-takeaways"],
+            transcriptText: null,
+            ogImageUrl: url,
+        });
+        expect(html).toContain(`<meta property="og:image" content="${url}">`);
+        expect(html).toContain(`<meta name="twitter:image" content="${url}">`);
+    });
+
+    it("falls back to the default image without ogImageUrl", () => {
+        expect(render(episode())).toContain("tldl-og-1200x630.png");
+    });
+});

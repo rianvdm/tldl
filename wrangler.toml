@@ -57,3 +57,9 @@ database_id = "7492bd0d-f255-4a88-97b4-0966d8d826aa"
 [triggers]
 crons = ["0 */2 * * *"]  # Every 2 hours
 
+# Share-card fonts (src/assets/fonts/*.ttf) are bundled as Data modules, so
+# importing one yields its bytes as an ArrayBuffer.
+[[rules]]
+type = "Data"
+globs = ["**/*.ttf"]
+fallthrough = true

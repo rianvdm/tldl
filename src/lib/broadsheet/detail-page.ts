@@ -1,5 +1,6 @@
 import type { Episode } from "../../types";
 import { escapeHtml as escape } from "../auth";
+import { formatDuration } from "./format";
 import { BROADSHEET_FONTS_LINK, BROADSHEET_TOKENS_CSS } from "./tokens.css";
 import { BROADSHEET_SHARED_CSS } from "./shared.css";
 import { BROADSHEET_DETAIL_CSS } from "./detail.css";
@@ -19,6 +20,8 @@ export interface DetailPageOptions {
     activeTemplate: TemplateId;
     availableTemplates: TemplateId[];
     transcriptText: string | null;
+    /** The episode's share card; the site-wide default image when absent. */
+    ogImageUrl?: string;
     now?: Date;
 }
 
@@ -29,12 +32,6 @@ function shortDate(iso: string): string {
 
 function longDate(iso: string): string {
     return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
-}
-
-function formatDuration(seconds: number): string {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    return h > 0 ? `${h}h ${m.toString().padStart(2, "0")}m` : `${m}m`;
 }
 
 function formatTranscriptParagraphs(text: string): string {
@@ -97,6 +94,7 @@ ${renderBroadsheetHead({
     title: `${ep.episodeTitle} — TL;DL`,
     description: headDescription,
     canonicalUrl: `https://tldl-pod.com/episode/${encodeURIComponent(ep.id)}`,
+    ogImage: opts.ogImageUrl,
 })}
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${BROADSHEET_DETAIL_CSS}</style>
