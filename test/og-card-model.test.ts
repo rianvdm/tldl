@@ -44,6 +44,18 @@ describe("toCardModel", () => {
     it("falls back to the podcast name when the title is only emoji", () =>
         expect(toCardModel(episode({ podcastName: "Pod", episodeTitle: "🎙️🔥" })).title).toBe("Pod"));
 
+    it.each([
+        ["a skin-tone modifier", "🧑🏽"],
+        ["a flag", "🇺🇸"],
+        ["a keycap", "1️⃣"],
+    ])("strips the whole of %s", (_, emoji) => {
+        expect(toCardModel(episode({ episodeTitle: `Top ${emoji} picks` })).title).toBe("Top picks");
+        expect(toCardModel(episode({ podcastName: "Pod", episodeTitle: emoji })).title).toBe("Pod");
+    });
+
+    it("falls back to TL;DL when the title and podcast name are both only emoji", () =>
+        expect(toCardModel(episode({ podcastName: "🎙️", episodeTitle: "🔥" })).title).toBe("TL;DL"));
+
     it("omits the date from the kicker when episodeDate does not parse", () =>
         expect(toCardModel(episode({ podcastName: "Pod", episodeDate: "not a date" })).kicker).toBe("POD"));
 });

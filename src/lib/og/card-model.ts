@@ -1,4 +1,5 @@
 import type { Episode } from "../../types";
+import { formatDuration } from "../broadsheet/format";
 
 /**
  * Bump when the card's drawing changes (layout, fonts, colours), so every
@@ -16,13 +17,19 @@ export interface CardModel {
     runtime: string | null;  // "1H 12M", "45M"
 }
 
-// An emoji with any variation selector (U+FE0F) or ZWJ-joined parts, then any
-// stray selector or joiner left behind. The card fonts have no emoji glyphs.
-const EMOJI = /\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*/gu;
-const STRAY_JOINERS = /[️‍]/g;
+// The card fonts have no emoji glyphs, so whole emoji sequences go: a keycap
+// (base, optional U+FE0F, U+20E3), a regional-indicator flag pair, or a
+// pictograph with its variation selectors, skin-tone modifiers and ZWJ-joined
+// parts. Then any leftover component goes too: a lone selector, joiner,
+// keycap mark, modifier or regional indicator, or a subdivision-flag tag.
+const EMOJI_SEQUENCE = /[#*0-9]\u{FE0F}?\u{20E3}|\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:\u{FE0F}|\p{Emoji_Modifier})*(?:\u{200D}\p{Extended_Pictographic}(?:\u{FE0F}|\p{Emoji_Modifier})*)*/gu;
+const EMOJI_LEFTOVER = /[\u{FE0F}\u{200D}\u{20E3}\p{Emoji_Modifier}\p{Regional_Indicator}\u{E0020}-\u{E007F}]/gu;
+
+/** Shown when an episode's title and podcast name both clean to nothing. */
+const FALLBACK_TITLE = "TL;DL";
 
 function cleanText(text: string): string {
-    return text.replace(EMOJI, "").replace(STRAY_JOINERS, "").replace(/\s+/g, " ").trim();
+    return text.replace(EMOJI_SEQUENCE, "").replace(EMOJI_LEFTOVER, "").replace(/\s+/g, " ").trim();
 }
 
 function kickerDate(episodeDate: string): string | null {
@@ -32,12 +39,10 @@ function kickerDate(episodeDate: string): string | null {
         .toUpperCase();
 }
 
-/** Same arithmetic and padding as `formatDuration` on the detail page, uppercased. */
+/** The Broadsheet pages' runtime, uppercased; none when the duration is unknown. */
 function formatRuntime(seconds: number): string | null {
     if (!Number.isFinite(seconds) || seconds <= 0) return null;
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    return h > 0 ? `${h}H ${m.toString().padStart(2, "0")}M` : `${m}M`;
+    return formatDuration(seconds).toUpperCase();
 }
 
 export function toCardModel(ep: Episode): CardModel {
@@ -47,7 +52,7 @@ export function toCardModel(ep: Episode): CardModel {
     const deck = ep.deck === undefined ? "" : cleanText(ep.deck);
     return {
         kicker,
-        title: cleanText(ep.episodeTitle) || podcastName,
+        title: cleanText(ep.episodeTitle) || podcastName || FALLBACK_TITLE,
         deck: deck || null,
         runtime: formatRuntime(ep.episodeDuration),
     };
