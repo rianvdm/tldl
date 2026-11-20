@@ -147,6 +147,7 @@ Keys in `src/lib/kv.ts`:
 - `transcript:{episodeId}` — Full transcript (TTL: 365 days)
 - `chunkcache:{episodeId}:{chunkKey}` — One chunk's transcript, `{ text }`, so a retried job resumes chunked transcription (TTL: 1 day; see [Chunk transcript cache](#key-components)). `chunkKey` carries the source's strong ETag or Last-Modified when it sends one; without either, the file size is the only identity, so a same-size replacement of the audio inside the TTL could reuse earlier chunks' text.
 - `summary:{episodeId}:{templateId}` — Generated summary (TTL: 365 days)
+- `og:{episodeId}:{cardVersion}` — An episode's share-card PNG (TTL: 365 days; see [Episode share cards](#episode-share-cards))
 - `episodes:index` — Lightweight episode list with tags for home page (TTL: 365 days)
 - `activity:log` — Admin dashboard activity log, last 50 events (TTL: 30 days)
 - `monitor:settings` — Global podcast monitoring settings (no TTL)
@@ -159,6 +160,7 @@ Keys in `src/lib/kv.ts`:
 **Public** (`src/routes/public.ts`):
 - `GET /` — Episode list with pagination and tag filtering (`?tag=tagname`)
 - `GET /episode/:id` — Episode detail with summary and tags
+- `GET /og/episode/:id.png?v=` — The episode's share card (`src/routes/og.ts`; see [Episode share cards](#episode-share-cards))
 - `GET /podcasts` — Browse all podcasts with pagination (10 per page)
 - `GET /podcasts/:id` — Individual podcast page with all episodes
 - `GET /about` — About page
@@ -228,6 +230,21 @@ The episode page links out three ways: **Episode page →** (`Episode.episodePag
 - **Podcast Index episode IDs are not Apple episode IDs** (`62880121466` vs `1000800393703` for the same episode). The PI fallback path in `monitor.ts` still builds `?i={piId}` URLs for routing, flagged `appleUrlIsSynthetic` so the consumer stores the show-level URL instead. Apple silently redirects a bad `?i=` to the show page, so this kind of bug looks like it works.
 
 `scripts/backfill-episode-links.ts` fixes existing episodes from a laptop, where iTunes Lookup works: it finds each episode's GUID (stored, RSS-ID hash, Apple ID, audio URL or exact title), then plans changes with the tested pure function in `scripts/lib/episode-links-plan.ts`. Run on 2026-11-07: 523 of 555 episodes updated; 36 unmatched (mostly NYT shows and This American Life, whose feeds and iTunes listings only carry recent episodes). When verifying writes, wait ~60s: KV reads are eventually consistent, and a read straight after the bulk put showed 81 stale records that were fine a minute later.
+
+### Episode share cards
+
+Each episode page's `og:image` and `twitter:image` point at a card drawn for that episode: `https://tldl-pod.com/og/episode/<episodeId>.png?v=<cardVersion>` (`episodeCardUrl` in `src/lib/og/card-model.ts`, set by the `/episode/:id` route). The page only emits the URL; it never draws the card.
+
+- **Route** (`src/routes/og.ts`): loads the episode (an ID with an `episode-redirect:` entry 301s to its canonical card, an unknown one 404s, and a URL without `.png` is a 404), then compares `v` with the episode's current `cardVersion`. A missing or stale `v` gets a 302 to the current one, so only a matching `v` is ever answered with PNG bytes, served `Cache-Control: public, max-age=31536000, immutable`. Every redirect from the route is `no-store`.
+- **Cache-busting `v`**: `cardVersion(ep)` is the first 12 hex chars of SHA-256 over `CARD_TEMPLATE_VERSION` and the card model (podcast, date, title, deck, runtime), so it changes exactly when the drawn card changes. Link-preview services cache images by URL, and a new `v` is what makes them refetch after an edit.
+- **KV**: drawn on first request and stored as `og:{episodeId}:{cardVersion}` for 365 days (`TTL.CONTENT`). Old versions are never read again and expire on their own; a deleted episode's card is never served because the route reads the episode first.
+- **Redrawing everything**: bump `CARD_TEMPLATE_VERSION` in `src/lib/og/card-model.ts` whenever the drawing changes (layout, sizes, fonts, colours). Every episode then gets a new `v`; nothing needs deleting.
+- **Drawing**: `toCardModel` cleans the text (strips emoji, leaves out a zero runtime), `buildCardTree` in `card-tree.ts` lays it out (`titleFontSize` steps the title size down with its length), and `renderCardPng` in `render.ts` runs satori (tree to SVG) and resvg (SVG to PNG), both from `@cf-wasm` and pinned to exact versions because they break without semver.
+- **Fonts**: four static TTFs in `src/assets/fonts/` (with their OFL licences and a README on where they came from), bundled as Data modules through the `[[rules]]` entry in `wrangler.toml`. Nothing is fetched at runtime.
+- **Fallback**: a failed episode read or a failed draw 302s (`no-store`) to the static default image, `DEFAULT_OG_IMAGE` in `src/lib/broadsheet/head.ts`, so a share never shows a broken preview. A failed cache read counts as a miss.
+- **Logs**: `og_render_failed` (the draw threw and the default image went out) and `og_cache_write_failed` (the PNG was still returned, just not cached), both with `episodeId` and `error`.
+
+To look at a real card locally, copy its `episode:<id>` record from prod KV into local KV (`--local` on the `put`, never `--remote`), run `npm run dev`, and `curl -L "http://localhost:8787/og/episode/<id>.png" -o card.png`.
 
 ### Summary Templates
 
@@ -308,7 +325,7 @@ Toggle `MAINTENANCE_MODE` in `src/index.ts` to disable HTTP endpoints (queue con
 
 ## Testing
 
-Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 768 tests (as of 2026-11-12) covering:
+Uses `@cloudflare/vitest-pool-workers` for Workers-like environment. 861 tests (as of 2026-11-19) covering:
 - Unit tests for all services and admin routes (`test/admin.test.ts`, `test/discord.test.ts`, etc.)
 - Integration tests in `test/integration/full-flow.test.ts` (CRUD lifecycle, access control, request form)
 - Note: Tests involving Durable Objects may show "Isolated storage" warnings (infrastructure issue in vitest-pool-workers, not failures)
@@ -337,7 +354,8 @@ src/
 │   ├── components.ts     # Reusable UI components (Footer)
 │   ├── styles.ts         # All CSS (embedded in TypeScript)
 │   ├── assets.ts         # SVG assets (favicon, Apple Podcasts badge)
-│   └── auth.ts           # JWT parsing and auth helpers
+│   ├── auth.ts           # JWT parsing and auth helpers
+│   └── og/               # Episode share cards: card model + version, layout, satori/resvg render, fonts
 ├── services/             # External API integrations
 │   ├── apple-podcasts.ts # iTunes API + page scraping
 │   ├── podcast-index.ts  # Podcast Index API
@@ -351,7 +369,8 @@ src/
 ├── routes/               # Hono route handlers
 │   ├── public.ts         # Public pages + request form
 │   ├── api.ts            # JSON API (read-only)
-│   └── admin.ts          # Admin dashboard + mutations (Access-protected)
+│   ├── admin.ts          # Admin dashboard + mutations (Access-protected)
+│   └── og.ts             # Episode share-card PNGs (/og/episode/<id>.png)
 ├── queue/                # Queue consumer
 │   └── consumer.ts       # Job processing pipeline
 └── durable-objects/      # Durable Object classes

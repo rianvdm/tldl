@@ -28,6 +28,7 @@ import { renderPodcastBrowsePage } from "../lib/broadsheet/podcast-browse-page";
 import { renderDetailPage, type TemplateId } from "../lib/broadsheet/detail-page";
 import { renderStaticPage } from "../lib/broadsheet/static-page";
 import { renderFormPage } from "../lib/broadsheet/form-page";
+import { cardVersion, episodeCardUrl } from "../lib/og/card-model";
 import { selectLeadEpisode } from "../lib/broadsheet/lead-picker";
 import { marked } from "marked";
 
@@ -258,6 +259,7 @@ publicRoutes.get("/episode/:episodeId", async (c) => {
         activeTemplate,
         availableTemplates: available,
         transcriptText,
+        ogImageUrl: episodeCardUrl(episode.id, await cardVersion(episode)),
     });
     return c.html(html);
 });

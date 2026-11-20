@@ -20,6 +20,8 @@ export interface DetailPageOptions {
     activeTemplate: TemplateId;
     availableTemplates: TemplateId[];
     transcriptText: string | null;
+    /** The episode's share card; the site-wide default image when absent. */
+    ogImageUrl?: string;
     now?: Date;
 }
 
@@ -92,6 +94,7 @@ ${renderBroadsheetHead({
     title: `${ep.episodeTitle} — TL;DL`,
     description: headDescription,
     canonicalUrl: `https://tldl-pod.com/episode/${encodeURIComponent(ep.id)}`,
+    ogImage: opts.ogImageUrl,
 })}
 ${BROADSHEET_FONTS_LINK}
 <style>${BROADSHEET_TOKENS_CSS}${BROADSHEET_SHARED_CSS}${BROADSHEET_DETAIL_CSS}</style>

@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { createOgRoutes } from "../src/routes/og";
 import { cardVersion } from "../src/lib/og/card-model";
-import { saveEpisode, saveEpisodeRedirect } from "../src/lib/kv";
+import { saveEpisode, saveEpisodeRedirect, saveSummary } from "../src/lib/kv";
 import { DEFAULT_OG_IMAGE } from "../src/lib/broadsheet/head";
 import type { Episode } from "../src/types";
 
@@ -181,5 +181,19 @@ describe("the card route in the app", () => {
         expect(res.headers.get("content-type")).toBe("image/png");
         const bytes = new Uint8Array(await res.arrayBuffer());
         expect(Array.from(bytes.subarray(0, 4))).toEqual(Array.from(PNG_BYTES));
+    });
+
+    it("points the episode page's og:image at the episode's current card", async () => {
+        await saveSummary(env.TLDL_DATA, {
+            episodeId: ep.id,
+            templateId: "key-takeaways",
+            text: "Summary text.",
+            model: "claude-opus-5-5",
+            createdAt: "2026-11-05T16:30:00.000Z",
+        });
+        const res = await SELF.fetch(`https://tldl-pod.com/episode/${ep.id}`);
+        expect(res.status).toBe(200);
+        const ogImage = (await res.text()).match(/<meta property="og:image" content="([^"]*)">/)?.[1];
+        expect(ogImage).toBe(`https://tldl-pod.com/og/episode/${ep.id}.png?v=${v}`);
     });
 });
