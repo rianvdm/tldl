@@ -87,6 +87,17 @@ function kickerRow(podcast: string, date: string | null): SatoriNode {
     return el("div", { display: "flex", alignItems: "center", width: TEXT_WIDTH }, children);
 }
 
+/**
+ * Right padding, in em, on the line-clamped title and deck. satori lays out
+ * the clamped last line, then always keeps at least one character before its
+ * ellipsis, so the ellipsis can land past the content box: by up to the
+ * ellipsis's own width (0.91em in Fraunces 600) when a word sits near the
+ * edge, or by one glyph less a space (W: 1.06 − 0.22em) when a broken word
+ * fills the line. Wrapping 1em short of the column keeps that overshoot inside it.
+ */
+const CLAMP_RESERVE_EM = 1;
+const DECK_FONT_SIZE = 30;
+
 function titleBlock(title: string, deck: string | null): SatoriNode {
     const fontSize = titleFontSize(title);
     const children: SatoriNode[] = [
@@ -104,6 +115,7 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
                 lineClamp: 3,
                 textOverflow: "ellipsis",
                 wordBreak: "break-word", // an unbroken word wraps instead of running off the card
+                paddingRight: CLAMP_RESERVE_EM * fontSize,
             },
             title,
         ),
@@ -119,12 +131,13 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
                     fontFamily: SERIF,
                     fontWeight: 400,
                     fontStyle: "italic",
-                    fontSize: 30,
+                    fontSize: DECK_FONT_SIZE,
                     lineHeight: 1.3,
                     color: INK_DIM,
                     lineClamp: 2,
                     textOverflow: "ellipsis",
                     wordBreak: "break-word",
+                    paddingRight: CLAMP_RESERVE_EM * DECK_FONT_SIZE,
                 },
                 deck,
             ),

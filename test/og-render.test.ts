@@ -68,9 +68,15 @@ describe("renderCardPng", () => {
         expect(png.byteLength).toBeGreaterThan(1000);
     });
 
-    it("wraps an unbroken word inside the text column", async () => {
-        const svg = await renderCardSvg({ ...model, title: "Supercalifragilisticexpialidocious".repeat(3),
-            deck: "Pneumonoultramicroscopicsilicovolcanoconiosis".repeat(2) });
+    it.each([
+        ["unbroken words in the title and deck", { title: "Supercalifragilisticexpialidocious".repeat(3),
+            deck: "Pneumonoultramicroscopicsilicovolcanoconiosis".repeat(2) }],
+        // Long enough to clamp: the ellipsis on the last line must stay inside too.
+        ["a clamped unbroken title", { title: "W".repeat(70) }],
+        ["a clamped unbroken deck", { deck: "W".repeat(150) }],
+        ["a clamped spaced title and deck", { title: "word ".repeat(40).trim(), deck: "deck ".repeat(60).trim() }],
+    ])("keeps every glyph inside the text column for %s", async (_, overrides) => {
+        const svg = await renderCardSvg({ ...model, ...overrides });
         expect(maxGlyphX(svg)).toBeLessThanOrEqual(TEXT_RIGHT);
     });
 });
