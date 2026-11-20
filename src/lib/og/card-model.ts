@@ -5,7 +5,7 @@ import { formatDuration } from "../broadsheet/format";
  * Bump when the card's drawing changes (layout, fonts, colours), so every
  * episode gets a new `cardVersion` and scrapers fetch the redrawn card.
  */
-export const CARD_TEMPLATE_VERSION = "1";
+export const CARD_TEMPLATE_VERSION = "2";
 
 const BASE_URL = "https://tldl-pod.com";
 

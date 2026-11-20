@@ -28,8 +28,12 @@ curl -sSf -o Fraunces-OFL.txt      https://raw.githubusercontent.com/google/font
 curl -sSf -o JetBrainsMono-OFL.txt https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/OFL.txt
 ```
 
+## Flattened glyphs
+
+satori drew Fraunces SemiBold's `+` wrong: the font builds it from a minus and a minus rotated 90°, and the rotated copy landed below and to the right of the bar. `scripts/flatten-rotated-glyphs.py` rewrites every composite glyph with a rotated or skewed component as plain outlines (2026-11-20: `plus`, `backslash`, `divisionslash`, and two JetBrains Mono triangles). The files here are already flattened; `test/og-render.test.ts` checks the `+`.
+
 ## Checks
 
 `file *.ttf` reports `TrueType Font data` for all four. fontTools wasn't installed, so the table directory was read directly from each file's header: none has an `fvar` or `gvar` table, so all four are static instances.
 
-To refresh, rerun the commands above (the CSS response names the current `v<N>` URLs), repeat the checks, and bump `CARD_TEMPLATE_VERSION` in `src/lib/og/card-model.ts` so every card is redrawn.
+To refresh, rerun the commands above (the CSS response names the current `v<N>` URLs), run `scripts/flatten-rotated-glyphs.py` on the new files, repeat the checks, and bump `CARD_TEMPLATE_VERSION` in `src/lib/og/card-model.ts` so every card is redrawn.

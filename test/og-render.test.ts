@@ -40,6 +40,14 @@ function glyphs(svg: string): { box: Box; clip: Box | null }[] {
     return out;
 }
 
+/** Smallest box holding all the given boxes. */
+function unionBox(boxes: Box[]): Box {
+    return {
+        left: Math.min(...boxes.map((b) => b.left)), top: Math.min(...boxes.map((b) => b.top)),
+        right: Math.max(...boxes.map((b) => b.right)), bottom: Math.max(...boxes.map((b) => b.bottom)),
+    };
+}
+
 /** Rightmost x any glyph can paint: a clipped glyph paints no further right than its clip rect. */
 function visibleRight(svg: string): number {
     return Math.max(...glyphs(svg).map(({ box, clip }) => Math.min(box.right, clip?.right ?? Infinity)));
@@ -119,5 +127,17 @@ describe("renderCardPng", () => {
             expect(box.bottom).toBeLessThanOrEqual(clip!.bottom);
             expect(box.left).toBeGreaterThanOrEqual(clip!.left);
         }
+    });
+
+    // Fraunces SemiBold builds "+" from a minus and a minus rotated 90°, and
+    // satori drew the rotated copy in the wrong place. The vendored fonts have
+    // rotated and skewed components flattened; see src/assets/fonts/README.md.
+    it("draws a title '+' as a plus: as tall as it is wide, as wide as a minus", async () => {
+        const titleBox = async (title: string) =>
+            unionBox(glyphs(await renderCardSvg({ ...model, title, deck: null })).map((g) => g.box).filter((b) => b.top > 200 && b.bottom < 540));
+        const plus = await titleBox("+");
+        const minus = await titleBox("\u{2212}");
+        expect(Math.abs((plus.right - plus.left) - (plus.bottom - plus.top))).toBeLessThanOrEqual(2);
+        expect(Math.abs((plus.right - plus.left) - (minus.right - minus.left))).toBeLessThanOrEqual(2);
     });
 });
