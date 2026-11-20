@@ -92,11 +92,45 @@ function kickerRow(podcast: string, date: string | null): SatoriNode {
  * the clamped last line, then always keeps at least one character before its
  * ellipsis, so the ellipsis can land past the content box: by up to the
  * ellipsis's own width (0.91em in Fraunces 600) when a word sits near the
- * edge, or by one glyph less a space (W: 1.06 − 0.22em) when a broken word
- * fills the line. Wrapping 1em short of the column keeps that overshoot inside it.
+ * edge, or by one glyph less a space when a broken word fills the line.
+ * Wrapping 1em short of the column keeps the ellipsis visible for every
+ * ordinary Latin glyph (W is 1.06em). A rarer, wider glyph (Ǆ is 1.443em) can
+ * still overshoot, so both nodes also clip at the column edge; see clipToColumn.
  */
 const CLAMP_RESERVE_EM = 1;
+
+/**
+ * How far, in em, the clip extends above, below and left of the text, so it
+ * only ever cuts on the right. Fraunces outlines reach 1.10em above the
+ * baseline and 0.28em below it, and the italic leans 0.14em left of its
+ * origin: at the title's 1.08 line height that is 0.20em over the line box's
+ * top and 0.10em under its bottom, all inside 0.25em.
+ */
+const CLIP_BLEED_EM = 0.25;
+
 const DECK_FONT_SIZE = 30;
+
+/**
+ * Box styles for a clamped text node whose glyphs must never paint past the
+ * column's right edge. overflow: hidden makes satori draw a clipPath at the
+ * node's padding box; padding plus an equal negative margin grows that box
+ * by the bleed on the top, bottom and left without moving the text, and
+ * width stays pinned so the box's right edge is the column edge.
+ */
+function clipToColumn(fontSize: number, spaceAbove = 0): Record<string, unknown> {
+    const bleed = CLIP_BLEED_EM * fontSize;
+    return {
+        width: TEXT_WIDTH + bleed,
+        marginLeft: -bleed,
+        marginTop: spaceAbove - bleed,
+        marginBottom: -bleed,
+        paddingLeft: bleed,
+        paddingTop: bleed,
+        paddingBottom: bleed,
+        paddingRight: CLAMP_RESERVE_EM * fontSize,
+        overflow: "hidden",
+    };
+}
 
 function titleBlock(title: string, deck: string | null): SatoriNode {
     const fontSize = titleFontSize(title);
@@ -105,7 +139,7 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
             "div",
             {
                 display: "block",
-                width: TEXT_WIDTH,
+                ...clipToColumn(fontSize),
                 fontFamily: SERIF,
                 fontWeight: 600,
                 fontSize,
@@ -115,7 +149,6 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
                 lineClamp: 3,
                 textOverflow: "ellipsis",
                 wordBreak: "break-word", // an unbroken word wraps instead of running off the card
-                paddingRight: CLAMP_RESERVE_EM * fontSize,
             },
             title,
         ),
@@ -126,8 +159,7 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
                 "div",
                 {
                     display: "block",
-                    width: TEXT_WIDTH,
-                    marginTop: 22,
+                    ...clipToColumn(DECK_FONT_SIZE, 22),
                     fontFamily: SERIF,
                     fontWeight: 400,
                     fontStyle: "italic",
@@ -137,7 +169,6 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
                     lineClamp: 2,
                     textOverflow: "ellipsis",
                     wordBreak: "break-word",
-                    paddingRight: CLAMP_RESERVE_EM * DECK_FONT_SIZE,
                 },
                 deck,
             ),

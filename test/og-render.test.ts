@@ -7,17 +7,42 @@ const model = { podcast: "POD", date: "NOV 18, 2026", title: "A title", deck: "A
 /** Right edge of the text column: the card width less the 56px side padding. */
 const TEXT_RIGHT = 1200 - 56;
 
+type Box = { left: number; top: number; right: number; bottom: number };
+
+/** Bounding box of one glyph outline: satori uses only absolute M, L, Q and Z, so numbers pair up as x,y. */
+function pathBox(d: string): Box {
+    const nums = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    const xs = nums.filter((_, i) => i % 2 === 0);
+    const ys = nums.filter((_, i) => i % 2 === 1);
+    return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+
 /**
- * Rightmost x of any glyph satori drew. satori writes text as <path> outlines
- * using only absolute M, L, Q and Z commands, so every number pair is an x,y point.
+ * Every glyph outline satori drew, with the clip rect that applies to it.
+ * satori draws each text run as <g><path/></g> (groups are flat, never
+ * nested); a run under overflow: hidden gets clip-path="url(#id)" pointing at
+ * a <clipPath id> holding one <rect>.
  */
-function maxGlyphX(svg: string): number {
-    let max = -Infinity;
-    for (const [, d] of svg.matchAll(/<path[^>]* d="([^"]*)"/g)) {
-        const nums = d.match(/-?\d+(?:\.\d+)?/g) ?? [];
-        for (let i = 0; i < nums.length; i += 2) max = Math.max(max, Number(nums[i]));
+function glyphs(svg: string): { box: Box; clip: Box | null }[] {
+    const clips = new Map<string, Box>();
+    for (const [, id, x, y, w, h] of svg.matchAll(
+        /<clipPath id="([^"]+)"><rect x="([^"]+)" y="([^"]+)" width="([^"]+)" height="([^"]+)"/g)) {
+        clips.set(id, { left: +x, top: +y, right: +x + +w, bottom: +y + +h });
     }
-    return max;
+    const out: { box: Box; clip: Box | null }[] = [];
+    const outside = svg.replace(/<g\b([^>]*)>([\s\S]*?)<\/g>/g, (_, attrs: string, body: string) => {
+        const clipId = attrs.match(/clip-path="url\(#([^)]+)\)"/)?.[1];
+        const clip = clipId === undefined ? null : (clips.get(clipId) ?? null);
+        for (const [, d] of body.matchAll(/<path[^>]* d="([^"]*)"/g)) out.push({ box: pathBox(d), clip });
+        return "";
+    });
+    for (const [, d] of outside.matchAll(/<path[^>]* d="([^"]*)"/g)) out.push({ box: pathBox(d), clip: null });
+    return out;
+}
+
+/** Rightmost x any glyph can paint: a clipped glyph paints no further right than its clip rect. */
+function visibleRight(svg: string): number {
+    return Math.max(...glyphs(svg).map(({ box, clip }) => Math.min(box.right, clip?.right ?? Infinity)));
 }
 
 describe("buildCardTree", () => {
@@ -75,8 +100,24 @@ describe("renderCardPng", () => {
         ["a clamped unbroken title", { title: "W".repeat(70) }],
         ["a clamped unbroken deck", { deck: "W".repeat(150) }],
         ["a clamped spaced title and deck", { title: "word ".repeat(40).trim(), deck: "deck ".repeat(60).trim() }],
+        // Ǆ advances 1.443em, wider than the 1em reserve: only the clip keeps it in.
+        ["a clamped title of glyphs wider than the reserve", { title: "ǄǄǄu".repeat(17) + "ǄǄ" }],
+        ["a clamped deck of glyphs wider than the reserve", { deck: "ǄǄǄu".repeat(30) }],
     ])("keeps every glyph inside the text column for %s", async (_, overrides) => {
         const svg = await renderCardSvg({ ...model, ...overrides });
-        expect(maxGlyphX(svg)).toBeLessThanOrEqual(TEXT_RIGHT);
+        expect(visibleRight(svg)).toBeLessThanOrEqual(TEXT_RIGHT);
+    });
+
+    it("clips only the right edge: accents, descenders and italic overhang stay whole", async () => {
+        const svg = await renderCardSvg({ ...model,
+            title: "ÅÉÎ Ǻngström Ḯle " + "gjpqy ".repeat(12) + "Qgjpqy gjpqy",
+            deck: "ÅÉÎ Ǻngström fjord " + "gjpqy ".repeat(30) });
+        const clipped = glyphs(svg).filter((g) => g.clip !== null && g.box.top > 200); // title and deck, not the kicker
+        expect(clipped.length).toBeGreaterThanOrEqual(2);
+        for (const { box, clip } of clipped) {
+            expect(box.top).toBeGreaterThanOrEqual(clip!.top);
+            expect(box.bottom).toBeLessThanOrEqual(clip!.bottom);
+            expect(box.left).toBeGreaterThanOrEqual(clip!.left);
+        }
     });
 });
