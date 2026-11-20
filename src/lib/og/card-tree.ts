@@ -61,25 +61,30 @@ function wordmark(): SatoriNode {
     );
 }
 
-function kickerRow(kicker: string): SatoriNode {
-    return el("div", { display: "flex", alignItems: "center", width: TEXT_WIDTH }, [
-        el(
-            "div",
-            {
-                flexShrink: 1,
-                fontFamily: MONO,
-                fontWeight: 500,
-                fontSize: 20,
-                letterSpacing: 2.4, // 0.12em
-                color: RED,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-            },
-            kicker,
-        ),
-        el("div", { flexGrow: 1, minWidth: 40, height: 1, marginLeft: 20, backgroundColor: RULE }),
-    ]);
+const KICKER_TEXT = {
+    fontFamily: MONO,
+    fontWeight: 500,
+    fontSize: 20,
+    letterSpacing: 2.4, // 0.12em
+    color: RED,
+    whiteSpace: "nowrap",
+};
+
+/**
+ * Podcast name, then "— date", then a rule filling the row. Only the podcast
+ * name shrinks and takes the ellipsis, so a long name never hides the date.
+ */
+function kickerRow(podcast: string, date: string | null): SatoriNode {
+    const children: SatoriNode[] = [];
+    if (podcast !== "") {
+        children.push(el("div", { ...KICKER_TEXT, flexShrink: 1, overflow: "hidden", textOverflow: "ellipsis" }, podcast));
+    }
+    if (date !== null) {
+        const dateText = podcast === "" ? date : `— ${date}`;
+        children.push(el("div", { ...KICKER_TEXT, flexShrink: 0, marginLeft: podcast === "" ? 0 : 14 }, dateText));
+    }
+    children.push(el("div", { flexGrow: 1, flexShrink: 0, minWidth: 40, height: 1, marginLeft: 20, backgroundColor: RULE }));
+    return el("div", { display: "flex", alignItems: "center", width: TEXT_WIDTH }, children);
 }
 
 function titleBlock(title: string, deck: string | null): SatoriNode {
@@ -98,6 +103,7 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
                 color: INK,
                 lineClamp: 3,
                 textOverflow: "ellipsis",
+                wordBreak: "break-word", // an unbroken word wraps instead of running off the card
             },
             title,
         ),
@@ -118,6 +124,7 @@ function titleBlock(title: string, deck: string | null): SatoriNode {
                     color: INK_DIM,
                     lineClamp: 2,
                     textOverflow: "ellipsis",
+                    wordBreak: "break-word",
                 },
                 deck,
             ),
@@ -168,7 +175,7 @@ export function buildCardTree(model: CardModel): SatoriNode {
             wordmark(),
             rule(INK, 2),
             el("div", { display: "flex", flexDirection: "column", flexGrow: 1, paddingTop: 30, paddingBottom: 26 }, [
-                kickerRow(model.kicker),
+                kickerRow(model.podcast, model.date),
                 titleBlock(model.title, model.deck),
             ]),
             footer(model.runtime),

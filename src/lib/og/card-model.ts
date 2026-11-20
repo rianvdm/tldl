@@ -11,7 +11,8 @@ const BASE_URL = "https://tldl-pod.com";
 
 /** The text drawn on an episode's share card, already cleaned for the renderer. */
 export interface CardModel {
-    kicker: string;          // "PODCAST NAME — NOV 18, 2026"
+    podcast: string;         // "PODCAST NAME"
+    date: string | null;     // "NOV 18, 2026"; none when the episode date doesn't parse
     title: string;
     deck: string | null;
     runtime: string | null;  // "1H 12M", "45M"
@@ -47,11 +48,10 @@ function formatRuntime(seconds: number): string | null {
 
 export function toCardModel(ep: Episode): CardModel {
     const podcastName = cleanText(ep.podcastName);
-    const date = kickerDate(ep.episodeDate);
-    const kicker = [podcastName.toUpperCase(), date].filter(Boolean).join(" — ");
     const deck = ep.deck === undefined ? "" : cleanText(ep.deck);
     return {
-        kicker,
+        podcast: podcastName.toUpperCase(),
+        date: kickerDate(ep.episodeDate),
         title: cleanText(ep.episodeTitle) || podcastName || FALLBACK_TITLE,
         deck: deck || null,
         runtime: formatRuntime(ep.episodeDuration),

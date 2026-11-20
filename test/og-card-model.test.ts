@@ -19,10 +19,10 @@ function episode(overrides: Partial<Episode> = {}): Episode {
 }
 
 describe("toCardModel", () => {
-    it("builds kicker, title, deck and runtime", () => {
+    it("builds podcast, date, title, deck and runtime", () => {
         const m = toCardModel(episode({ podcastName: "Lenny's Podcast", episodeDate: "2026-11-18T10:00:00Z",
             episodeTitle: "Deciding what not to build", deck: "A deck.", episodeDuration: 4320 }));
-        expect(m).toEqual({ kicker: "LENNY'S PODCAST — NOV 18, 2026", title: "Deciding what not to build",
+        expect(m).toEqual({ podcast: "LENNY'S PODCAST", date: "NOV 18, 2026", title: "Deciding what not to build",
             deck: "A deck.", runtime: "1H 12M" });
     });
 
@@ -56,8 +56,11 @@ describe("toCardModel", () => {
     it("falls back to TL;DL when the title and podcast name are both only emoji", () =>
         expect(toCardModel(episode({ podcastName: "🎙️", episodeTitle: "🔥" })).title).toBe("TL;DL"));
 
-    it("omits the date from the kicker when episodeDate does not parse", () =>
-        expect(toCardModel(episode({ podcastName: "Pod", episodeDate: "not a date" })).kicker).toBe("POD"));
+    it("has no date when episodeDate does not parse", () =>
+        expect(toCardModel(episode({ podcastName: "Pod", episodeDate: "not a date" }))).toMatchObject({ podcast: "POD", date: null }));
+
+    it("strips emoji from the podcast name", () =>
+        expect(toCardModel(episode({ podcastName: "🎙️ Pod  Cast 🔥" })).podcast).toBe("POD CAST"));
 });
 
 describe("cardVersion", () => {
