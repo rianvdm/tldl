@@ -36,24 +36,46 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+/** One nonempty path segment followed by a literal (not percent-encoded) `.png`. */
+const RAW_CARD_PATH = /^\/og\/episode\/([^/]+)\.png$/;
+
+/**
+ * The episode ID from the request's raw pathname, decoded once; null when the
+ * path isn't exactly `/og/episode/<one segment>.png`. Hono matches routes on a
+ * decoded path, so its params would accept `<id>%2Epng` and `a/b.png`.
+ */
+function episodeIdFromPath(url: string): string | null {
+    const match = RAW_CARD_PATH.exec(new URL(url).pathname);
+    if (!match) return null;
+    try {
+        return decodeURIComponent(match[1]);
+    } catch {
+        return null; // a malformed percent escape
+    }
+}
+
 export function createOgRoutes(deps: OgRouteDeps = {}): Hono<HonoEnv> {
     const render = deps.render ?? renderCardPng;
     const og = new Hono<HonoEnv>();
 
     // `:file{.+\.png}` requires the suffix, so a URL without `.png` falls through
-    // to a 404. Hono has already percent-decoded the param, so don't decode again.
+    // to a 404. The raw-path check then rejects what Hono's decoded match lets in.
     og.get("/og/episode/:file{.+\\.png}", async (c) => {
         const kv = c.env.TLDL_DATA;
-        const episodeId = c.req.param("file").slice(0, -".png".length);
+        const episodeId = episodeIdFromPath(c.req.url);
+        if (episodeId === null) return c.notFound();
 
+        // A failed read sends the default image rather than a 500, so a share
+        // never shows a broken preview.
         let episode: Episode | null;
+        let canonical: string | null = null;
         try {
             episode = await getEpisode(kv, episodeId);
+            if (!episode) canonical = await getEpisodeRedirect(kv, episodeId);
         } catch {
             return redirect(DEFAULT_OG_IMAGE, 302);
         }
         if (!episode) {
-            const canonical = await getEpisodeRedirect(kv, episodeId);
             if (canonical) return redirect(cardPath(canonical), 301);
             return c.notFound();
         }

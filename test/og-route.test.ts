@@ -102,6 +102,32 @@ describe("GET /og/episode/:id.png", () => {
         expect((await app.request(`/og/episode/%25.png?v=x`, {}, env)).status).toBe(404);
     });
 
+    it("a malformed percent escape is a 404, not a 500", async () => {
+        expect((await app.request(`/og/episode/%E0%A4%A.png?v=x`, {}, env)).status).toBe(404);
+    });
+
+    it("an encoded .png suffix is a 404, even for a stored episode at its current version", async () => {
+        const res = await app.request(`/og/episode/${ep.id}%2Epng?v=${v}`, {}, env);
+        expect(res.status).toBe(404);
+        expect(calls).toBe(0);
+    });
+
+    it("an id spanning more than one path segment is a 404, even if stored", async () => {
+        const slashed = { ...ep, id: "a/b" };
+        await saveEpisode(env.TLDL_DATA, slashed);
+        const res = await app.request(`/og/episode/a/b.png?v=${await cardVersion(slashed)}`, {}, env);
+        expect(res.status).toBe(404);
+        expect(calls).toBe(0);
+    });
+
+    it("redirect lookup failure 302s to the default image, uncached", async () => {
+        const res = await app.request(`/og/episode/old_id.png?v=x`, {},
+            kvFailing("get", (key) => key.startsWith("episode-redirect:")));
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toBe(DEFAULT_OG_IMAGE);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+    });
+
     it("episode read failure 302s to the default image, uncached", async () => {
         const res = await app.request(`/og/episode/${ep.id}.png?v=${v}`, {}, kvFailing("get"));
         expect(res.status).toBe(302);
